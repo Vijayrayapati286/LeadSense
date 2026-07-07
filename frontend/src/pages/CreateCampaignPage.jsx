@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { FiArrowLeft, FiArrowRight, FiCheck, FiZap, FiEdit3, FiFileText } from 'react-icons/fi';
-import { campaignService, templateService, emailService } from '../services/services';
+import { FiArrowLeft, FiArrowRight, FiCheck, FiZap, FiEdit3, FiFileText, FiUsers, FiMail } from 'react-icons/fi';
+import { campaignService, templateService, emailService, recipientService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import { generateCampaignId, extractPlaceholders, renderTemplate } from '../utils/helpers';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import EmailPreview from '../components/EmailPreview';
 
-const STEPS = ['Campaign Info', 'Choose Template', 'Preview & Send'];
+const STEPS = ['Campaign Info', 'Choose Template', 'Select Recipients', 'Preview & Send'];
+const TEST_EMAIL_TARGET = import.meta.env.VITE_TEST_EMAIL || 'd.nikhileswar.reddy@gmail.com';
 
 const TEMPLATE_TYPES = [
   { id: 'manual', label: 'Manual', icon: FiEdit3, desc: 'Write your own email with rich text' },
@@ -44,6 +45,10 @@ export default function CreateCampaignPage() {
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [placeholderValues, setPlaceholderValues] = useState({});
   const [aiPrompt, setAiPrompt] = useState({ additional_context: '' });
+  const [recipientOptions, setRecipientOptions] = useState([]);
+  const [recipientLoading, setRecipientLoading] = useState(false);
+  const [recipientSearch, setRecipientSearch] = useState('');
+  const [selectedRecipientIds, setSelectedRecipientIds] = useState([]);
 
   useEffect(() => {
     const loadCampaignForEdit = async () => {
@@ -77,6 +82,26 @@ export default function CreateCampaignPage() {
 
     loadCampaignForEdit();
   }, [id, isEditMode, toast, user?.department, user?.name]);
+
+  useEffect(() => {
+    if (step !== 2) return;
+
+    const loadRecipients = async () => {
+      setRecipientLoading(true);
+      try {
+        const stored = JSON.parse(localStorage.getItem('selectedRecipientIds') || '[]');
+        setSelectedRecipientIds(stored);
+        const { data } = await recipientService.getAll({ page: 1, page_size: 100, search: recipientSearch });
+        setRecipientOptions(data.items);
+      } catch {
+        toast.error('Failed to load recipients');
+      } finally {
+        setRecipientLoading(false);
+      }
+    };
+
+    loadRecipients();
+  }, [step, recipientSearch, toast]);
 
   const updateForm = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
 
@@ -167,6 +192,9 @@ export default function CreateCampaignPage() {
       } finally {
         setLoading(false);
       }
+    } else if (step === 2) {
+      localStorage.setItem('selectedRecipientIds', JSON.stringify(selectedRecipientIds));
+      setStep(3);
     }
   };
 
@@ -180,13 +208,34 @@ export default function CreateCampaignPage() {
         body: emailContent.body + (emailContent.closing ? `\n\n${emailContent.closing}` : ''),
         recipient_ids: recipientIds,
       });
-      toast.success(`Sent: ${data.sent}, Failed: ${data.failed}, Pending: ${data.pending}`);
+      toast.success(`Mock delivery complete. Sent: ${data.sent}, Failed: ${data.failed}, Pending: ${data.pending}`);
       navigate('/campaigns');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to send emails');
     } finally {
       setLoading(false);
     }
+  };
+
+  const toggleRecipient = (recipientId) => {
+    setSelectedRecipientIds((prev) => {
+      const next = prev.includes(recipientId)
+        ? prev.filter((id) => id !== recipientId)
+        : [...prev, recipientId];
+      localStorage.setItem('selectedRecipientIds', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const selectAllRecipients = () => {
+    const next = recipientOptions.map((recipient) => recipient.id);
+    setSelectedRecipientIds(next);
+    localStorage.setItem('selectedRecipientIds', JSON.stringify(next));
+  };
+
+  const clearRecipients = () => {
+    setSelectedRecipientIds([]);
+    localStorage.setItem('selectedRecipientIds', '[]');
   };
 
   const previewContext = {
@@ -382,10 +431,75 @@ export default function CreateCampaignPage() {
           </div>
         )}
 
-        {/* Step 3: Preview & Send */}
+        {/* Step 3: Select Recipients */}
         {step === 2 && (
           <div className="space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold flex items-center gap-2"><FiUsers size={18} /> Select Recipients</h2>
+                <p className="text-sm text-gray-500 mt-1">Choose who should receive this campaign. In mock mode, the message is routed to the configured test inbox.</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={selectAllRecipients} className="btn-secondary text-sm">Select All</button>
+                <button onClick={clearRecipients} className="btn-secondary text-sm">Clear</button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+              <div className="flex items-center justify-between text-sm text-gray-600">
+                <span>{selectedRecipientIds.length} selected</span>
+                <span className="inline-flex items-center gap-2 text-amber-700">
+                  <FiMail size={14} /> Test delivery target: {TEST_EMAIL_TARGET}
+                </span>
+              </div>
+            </div>
+
+            <input
+              className="input-field"
+              placeholder="Search recipients by name or email"
+              value={recipientSearch}
+              onChange={(e) => setRecipientSearch(e.target.value)}
+            />
+
+            {recipientLoading ? (
+              <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+            ) : recipientOptions.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
+                No recipients found yet. Upload an Excel file from the Recipients page first.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                {recipientOptions.map((recipient) => (
+                  <label key={recipient.id} className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-white p-3 hover:border-primary-300">
+                    <input
+                      type="checkbox"
+                      checked={selectedRecipientIds.includes(recipient.id)}
+                      onChange={() => toggleRecipient(recipient.id)}
+                      className="mt-1 rounded border-gray-300"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="font-medium text-gray-900">{recipient.name}</p>
+                        <span className="text-xs text-gray-500">{recipient.company || '—'}</span>
+                      </div>
+                      <p className="text-sm text-gray-600">{recipient.email}</p>
+                      <p className="text-xs text-gray-500">{recipient.designation || '—'} • {recipient.industry || '—'}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Step 4: Preview & Send */}
+        {step === 3 && (
+          <div className="space-y-4">
             <h2 className="text-lg font-semibold">Preview & Send</h2>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              <p className="font-semibold">Testing mode enabled</p>
+              <p className="mt-1">This demo will route the message to your configured inbox so you can show the flow live.</p>
+            </div>
             <EmailPreview
               subject={renderTemplate(emailContent.subject, previewContext)}
               recipientName={previewContext.Name}
@@ -406,7 +520,7 @@ export default function CreateCampaignPage() {
             {step === 0 ? 'Cancel' : 'Back'}
           </button>
 
-          {step < 2 ? (
+          {step < 3 ? (
             <button onClick={handleNext} disabled={loading} className="btn-primary flex items-center gap-2">
               {loading ? <LoadingSpinner size="sm" /> : <>Next <FiArrowRight size={16} /></>}
             </button>

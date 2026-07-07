@@ -33,19 +33,44 @@ def send_emails(
         recipients = db.query(Recipient).filter(Recipient.is_selected == True).all()
 
     if not recipients:
-        raise HTTPException(status_code=400, detail="No recipients selected")
+        if ses_service.settings.use_mock_ses:
+            recipients = [
+                {
+                    "id": 0,
+                    "name": "Test Recipient",
+                    "email": ses_service.settings.test_email_override,
+                    "company": "",
+                    "designation": "",
+                    "industry": "",
+                }
+            ]
+        else:
+            raise HTTPException(status_code=400, detail="No recipients selected")
 
-    recipient_dicts = [
-        {
-            "id": r.id,
-            "name": r.name,
-            "email": r.email,
-            "company": r.company or "",
-            "designation": r.designation or "",
-            "industry": r.industry or "",
-        }
-        for r in recipients
-    ]
+    recipient_dicts = []
+    for r in recipients:
+        if isinstance(r, dict):
+            recipient_dicts.append(
+                {
+                    "id": r.get("id"),
+                    "name": r.get("name", ""),
+                    "email": r.get("email", ""),
+                    "company": r.get("company", "") or "",
+                    "designation": r.get("designation", "") or "",
+                    "industry": r.get("industry", "") or "",
+                }
+            )
+        else:
+            recipient_dicts.append(
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "email": r.email,
+                    "company": r.company or "",
+                    "designation": r.designation or "",
+                    "industry": r.industry or "",
+                }
+            )
 
     result = ses_service.send_bulk_email(
         recipients=recipient_dicts,

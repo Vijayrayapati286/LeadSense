@@ -31,15 +31,21 @@ class SESService:
                 logger.warning("Failed to initialize SES client, using mock: %s", exc)
         return self._client
 
+    def _get_delivery_address(self, to_email: str) -> str:
+        if self.settings.test_email_override:
+            return self.settings.test_email_override
+        return to_email
+
     def send_email(self, to_email: str, subject: str, body_html: str, body_text: str | None = None) -> dict:
         """Send a single email via AWS SES or mock."""
+        delivery_to = self._get_delivery_address(to_email)
         if self.settings.use_mock_ses or not self._get_client():
-            return self._mock_send(to_email, subject)
+            return self._mock_send(delivery_to, subject, original_recipient=to_email)
 
         try:
             response = self._client.send_email(
                 Source=self.settings.aws_ses_sender_email,
-                Destination={"ToAddresses": [to_email]},
+                Destination={"ToAddresses": [delivery_to]},
                 Message={
                     "Subject": {"Data": subject, "Charset": "UTF-8"},
                     "Body": {
@@ -105,7 +111,7 @@ class SESService:
 
         return {"sent": sent, "failed": failed, "pending": pending, "details": details}
 
-    def _mock_send(self, to_email: str, subject: str) -> dict:
+    def _mock_send(self, to_email: str, subject: str, original_recipient: str | None = None) -> dict:
         """Simulate email sending for development."""
         # Simulate ~90% success rate
         if random.random() < 0.9:
@@ -113,9 +119,13 @@ class SESService:
                 "status": "sent",
                 "message_id": f"mock-{uuid.uuid4().hex[:12]}",
                 "error": None,
+                "delivered_to": to_email,
+                "original_recipient": original_recipient or to_email,
             }
         return {
             "status": "failed",
             "message_id": None,
             "error": "Mock failure: simulated SES error",
+            "delivered_to": to_email,
+            "original_recipient": original_recipient or to_email,
         }

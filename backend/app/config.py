@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     aws_ses_sender_email: str = "noreply@example.com"
     use_mock_ses: bool = True
+    test_email_override: str = "d.nikhileswar.reddy@gmail.com"
 
     openai_api_key: str = ""
     use_mock_openai: bool = True
