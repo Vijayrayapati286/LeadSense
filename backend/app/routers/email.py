@@ -76,6 +76,8 @@ def send_emails(
         recipients=recipient_dicts,
         subject_template=data.subject,
         body_template=data.body,
+        from_name=current_user.email,
+        reply_to=current_user.email,
     )
 
     # Log all send results

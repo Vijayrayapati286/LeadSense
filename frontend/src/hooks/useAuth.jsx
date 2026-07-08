@@ -49,8 +49,8 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const devLogin = async () => {
-    const { data } = await authService.devLogin();
+  const devLogin = async (email, name) => {
+    const { data } = await authService.devLogin(email || name ? { email, name } : undefined);
     await login(data.access_token, data.user);
     return data;
   };

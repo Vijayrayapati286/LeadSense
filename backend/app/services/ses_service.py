@@ -36,24 +36,43 @@ class SESService:
             return self.settings.test_email_override
         return to_email
 
-    def send_email(self, to_email: str, subject: str, body_html: str, body_text: str | None = None) -> dict:
+    def _build_source(self, from_name: str | None) -> str:
+        """Build the SES Source header. Display name is freeform (e.g. the
+        sender's SSO email) but the address must stay the verified SES identity."""
+        if from_name:
+            return f'"{from_name}" <{self.settings.aws_ses_sender_email}>'
+        return self.settings.aws_ses_sender_email
+
+    def send_email(
+        self,
+        to_email: str,
+        subject: str,
+        body_html: str,
+        body_text: str | None = None,
+        from_name: str | None = None,
+        reply_to: str | None = None,
+    ) -> dict:
         """Send a single email via AWS SES or mock."""
         delivery_to = self._get_delivery_address(to_email)
         if self.settings.use_mock_ses or not self._get_client():
             return self._mock_send(delivery_to, subject, original_recipient=to_email)
 
         try:
-            response = self._client.send_email(
-                Source=self.settings.aws_ses_sender_email,
-                Destination={"ToAddresses": [delivery_to]},
-                Message={
+            kwargs = {
+                "Source": self._build_source(from_name),
+                "Destination": {"ToAddresses": [delivery_to]},
+                "Message": {
                     "Subject": {"Data": subject, "Charset": "UTF-8"},
                     "Body": {
                         "Html": {"Data": body_html, "Charset": "UTF-8"},
                         "Text": {"Data": body_text or body_html, "Charset": "UTF-8"},
                     },
                 },
-            )
+            }
+            if reply_to:
+                kwargs["ReplyToAddresses"] = [reply_to]
+
+            response = self._client.send_email(**kwargs)
             return {"status": "sent", "message_id": response["MessageId"], "error": None}
         except Exception as exc:
             logger.error("SES send failed for %s: %s", to_email, exc)
@@ -64,6 +83,8 @@ class SESService:
         recipients: list[dict],
         subject_template: str,
         body_template: str,
+        from_name: str | None = None,
+        reply_to: str | None = None,
     ) -> dict:
         """
         Send bulk emails with placeholder replacement.
@@ -91,6 +112,8 @@ class SESService:
                 subject=rendered_subject,
                 body_html=rendered_html,
                 body_text=rendered_body,
+                from_name=from_name,
+                reply_to=reply_to,
             )
 
             status = result["status"]

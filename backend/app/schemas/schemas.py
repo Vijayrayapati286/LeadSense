@@ -1,6 +1,6 @@
 """Pydantic schemas for request/response validation."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -21,6 +21,11 @@ class AuthCallbackResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+
+class DevLoginRequest(BaseModel):
+    email: str | None = None
+    name: str | None = None
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -174,6 +179,32 @@ class RecipientResponse(BaseModel):
     designation: str | None
     industry: str | None
     is_selected: bool
+
+    # ── Extended recipient sheet fields ──────────────────────────────────
+    create_date: date | None = None
+    fresh_mail: str | None = None
+    follow_up_1: str | None = None
+    follow_up_2: str | None = None
+    follow_up_3: str | None = None
+    grouping: str | None = None
+    vertical: str | None = None
+    sub_vertical: str | None = None
+    revenue: str | None = None
+    revenue_range: str | None = None
+    website: str | None = None
+    state: str | None = None
+    region: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    designation_level: str | None = None
+    contact_location: str | None = None
+    campaign_tag: str | None = None
+    linkedin_message: str | None = None
+    linkedin_connection_request: str | None = None
+    response_1: str | None = None
+    response_2: str | None = None
+    status: str | None = None
+    comments: str | None = None
 
 
 class RecipientListResponse(BaseModel):

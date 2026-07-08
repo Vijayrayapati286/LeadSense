@@ -8,6 +8,8 @@ import LoadingSpinner from '../components/ui/LoadingSpinner';
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
+  const [devName, setDevName] = useState('');
+  const [devEmail, setDevEmail] = useState('');
   const { devLogin } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
@@ -30,7 +32,7 @@ export default function LoginPage() {
   const handleDevLogin = async () => {
     setLoading(true);
     try {
-      await devLogin();
+      await devLogin(devEmail.trim() || undefined, devName.trim() || undefined);
       toast.success('Logged in successfully');
       navigate('/dashboard');
     } catch {
@@ -107,6 +109,23 @@ export default function LoginPage() {
               </div>
             </div>
 
+            <div className="flex gap-2 mb-3">
+              <input
+                type="text"
+                placeholder="Name (optional)"
+                value={devName}
+                onChange={(e) => setDevName(e.target.value)}
+                className="input-field text-sm"
+              />
+              <input
+                type="email"
+                placeholder="Email (optional)"
+                value={devEmail}
+                onChange={(e) => setDevEmail(e.target.value)}
+                className="input-field text-sm"
+              />
+            </div>
+
             <button
               onClick={handleDevLogin}
               disabled={loading}
@@ -118,6 +137,7 @@ export default function LoginPage() {
 
             <p className="text-xs text-gray-400 text-center mt-4">
               Dev login uses mock authentication when Azure AD is not configured.
+              Set a name/email above to simulate a specific team member's sender identity.
             </p>
           </div>
         </div>

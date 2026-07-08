@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
@@ -72,6 +72,32 @@ class Recipient(Base):
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_selected: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # ── Extended recipient sheet fields ──────────────────────────────────
+    create_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    fresh_mail: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    follow_up_1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    follow_up_2: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    follow_up_3: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    grouping: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vertical: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sub_vertical: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    revenue: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    revenue_range: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    state: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    region: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    designation_level: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    contact_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    campaign_tag: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    linkedin_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    linkedin_connection_request: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    response_2: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    comments: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     email_logs: Mapped[list["EmailLog"]] = relationship("EmailLog", back_populates="recipient")
 

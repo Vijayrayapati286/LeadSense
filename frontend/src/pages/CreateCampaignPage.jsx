@@ -208,7 +208,7 @@ export default function CreateCampaignPage() {
         body: emailContent.body + (emailContent.closing ? `\n\n${emailContent.closing}` : ''),
         recipient_ids: recipientIds,
       });
-      toast.success(`Mock delivery complete. Sent: ${data.sent}, Failed: ${data.failed}, Pending: ${data.pending}`);
+      toast.success(`Send complete. Sent: ${data.sent}, Failed: ${data.failed}, Pending: ${data.pending}`);
       navigate('/campaigns');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to send emails');

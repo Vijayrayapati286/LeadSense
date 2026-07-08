@@ -2,7 +2,7 @@ import api from './api';
 
 export const authService = {
   getLoginUrl: () => api.get('/auth/login'),
-  devLogin: () => api.post('/auth/dev-login'),
+  devLogin: (data) => api.post('/auth/dev-login', data),
   getMe: () => api.get('/auth/me'),
   logout: () => api.post('/auth/logout'),
 };

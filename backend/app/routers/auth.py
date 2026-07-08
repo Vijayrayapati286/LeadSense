@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import User
-from app.schemas.schemas import AuthCallbackResponse, UserResponse
+from app.schemas.schemas import AuthCallbackResponse, DevLoginRequest, UserResponse
 from app.services.auth_service import AuthService
 
 logger = logging.getLogger(__name__)
@@ -47,9 +47,19 @@ def callback(
 
 
 @router.post("/dev-login", response_model=AuthCallbackResponse)
-def dev_login(db: Session = Depends(get_db)):
-    """Development login when Azure AD is not configured."""
-    result = auth_service.dev_login(db)
+def dev_login(data: DevLoginRequest | None = None, db: Session = Depends(get_db)):
+    """Development login when Azure AD is not configured.
+
+    Accepts an optional email/name so multiple team members can simulate
+    distinct sender identities locally before real Azure AD SSO is wired up.
+    """
+    kwargs = {}
+    if data and data.email:
+        kwargs["email"] = data.email
+    if data and data.name:
+        kwargs["name"] = data.name
+
+    result = auth_service.dev_login(db, **kwargs)
     return AuthCallbackResponse(
         access_token=result["access_token"],
         user=UserResponse.model_validate(result["user"]),
