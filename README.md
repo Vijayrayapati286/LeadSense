@@ -10,7 +10,7 @@ A production-quality MVP for managing bulk cold email campaigns. Built for inter
 | Backend | Python, FastAPI, SQLAlchemy, Alembic, Pandas |
 | Auth | Microsoft SSO (MSAL) with dev-mode fallback |
 | Email | AWS SES (Boto3) with mock fallback |
-| AI | OpenAI API with mock fallback |
+| AI | Groq API (Llama 3.3 70B) with mock fallback |
 | Database | PostgreSQL with SQLite fallback |
 
 ## Project Structure
@@ -133,10 +133,10 @@ Copy `backend/.env.example` to `backend/.env` and configure:
 |----------|-------------|---------|
 | `USE_SQLITE_FALLBACK` | Use SQLite when PostgreSQL unavailable | `true` |
 | `USE_MOCK_SES` | Mock AWS SES sending | `true` |
-| `USE_MOCK_OPENAI` | Mock OpenAI generation | `true` |
+| `USE_MOCK_GROQ` | Mock Groq generation | `true` |
 | `AZURE_CLIENT_ID` | Microsoft Azure app client ID | — |
 | `AWS_ACCESS_KEY_ID` | AWS credentials for SES | — |
-| `OPENAI_API_KEY` | OpenAI API key | — |
+| `GROQ_API_KEY` | Groq API key | — |
 
 Set mock flags to `false` and provide real credentials to enable live integrations.
 

@@ -1,4 +1,4 @@
-"""OpenAI email generation service with mock fallback."""
+"""Groq email generation service with mock fallback."""
 
 import json
 import logging
@@ -15,29 +15,32 @@ class AIService:
 
     def generate_email(self, campaign_data: dict) -> dict:
         """
-        Generate a professional sales email using OpenAI or mock data.
+        Generate a professional sales email using Groq or mock data.
 
         Returns: subject, body, closing, cta, is_mock
         """
-        if self.settings.use_mock_openai or not self.settings.openai_api_key:
+        if self.settings.use_mock_groq or not self.settings.groq_api_key:
             return self._mock_generate(campaign_data)
 
         try:
-            return self._openai_generate(campaign_data)
+            return self._groq_generate(campaign_data)
         except Exception as exc:
-            logger.warning("OpenAI generation failed, using mock: %s", exc)
+            logger.warning("Groq generation failed, using mock: %s", exc)
             result = self._mock_generate(campaign_data)
             result["is_mock"] = True
             return result
 
-    def _openai_generate(self, campaign_data: dict) -> dict:
+    def _groq_generate(self, campaign_data: dict) -> dict:
         from openai import OpenAI
 
-        client = OpenAI(api_key=self.settings.openai_api_key)
+        client = OpenAI(
+            api_key=self.settings.groq_api_key,
+            base_url="https://api.groq.com/openai/v1",
+        )
 
         prompt = self._build_prompt(campaign_data)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {
                     "role": "system",

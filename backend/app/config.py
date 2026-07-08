@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     use_mock_ses: bool = True
     test_email_override: str = "d.nikhileswar.reddy@gmail.com"
 
-    openai_api_key: str = ""
-    use_mock_openai: bool = True
+    groq_api_key: str = ""
+    use_mock_groq: bool = True
 
     @property
     def azure_authority(self) -> str:
