@@ -8,7 +8,7 @@ import { generateCampaignId, extractPlaceholders, renderTemplate } from '../util
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import EmailPreview from '../components/EmailPreview';
 
-const STEPS = ['Campaign Info', 'Choose Template', 'Select Recipients', 'Preview & Send'];
+const STEPS = ['Campaign Info', 'Choose Template', 'Select Recipients', 'Preview & Create'];
 const TEST_EMAIL_TARGET = import.meta.env.VITE_TEST_EMAIL || 'd.nikhileswar.reddy@gmail.com';
 
 const TEMPLATE_TYPES = [
@@ -217,6 +217,11 @@ export default function CreateCampaignPage() {
     }
   };
 
+  const handleSkip = () => {
+    if (step === 1) setStep(2);
+    else if (step === 2) setStep(3);
+  };
+
   const toggleRecipient = (recipientId) => {
     setSelectedRecipientIds((prev) => {
       const next = prev.includes(recipientId)
@@ -250,7 +255,7 @@ export default function CreateCampaignPage() {
     <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">{isEditMode ? 'Edit Campaign' : 'Create Campaign'}</h1>
-        <p className="text-gray-500 mt-1">Set up your email campaign in 3 easy steps</p>
+        <p className="text-gray-500 mt-1">Set up your email campaign in 4 easy steps</p>
       </div>
 
       {/* Step Indicator */}
@@ -313,7 +318,15 @@ export default function CreateCampaignPage() {
         {/* Step 2: Choose Template */}
         {step === 1 && (
           <div className="space-y-6">
-            <h2 className="text-lg font-semibold">Choose Email Template</h2>
+            <div className="flex items-center justify-between gap-4">
+              <h2 className="text-lg font-semibold">Choose Email Template</h2>
+              <button
+                onClick={handleSkip}
+                className="text-sm font-medium text-gray-500 hover:text-primary-600"
+              >
+                Skip this step
+              </button>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {TEMPLATE_TYPES.map(({ id, label, icon: Icon, desc }) => (
@@ -439,9 +452,15 @@ export default function CreateCampaignPage() {
                 <h2 className="text-lg font-semibold flex items-center gap-2"><FiUsers size={18} /> Select Recipients</h2>
                 <p className="text-sm text-gray-500 mt-1">Choose who should receive this campaign. In mock mode, the message is routed to the configured test inbox.</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 <button onClick={selectAllRecipients} className="btn-secondary text-sm">Select All</button>
                 <button onClick={clearRecipients} className="btn-secondary text-sm">Clear</button>
+                <button
+                  onClick={handleSkip}
+                  className="text-sm font-medium text-gray-500 hover:text-primary-600 px-2"
+                >
+                  Skip this step
+                </button>
               </div>
             </div>
 
@@ -495,7 +514,7 @@ export default function CreateCampaignPage() {
         {/* Step 4: Preview & Send */}
         {step === 3 && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold">Preview & Send</h2>
+            <h2 className="text-lg font-semibold">Preview & Create</h2>
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
               <p className="font-semibold">Testing mode enabled</p>
               <p className="mt-1">This demo will route the message to your configured inbox so you can show the flow live.</p>
