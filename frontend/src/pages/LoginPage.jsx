@@ -50,7 +50,7 @@ export default function LoginPage() {
           <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center mb-8">
             <FiMail size={32} />
           </div>
-          <h1 className="text-4xl font-bold mb-4">Bulk Email Campaign Manager</h1>
+          <h1 className="text-4xl font-bold mb-4">CampaignFlow</h1>
           <p className="text-primary-200 text-lg leading-relaxed">
             Streamline your sales outreach with powerful bulk email campaigns,
             AI-generated templates, and comprehensive analytics.
