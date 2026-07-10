@@ -5,7 +5,7 @@ import random
 import uuid
 
 from app.config import get_settings
-from app.utils.helpers import render_template
+from app.utils.helpers import markdown_to_html, markdown_to_plain, render_template
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -105,13 +105,18 @@ class SESService:
 
             rendered_subject = render_template(subject_template, context)
             rendered_body = render_template(body_template, context)
-            rendered_html = f"<html><body>{rendered_body.replace(chr(10), '<br>')}</body></html>"
+            body_html = markdown_to_html(rendered_body)
+            rendered_html = (
+                '<html><body style="font-family:Arial,Helvetica,sans-serif;'
+                'font-size:14px;color:#1f2937;line-height:1.6;">'
+                f"{body_html}</body></html>"
+            )
 
             result = self.send_email(
                 to_email=recipient["email"],
                 subject=rendered_subject,
                 body_html=rendered_html,
-                body_text=rendered_body,
+                body_text=markdown_to_plain(rendered_body),
                 from_name=from_name,
                 reply_to=reply_to,
             )

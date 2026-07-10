@@ -13,7 +13,7 @@ from app.schemas.schemas import (
     PreviewTemplateResponse,
 )
 from app.services.ai_service import AIService
-from app.utils.helpers import extract_placeholders, render_template
+from app.utils.helpers import extract_placeholders, markdown_to_html, render_template
 
 router = APIRouter(prefix="/templates", tags=["Templates"])
 ai_service = AIService()
@@ -93,7 +93,7 @@ def preview_template(
 
     rendered_subject = render_template(data.subject, context)
     rendered_body = render_template(data.body, context)
-    rendered_html = rendered_body.replace("\n", "<br>")
+    rendered_html = markdown_to_html(rendered_body)
 
     return PreviewTemplateResponse(
         subject=rendered_subject,

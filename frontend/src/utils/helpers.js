@@ -13,6 +13,40 @@ export function renderTemplate(text, context) {
   return result;
 }
 
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Render a small markdown subset (**bold**, "- " bullet lists, blank-line
+ * paragraphs) into inline-styled HTML, mirroring the backend's send-time
+ * rendering so the preview matches what recipients actually receive. */
+export function renderMarkdownLite(text) {
+  if (!text) return '';
+  let escaped = escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  return escaped
+    .trim()
+    .split(/\n\s*\n/)
+    .map((block) => {
+      const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+      if (lines.length === 0) return '';
+      const isBulletBlock = lines.every((l) => /^[-•*]\s+/.test(l));
+      if (isBulletBlock) {
+        const items = lines.map((l) => l.replace(/^[-•*]\s+/, ''));
+        return `<ul style="margin:0 0 14px 0;padding-left:20px;list-style-type:disc;">${items
+          .map((i) => `<li style="margin-bottom:4px;">${i}</li>`)
+          .join('')}</ul>`;
+      }
+      return `<p style="margin:0 0 14px 0;">${lines.join('<br>')}</p>`;
+    })
+    .join('');
+}
+
 /** Format date string for display */
 export function formatDate(dateStr) {
   if (!dateStr) return '—';

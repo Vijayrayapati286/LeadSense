@@ -85,7 +85,7 @@ class AuthService:
     def dev_login(self, db: Session, email: str = "demo@company.com", name: str = "Demo User") -> dict:
         """Development login when Azure AD is not configured."""
         profile = {
-            "id": "dev-user-001",
+            "id": f"dev-{email}",
             "displayName": name,
             "mail": email,
             "userPrincipalName": email,

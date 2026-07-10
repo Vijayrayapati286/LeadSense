@@ -4,7 +4,7 @@ import { FiArrowLeft, FiArrowRight, FiCheck, FiZap, FiEdit3, FiFileText } from '
 import { campaignService, templateService, emailService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
-import { generateCampaignId, extractPlaceholders, renderTemplate } from '../utils/helpers';
+import { generateCampaignId, extractPlaceholders, renderTemplate, renderMarkdownLite } from '../utils/helpers';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import EmailPreview from '../components/EmailPreview';
 
@@ -301,7 +301,7 @@ export default function CreateCampaignPage() {
                 </div>
                 <div>
                   <label className="label">Email Body</label>
-                  <textarea className="input-field font-mono text-sm" rows={10} value={emailContent.body} onChange={(e) => setEmailContent((p) => ({ ...p, body: e.target.value }))} placeholder="Write your email content here. Use {{Name}}, {{Company}} for personalization." />
+                  <textarea className="input-field font-mono text-sm" rows={10} value={emailContent.body} onChange={(e) => setEmailContent((p) => ({ ...p, body: e.target.value }))} placeholder="Write your email content here. Use {{Name}}, {{Company}} for personalization. Wrap text in **double asterisks** for bold, and start a line with '- ' for a bullet point." />
                 </div>
                 <div>
                   <label className="label">Closing</label>
@@ -349,7 +349,12 @@ export default function CreateCampaignPage() {
                     <div className="p-4 bg-gray-50 rounded-lg">
                       <p className="text-xs text-gray-500 mb-2">Live Preview</p>
                       <p className="font-medium text-sm">{renderTemplate(emailContent.subject, previewContext)}</p>
-                      <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{renderTemplate(emailContent.body, previewContext)}</p>
+                      <div
+                        className="text-sm text-gray-600 mt-2"
+                        dangerouslySetInnerHTML={{
+                          __html: renderMarkdownLite(renderTemplate(emailContent.body, previewContext)),
+                        }}
+                      />
                     </div>
                   </>
                 )}

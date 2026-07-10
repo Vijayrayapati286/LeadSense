@@ -45,8 +45,10 @@ class AIService:
                 {
                     "role": "system",
                     "content": (
-                        "You are a professional B2B sales email copywriter. "
-                        "Generate concise, formal, personalized cold outreach emails. "
+                        "You are an elite B2B sales email copywriter, in the style of top SaaS "
+                        "growth teams. You write punchy, executive-level cold outreach emails "
+                        "with clear visual structure: short paragraphs, a bolded phrase or two "
+                        "for emphasis, and a scannable bullet list of concrete benefits. "
                         "Always respond with valid JSON containing: subject, body, closing, cta."
                     ),
                 },
@@ -76,12 +78,29 @@ Target Audience: {campaign_data.get('target_audience', 'Business professionals')
 Tone: {campaign_data.get('tone', 'formal')}
 Additional Context: {campaign_data.get('additional_context', 'None')}
 
-Requirements:
-- Catchy but professional subject line
-- Short email body (3-4 paragraphs max)
-- Use {{{{Name}}}}, {{{{Company}}}}, {{{{Designation}}}} placeholders for personalization
-- Include a clear CTA
-- Formal tone
+Formatting requirements for the "body" field (this is critical, follow exactly):
+- Write plain text using a small markdown subset: wrap 2-4 key phrases or
+  stats in **double asterisks** for emphasis, and write benefit lists as
+  separate lines each starting with "- ".
+- Separate every paragraph and the bullet list from each other with a blank
+  line (i.e. two newlines).
+- Start with "Hi {{{{Name}}}}," on its own line, then a blank line.
+- Open with a short, sharp 1-2 sentence hook naming a hidden problem the
+  audience faces — not a generic "I hope this finds you well" greeting.
+- Follow with one short paragraph naming the specific pain, with the key
+  phrase in **bold**.
+- Include exactly one bulleted list of 3-5 concrete, quantified benefits,
+  each item leading with a **bold phrase** followed by the detail.
+- Close with one short paragraph containing a bolded outcome or number,
+  ending in a soft CTA question (e.g. "Worth a quick look?").
+- Keep the body under ~160 words excluding the bullet list.
+- Use {{{{Name}}}}, {{{{Company}}}}, {{{{Designation}}}}, {{{{Industry}}}}
+  placeholders for personalization.
+
+Other requirements:
+- Subject: a short, provocative hook (under 80 characters) that names a
+  hidden problem — not a generic sales subject line.
+- Formal but energetic tone.
 - Return JSON with keys: subject, body, closing, cta"""
 
     def _mock_generate(self, campaign_data: dict) -> dict:
@@ -89,18 +108,21 @@ Requirements:
         audience = campaign_data.get("target_audience", "business leaders")
 
         return {
-            "subject": f"Unlock Growth Opportunities for {{{{Company}}}} — Exclusive Offer Inside",
+            "subject": f"Your Metrics Are Green. Your {audience.title()} Disagree.",
             "body": (
-                f"Dear {{{{Name}}}},\n\n"
-                f"I hope this message finds you well. As {{{{Designation}}}} at {{{{Company}}}}, "
-                f"you understand the challenges of reaching {audience} effectively.\n\n"
-                f"We've helped companies in the {{{{Industry}}}} sector achieve remarkable results "
-                f"with our {name} solution. Our clients typically see a 40% improvement in "
-                f"engagement within the first quarter.\n\n"
-                f"I'd love to share how we can tailor this approach specifically for {{{{Company}}}}. "
-                f"Would you be open to a brief 15-minute call this week?"
+                f"Hi {{{{Name}}}},\n\n"
+                f"Most teams like {{{{Company}}}} look successful on paper — targets hit, "
+                f"dashboards green.\n\n"
+                f"**But behind those green metrics**, {{{{Designation}}}}s are often stuck "
+                f"fighting manual work, rising costs, and slipping {audience} engagement.\n\n"
+                f"We've helped {{{{Industry}}}} teams fix this with {name}:\n\n"
+                f"- **40% faster turnaround** through automated workflows\n"
+                f"- **25-30% cost reduction** by eliminating manual busywork\n"
+                f"- **Real-time visibility** across every stage, not just the dashboard\n\n"
+                f"With this approach, **{{{{Company}}}} could unlock meaningful capacity within "
+                f"a single quarter**. Worth a quick 15-minute look?"
             ),
-            "closing": "Best regards,\nSales Team",
+            "closing": "Best,\nSales Team",
             "cta": "Schedule a 15-minute discovery call",
             "is_mock": True,
         }

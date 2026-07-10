@@ -1,3 +1,5 @@
+import { renderMarkdownLite } from '../utils/helpers';
+
 export default function EmailPreview({ subject, recipientName, body, closing, cta }) {
   return (
     <div className="max-w-2xl mx-auto">
@@ -26,11 +28,15 @@ export default function EmailPreview({ subject, recipientName, body, closing, ct
 
         {/* Email body */}
         <div className="p-6">
-          <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap leading-relaxed">
-            {body}
-          </div>
+          <div
+            className="prose prose-sm max-w-none text-gray-700 leading-relaxed"
+            dangerouslySetInnerHTML={{ __html: renderMarkdownLite(body) }}
+          />
           {closing && (
-            <p className="mt-4 text-gray-700 whitespace-pre-wrap">{closing}</p>
+            <div
+              className="mt-4 text-gray-700"
+              dangerouslySetInnerHTML={{ __html: renderMarkdownLite(closing) }}
+            />
           )}
           {cta && (
             <div className="mt-6">
