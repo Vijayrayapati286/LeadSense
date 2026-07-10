@@ -2,8 +2,8 @@
 
 from sqlalchemy.orm import Session
 
-from app.models import Campaign, Template
-from app.schemas.schemas import CampaignCreate, CampaignUpdate
+from app.models import Campaign, CampaignSequenceStage, Template
+from app.schemas.schemas import CampaignCreate, CampaignSequenceStageCreate, CampaignUpdate
 
 
 class CampaignService:
@@ -92,3 +92,51 @@ class CampaignService:
         db.commit()
         db.refresh(template)
         return template
+
+    def list_sequence_stages(self, db: Session, campaign_id: int) -> list[CampaignSequenceStage]:
+        return (
+            db.query(CampaignSequenceStage)
+            .filter(CampaignSequenceStage.campaign_id == campaign_id)
+            .order_by(CampaignSequenceStage.stage_order)
+            .all()
+        )
+
+    def create_sequence_stage(
+        self, db: Session, campaign_id: int, data: CampaignSequenceStageCreate
+    ) -> CampaignSequenceStage:
+        if not self.get_by_id(db, campaign_id):
+            raise ValueError("Campaign not found")
+
+        existing = (
+            db.query(CampaignSequenceStage)
+            .filter(
+                CampaignSequenceStage.campaign_id == campaign_id,
+                CampaignSequenceStage.stage_order == data.stage_order,
+            )
+            .first()
+        )
+        if existing:
+            raise ValueError(f"Stage order {data.stage_order} already exists for this campaign")
+
+        stage = CampaignSequenceStage(campaign_id=campaign_id, **data.model_dump())
+        db.add(stage)
+        db.commit()
+        db.refresh(stage)
+        return stage
+
+    def update_sequence_stage(self, db: Session, stage_id: int, update_data: dict) -> CampaignSequenceStage:
+        stage = db.query(CampaignSequenceStage).filter(CampaignSequenceStage.id == stage_id).first()
+        if not stage:
+            raise ValueError("Sequence stage not found")
+        for field, value in update_data.items():
+            setattr(stage, field, value)
+        db.commit()
+        db.refresh(stage)
+        return stage
+
+    def delete_sequence_stage(self, db: Session, stage_id: int) -> None:
+        stage = db.query(CampaignSequenceStage).filter(CampaignSequenceStage.id == stage_id).first()
+        if not stage:
+            raise ValueError("Sequence stage not found")
+        db.delete(stage)
+        db.commit()

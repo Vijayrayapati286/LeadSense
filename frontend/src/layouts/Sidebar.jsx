@@ -11,13 +11,15 @@ import {
   FiChevronLeft,
   FiChevronRight,
   FiSend,
+  FiShield,
 } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: FiHome },
   { path: '/campaigns', label: 'Campaigns', icon: FiMail },
-  { path: '/recipients', label: 'Recipients', icon: FiUsers },
+  { path: '/recipients', label: 'Contacts', icon: FiUsers },
+  { path: '/blacklist', label: 'Blacklist', icon: FiShield },
   { path: '/templates', label: 'Templates', icon: FiFileText },
   { path: '/logs', label: 'Email Logs', icon: FiList },
   { path: '/settings', label: 'Settings', icon: FiSettings },

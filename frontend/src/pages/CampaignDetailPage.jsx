@@ -8,22 +8,38 @@ import {
   FiEye,
   FiSend,
   FiCheckSquare,
-  FiSquare,
+  FiClock,
+  FiPlus,
+  FiTrash2,
+  FiBarChart2,
 } from 'react-icons/fi';
-import { campaignService, recipientService, emailService } from '../services/services';
+import {
+  campaignService,
+  recipientService,
+  sequenceService,
+  emailService,
+} from '../services/services';
 import { useToast } from '../hooks/useToast';
+import { useContactSearch } from '../hooks/useContactSearch';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
 import SearchInput from '../components/ui/SearchInput';
+import Pagination from '../components/ui/Pagination';
 import Modal from '../components/ui/Modal';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmailPreview from '../components/EmailPreview';
+import FilterBuilder from '../components/FilterBuilder';
 import { formatDate, formatDateTime, renderTemplate, debounce } from '../utils/helpers';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'template', label: 'Template' },
-  { id: 'candidates', label: 'Candidates' },
+  { id: 'sequence', label: 'Follow-up Sequence' },
+  { id: 'candidates', label: 'Contacts' },
+  { id: 'tracking', label: 'Tracking' },
 ];
+
+const EMPTY_STAGE_FORM = { delay_value: 3, delay_unit: 'days', subject: '', body: '', closing: '', cta: '' };
 
 export default function CampaignDetailPage() {
   const { id } = useParams();
@@ -35,14 +51,29 @@ export default function CampaignDetailPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
 
-  const [recipients, setRecipients] = useState([]);
-  const [recipientLoading, setRecipientLoading] = useState(false);
-  const [recipientSearch, setRecipientSearch] = useState('');
+  const {
+    search, setSearch, sortBy, setSortBy, sortOrder, setSortOrder,
+    activeFieldKeys, filterValues, distinctOptions, distinctLoading,
+    results, total, page, setPage, loading: contactsLoading,
+    groups, tags, campaigns, activeParams,
+    handleAddField, handleRemoveField, handleValueChange, clearAllFilters,
+  } = useContactSearch({ toast });
+
   const [selectedIds, setSelectedIds] = useState([]);
+  const [selectingAll, setSelectingAll] = useState(false);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRecipientId, setPreviewRecipientId] = useState(null);
   const [sending, setSending] = useState(false);
+
+  const [stages, setStages] = useState([]);
+  const [stageLoading, setStageLoading] = useState(false);
+  const [stageForm, setStageForm] = useState(EMPTY_STAGE_FORM);
+  const [addingStage, setAddingStage] = useState(false);
+  const [deletingStageId, setDeletingStageId] = useState(null);
+
+  const [tracking, setTracking] = useState([]);
+  const [trackingLoading, setTrackingLoading] = useState(false);
 
   const loadCampaign = useCallback(async () => {
     try {
@@ -63,25 +94,68 @@ export default function CampaignDetailPage() {
     loadCampaign();
   }, [loadCampaign]);
 
+  const loadStages = useCallback(async () => {
+    setStageLoading(true);
+    try {
+      const { data } = await sequenceService.getAll(id);
+      setStages(data);
+    } catch {
+      toast.error('Failed to load follow-up sequence');
+    } finally {
+      setStageLoading(false);
+    }
+  }, [id, toast]);
+
   useEffect(() => {
-    if (activeTab !== 'candidates') return;
+    if (activeTab === 'sequence') loadStages();
+  }, [activeTab, loadStages]);
 
-    const loadRecipients = async () => {
-      setRecipientLoading(true);
-      try {
-        const { data } = await recipientService.getAll({ page: 1, page_size: 100, search: recipientSearch });
-        setRecipients(data.items);
-      } catch {
-        toast.error('Failed to load candidates');
-      } finally {
-        setRecipientLoading(false);
-      }
-    };
+  const loadTracking = useCallback(async () => {
+    setTrackingLoading(true);
+    try {
+      const { data } = await campaignService.getRecipients(id);
+      setTracking(data.items);
+    } catch {
+      toast.error('Failed to load tracking data');
+    } finally {
+      setTrackingLoading(false);
+    }
+  }, [id, toast]);
 
-    loadRecipients();
-  }, [activeTab, recipientSearch, toast]);
+  useEffect(() => {
+    if (activeTab === 'tracking') loadTracking();
+  }, [activeTab, loadTracking]);
 
-  const debouncedSearch = useCallback(debounce((val) => setRecipientSearch(val), 400), []);
+  const handleAddStage = async () => {
+    if (!stageForm.subject || !stageForm.body) {
+      toast.error('Subject and body are required');
+      return;
+    }
+    setAddingStage(true);
+    try {
+      const nextOrder = stages.length > 0 ? Math.max(...stages.map((s) => s.stage_order)) + 1 : 1;
+      await sequenceService.create(id, { ...stageForm, stage_order: nextOrder });
+      toast.success('Follow-up stage added');
+      setStageForm(EMPTY_STAGE_FORM);
+      loadStages();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to add stage');
+    } finally {
+      setAddingStage(false);
+    }
+  };
+
+  const handleDeleteStage = async () => {
+    try {
+      await sequenceService.delete(deletingStageId);
+      toast.success('Stage removed');
+      loadStages();
+    } catch {
+      toast.error('Failed to remove stage');
+    }
+  };
+
+  const debouncedSearch = useCallback(debounce((val) => { setSearch(val); setPage(1); }, 400), []);
 
   const toggleRecipient = (recipientId) => {
     setSelectedIds((prev) =>
@@ -89,10 +163,22 @@ export default function CampaignDetailPage() {
     );
   };
 
-  const selectAllRecipients = () => setSelectedIds(recipients.map((r) => r.id));
   const clearSelection = () => setSelectedIds([]);
 
-  const selectedRecipients = recipients.filter((r) => selectedIds.includes(r.id));
+  const handleSelectAllMatching = async () => {
+    setSelectingAll(true);
+    try {
+      const { data } = await recipientService.searchIds(activeParams);
+      setSelectedIds(data.ids);
+      toast.success(`Selected all ${data.total} matching contact(s)`);
+    } catch {
+      toast.error('Failed to select all matching contacts');
+    } finally {
+      setSelectingAll(false);
+    }
+  };
+
+  const selectedRecipients = results.filter((r) => selectedIds.includes(r.id));
 
   useEffect(() => {
     if (selectedRecipients.length === 0) {
@@ -101,9 +187,9 @@ export default function CampaignDetailPage() {
       setPreviewRecipientId(selectedRecipients[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIds, recipients]);
+  }, [selectedIds, results]);
 
-  const previewRecipient = recipients.find((r) => r.id === previewRecipientId);
+  const previewRecipient = results.find((r) => r.id === previewRecipientId);
   const previewContext = previewRecipient
     ? {
         Name: previewRecipient.name,
@@ -120,7 +206,7 @@ export default function CampaignDetailPage() {
       return;
     }
     if (selectedIds.length === 0) {
-      toast.error('Select at least one candidate first');
+      toast.error('Select at least one contact first');
       return;
     }
     setPreviewOpen(true);
@@ -273,15 +359,102 @@ export default function CampaignDetailPage() {
             </div>
           )}
 
+          {activeTab === 'sequence' && (
+            <div className="card">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <FiClock size={18} /> Follow-up Sequence
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Stage 0 is the email on the Template tab, sent immediately. Add follow-up stages below —
+                each fires automatically after the configured delay, as long as the contact hasn't
+                replied, bounced, or been suppressed.
+              </p>
+
+              {stageLoading ? (
+                <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {stages.map((s) => (
+                    <div key={s.id} className="rounded-xl border border-gray-200 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">
+                            Stage {s.stage_order} — after {s.delay_value} {s.delay_unit}
+                          </p>
+                          <p className="text-sm text-gray-600 mt-1">{s.subject}</p>
+                          <p className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{s.body}</p>
+                        </div>
+                        <button
+                          onClick={() => setDeletingStageId(s.id)}
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600"
+                        >
+                          <FiTrash2 size={15} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {stages.length === 0 && (
+                    <p className="text-sm text-gray-400">No follow-up stages yet — this campaign only sends the initial email.</p>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-6 pt-4 border-t border-gray-100 space-y-3">
+                <p className="text-sm font-medium text-gray-700">Add a follow-up stage</p>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500">Send after</span>
+                  <input
+                    type="number"
+                    min={1}
+                    className="input-field w-20"
+                    value={stageForm.delay_value}
+                    onChange={(e) => setStageForm((p) => ({ ...p, delay_value: Number(e.target.value) }))}
+                  />
+                  <select
+                    className="input-field w-auto"
+                    value={stageForm.delay_unit}
+                    onChange={(e) => setStageForm((p) => ({ ...p, delay_unit: e.target.value }))}
+                  >
+                    <option value="minutes">Minutes</option>
+                    <option value="hours">Hours</option>
+                    <option value="days">Days</option>
+                  </select>
+                </div>
+                <input
+                  className="input-field"
+                  placeholder="Subject"
+                  value={stageForm.subject}
+                  onChange={(e) => setStageForm((p) => ({ ...p, subject: e.target.value }))}
+                />
+                <textarea
+                  className="input-field font-mono text-sm"
+                  rows={5}
+                  placeholder="Body — use {{Name}}, {{Company}} etc for personalization"
+                  value={stageForm.body}
+                  onChange={(e) => setStageForm((p) => ({ ...p, body: e.target.value }))}
+                />
+                <input
+                  className="input-field"
+                  placeholder="Closing (optional)"
+                  value={stageForm.closing}
+                  onChange={(e) => setStageForm((p) => ({ ...p, closing: e.target.value }))}
+                />
+                <button onClick={handleAddStage} disabled={addingStage} className="btn-primary flex items-center gap-2">
+                  {addingStage ? <LoadingSpinner size="sm" /> : <FiPlus size={16} />} Add Stage
+                </button>
+              </div>
+            </div>
+          )}
+
           {activeTab === 'candidates' && (
             <div className="card">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
                   <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <FiUsers size={18} /> Candidates
+                    <FiUsers size={18} /> Contacts
                   </h2>
                   <p className="text-sm text-gray-500 mt-1">
-                    Select who should receive this campaign, then preview and send.
+                    Search, filter, and select who should receive this campaign, then preview and send.
                   </p>
                 </div>
                 <button
@@ -303,55 +476,139 @@ export default function CampaignDetailPage() {
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center gap-3 mt-4">
-                <SearchInput
-                  onChange={debouncedSearch}
-                  placeholder="Search candidates by name or email..."
-                  className="flex-1 min-w-[200px]"
+              <div className="mt-4 space-y-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <SearchInput
+                    onChange={debouncedSearch}
+                    placeholder="Quick search (name, email, company)..."
+                    className="flex-1 min-w-[200px]"
+                  />
+                  <select className="input-field w-auto" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+                    <option value="name">Sort: Name</option>
+                    <option value="email">Sort: Email</option>
+                    <option value="company">Sort: Company</option>
+                    <option value="designation">Sort: Designation</option>
+                    <option value="industry">Sort: Industry</option>
+                  </select>
+                  <select className="input-field w-auto" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)}>
+                    <option value="asc">Ascending</option>
+                    <option value="desc">Descending</option>
+                  </select>
+                </div>
+
+                <FilterBuilder
+                  activeFieldKeys={activeFieldKeys}
+                  values={filterValues}
+                  onAddField={handleAddField}
+                  onRemoveField={handleRemoveField}
+                  onValueChange={handleValueChange}
+                  distinctOptions={distinctOptions}
+                  distinctLoading={distinctLoading}
+                  groups={groups}
+                  tags={tags}
+                  campaigns={campaigns}
                 />
-                <button onClick={selectAllRecipients} className="btn-secondary text-sm flex items-center gap-1">
-                  <FiCheckSquare size={14} /> Select All
-                </button>
-                <button onClick={clearSelection} className="btn-secondary text-sm flex items-center gap-1">
-                  <FiSquare size={14} /> Clear
-                </button>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={clearAllFilters} className="btn-secondary text-sm">Clear All</button>
+                  <button onClick={clearSelection} className="btn-secondary text-sm">Clear Selection</button>
+                  <button onClick={handleSelectAllMatching} disabled={selectingAll || total === 0} className="btn-secondary text-sm flex items-center gap-1 ml-auto">
+                    {selectingAll ? <LoadingSpinner size="sm" /> : <FiCheckSquare size={14} />} Select All {total} Matching
+                  </button>
+                </div>
               </div>
 
-              <p className="text-sm text-gray-600 mt-3">{selectedIds.length} selected</p>
+              <p className="text-sm text-gray-600 mt-3">
+                <span className="font-semibold text-gray-900">{total}</span> matching contact{total !== 1 ? 's' : ''}
+                {selectedIds.length > 0 && <span className="ml-2 text-primary-600 font-medium">({selectedIds.length} selected)</span>}
+              </p>
 
-              {recipientLoading ? (
+              {contactsLoading ? (
                 <div className="flex justify-center py-6">
                   <LoadingSpinner size="md" />
                 </div>
-              ) : recipients.length === 0 ? (
+              ) : results.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 mt-3">
-                  No candidates found. Upload recipients from the Recipients page first.
+                  No contacts found. Upload contacts from the Contacts page or adjust your filters.
                 </div>
               ) : (
-                <div className="space-y-2 max-h-96 overflow-y-auto pr-1 mt-3">
-                  {recipients.map((r) => (
-                    <label
-                      key={r.id}
-                      className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-white p-3 hover:border-primary-300"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(r.id)}
-                        onChange={() => toggleRecipient(r.id)}
-                        className="mt-1 rounded border-gray-300"
-                      />
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="font-medium text-gray-900">{r.name}</p>
-                          <span className="text-xs text-gray-500">{r.company || '—'}</span>
+                <>
+                  <div className="space-y-2 max-h-96 overflow-y-auto pr-1 mt-3">
+                    {results.map((r) => (
+                      <label
+                        key={r.id}
+                        className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-white p-3 hover:border-primary-300"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(r.id)}
+                          onChange={() => toggleRecipient(r.id)}
+                          className="mt-1 rounded border-gray-300"
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="font-medium text-gray-900">{r.name}</p>
+                            <span className="text-xs text-gray-500">{r.company || '—'}</span>
+                          </div>
+                          <p className="text-sm text-gray-600">{r.email}</p>
+                          <p className="text-xs text-gray-500">
+                            {r.designation || '—'} • {r.industry || '—'}
+                          </p>
                         </div>
-                        <p className="text-sm text-gray-600">{r.email}</p>
-                        <p className="text-xs text-gray-500">
-                          {r.designation || '—'} • {r.industry || '—'}
-                        </p>
-                      </div>
-                    </label>
-                  ))}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-2">
+                    <Pagination page={page} pageSize={10} total={total} onPageChange={setPage} />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'tracking' && (
+            <div className="card overflow-hidden">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <FiBarChart2 size={18} /> Contact Tracking
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Per-contact delivery status for this campaign, updated as emails are sent and follow-ups fire.
+              </p>
+
+              {trackingLoading ? (
+                <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+              ) : tracking.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 mt-4">
+                  No sends recorded yet for this campaign.
+                </div>
+              ) : (
+                <div className="overflow-x-auto mt-4 -mx-6">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-y">
+                      <tr className="text-left text-gray-500">
+                        <th className="px-6 py-3 font-medium">Name</th>
+                        <th className="px-4 py-3 font-medium">Email</th>
+                        <th className="px-4 py-3 font-medium">Company</th>
+                        <th className="px-4 py-3 font-medium">Status</th>
+                        <th className="px-4 py-3 font-medium">Stage</th>
+                        <th className="px-4 py-3 font-medium">Last Sent</th>
+                        <th className="px-6 py-3 font-medium">Replied At</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tracking.map((t) => (
+                        <tr key={t.id} className="border-b border-gray-50">
+                          <td className="px-6 py-3 font-medium text-gray-900">{t.recipient_name}</td>
+                          <td className="px-4 py-3 text-gray-600">{t.recipient_email}</td>
+                          <td className="px-4 py-3 text-gray-600">{t.recipient_company || '—'}</td>
+                          <td className="px-4 py-3"><StatusBadge status={t.status} /></td>
+                          <td className="px-4 py-3 text-gray-600">{t.current_stage}</td>
+                          <td className="px-4 py-3 text-gray-600">{formatDateTime(t.last_sent_at)}</td>
+                          <td className="px-6 py-3 text-gray-600">{formatDateTime(t.replied_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
@@ -380,7 +637,7 @@ export default function CampaignDetailPage() {
             <ul className="mt-4 space-y-2 text-sm text-gray-600">
               <li>• Review the campaign details in the Overview tab.</li>
               <li>• Confirm the email content in the Template tab.</li>
-              <li>• Select candidates and preview & send from the Candidates tab.</li>
+              <li>• Select contacts and preview & send from the Contacts tab.</li>
             </ul>
           </div>
         </div>
@@ -413,7 +670,7 @@ export default function CampaignDetailPage() {
               cta={template.cta}
             />
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
-              Sending to {selectedIds.length} candidate{selectedIds.length !== 1 ? 's' : ''}
+              Sending to {selectedIds.length} contact{selectedIds.length !== 1 ? 's' : ''}
             </div>
             <div className="flex justify-end gap-3">
               <button className="btn-secondary" onClick={() => setPreviewOpen(false)} disabled={sending}>
@@ -432,6 +689,15 @@ export default function CampaignDetailPage() {
           </div>
         )}
       </Modal>
+
+      <ConfirmDialog
+        isOpen={!!deletingStageId}
+        onClose={() => setDeletingStageId(null)}
+        onConfirm={handleDeleteStage}
+        title="Remove Follow-up Stage"
+        message="Remove this follow-up stage? Contacts already scheduled for it will no longer receive it."
+        confirmText="Remove"
+      />
     </div>
   );
 }

@@ -7,13 +7,39 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
-from app.models import Campaign, EmailLog, Recipient, User
+from app.models import Campaign, CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, User
 from app.schemas.schemas import SendEmailRequest, SendEmailResponse
+from app.services.scheduler_service import compute_next_send_at
 from app.services.ses_service import SESService
+from app.utils.helpers import utc_now
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/email", tags=["Email"])
 ses_service = SESService()
+
+
+def _sync_campaign_recipient(db: Session, campaign_id: int, recipient_id: int, send_status: str) -> None:
+    """Create/update the per-campaign tracking row after an initial (stage 0)
+    send, and schedule the next follow-up stage if one exists."""
+    cr = (
+        db.query(CampaignRecipient)
+        .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.recipient_id == recipient_id)
+        .first()
+    )
+    if not cr:
+        cr = CampaignRecipient(campaign_id=campaign_id, recipient_id=recipient_id, current_stage=0)
+        db.add(cr)
+
+    cr.status = send_status
+    cr.last_sent_at = utc_now()
+
+    if send_status == "sent":
+        next_stage = (
+            db.query(CampaignSequenceStage)
+            .filter(CampaignSequenceStage.campaign_id == campaign_id, CampaignSequenceStage.stage_order == 1)
+            .first()
+        )
+        cr.next_send_at = compute_next_send_at(next_stage) if next_stage else None
 
 
 @router.post("/send", response_model=SendEmailResponse)
@@ -28,11 +54,14 @@ def send_emails(
         raise HTTPException(status_code=404, detail="Campaign not found")
 
     if data.recipient_ids:
-        recipients = db.query(Recipient).filter(Recipient.id.in_(data.recipient_ids)).all()
+        recipients_all = db.query(Recipient).filter(Recipient.id.in_(data.recipient_ids)).all()
     else:
-        recipients = db.query(Recipient).filter(Recipient.is_selected == True).all()
+        recipients_all = db.query(Recipient).filter(Recipient.is_selected == True).all()
 
-    if not recipients:
+    skipped_suppressed = len([r for r in recipients_all if r.is_suppressed])
+    recipients = [r for r in recipients_all if not r.is_suppressed]
+
+    if not recipients_all:
         if ses_service.settings.use_mock_ses:
             recipients = [
                 {
@@ -46,6 +75,11 @@ def send_emails(
             ]
         else:
             raise HTTPException(status_code=400, detail="No recipients selected")
+    elif not recipients:
+        raise HTTPException(
+            status_code=400,
+            detail=f"All {skipped_suppressed} selected recipient(s) are suppressed/blacklisted",
+        )
 
     recipient_dicts = []
     for r in recipients:
@@ -94,6 +128,8 @@ def send_emails(
                 error_message=detail.get("error"),
             )
             db.add(log)
+            if recipient["id"]:
+                _sync_campaign_recipient(db, data.campaign_id, recipient["id"], detail["status"])
 
     campaign.emails_sent += result["sent"]
     if result["sent"] > 0:
@@ -101,4 +137,4 @@ def send_emails(
 
     db.commit()
 
-    return SendEmailResponse(**result)
+    return SendEmailResponse(**result, skipped_suppressed=skipped_suppressed)

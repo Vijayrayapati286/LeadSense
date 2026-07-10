@@ -1,55 +1,91 @@
-import { useEffect, useState, useCallback } from 'react';
-import { FiUpload, FiCheckSquare, FiSquare } from 'react-icons/fi';
-import { recipientService } from '../services/services';
+import { useState, useCallback, useEffect } from 'react';
+import {
+  FiUpload, FiDownload, FiSave, FiUserPlus, FiTag, FiCheckSquare,
+  FiSettings, FiTrash2, FiEdit2,
+} from 'react-icons/fi';
+import { recipientService, recipientGroupService, tagService, savedSearchService } from '../services/services';
 import { useToast } from '../hooks/useToast';
+import { useContactSearch } from '../hooks/useContactSearch';
 import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import Modal from '../components/ui/Modal';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import FilterBuilder from '../components/FilterBuilder';
 import { debounce } from '../utils/helpers';
 
 export default function RecipientsPage() {
-  const [recipients, setRecipients] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [selectedCount, setSelectedCount] = useState(0);
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [industry, setIndustry] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [selectedIds, setSelectedIds] = useState(new Set());
   const toast = useToast();
-  const pageSize = 10;
+  const {
+    search, setSearch, sortBy, setSortBy, sortOrder, setSortOrder,
+    activeFieldKeys, filterValues, distinctOptions, distinctLoading,
+    results, total, page, setPage, loading, activeParams,
+    groups, tags, campaigns, loadGroups, loadTags,
+    handleAddField, handleRemoveField, handleValueChange, clearAllFilters,
+    refreshActiveDistinctOptions, loadSavedSearchFilters, loadResults,
+  } = useContactSearch({ toast });
 
-  const loadRecipients = useCallback(async () => {
-    setLoading(true);
-    try {
-      const { data } = await recipientService.getAll({ page, page_size: pageSize, search, industry });
-      setRecipients(data.items);
-      setTotal(data.total);
-      setSelectedCount(data.selected_count);
-      const selected = new Set(data.items.filter((r) => r.is_selected).map((r) => r.id));
-      setSelectedIds(selected);
-    } catch {
-      toast.error('Failed to load recipients');
-    } finally {
-      setLoading(false);
-    }
-  }, [page, search, industry, toast]);
+  // Upload
+  const [uploading, setUploading] = useState(false);
+  const [uploadGroupName, setUploadGroupName] = useState('');
+
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [savedSearches, setSavedSearches] = useState([]);
+
+  // Modals
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [targetGroupId, setTargetGroupId] = useState('');
+  const [newGroupName, setNewGroupName] = useState('');
+  const [tagModalOpen, setTagModalOpen] = useState(false);
+  const [targetTagId, setTargetTagId] = useState('');
+  const [newTagName, setNewTagName] = useState('');
+  const [manageModalOpen, setManageModalOpen] = useState(false);
+  const [renamingGroupId, setRenamingGroupId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [deletingGroup, setDeletingGroup] = useState(null);
+  const [deletingTag, setDeletingTag] = useState(null);
 
   useEffect(() => {
-    loadRecipients();
-  }, [loadRecipients]);
+    savedSearchService.getAll().then(({ data }) => setSavedSearches(data)).catch(() => {});
+  }, []);
 
   const debouncedSearch = useCallback(debounce((val) => { setSearch(val); setPage(1); }, 400), []);
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAllMatching = async () => {
+    setSelectingAll(true);
+    try {
+      const { data } = await recipientService.searchIds(activeParams);
+      setSelectedIds(new Set(data.ids));
+      toast.success(`Selected all ${data.total} matching contact(s) — duplicates across overlapping filters are automatically merged`);
+    } catch {
+      toast.error('Failed to select all matching contacts');
+    } finally {
+      setSelectingAll(false);
+    }
+  };
 
   const handleUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
     try {
-      const { data } = await recipientService.uploadExcel(file);
+      const { data } = await recipientService.uploadExcel(file, uploadGroupName.trim() || undefined);
       toast.success(data.message);
-      loadRecipients();
+      setUploadGroupName('');
+      loadResults();
+      loadGroups();
+      refreshActiveDistinctOptions();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Upload failed');
     } finally {
@@ -58,82 +94,232 @@ export default function RecipientsPage() {
     }
   };
 
-  const toggleSelect = async (id) => {
-    const newSelected = new Set(selectedIds);
-    if (newSelected.has(id)) newSelected.delete(id);
-    else newSelected.add(id);
-    setSelectedIds(newSelected);
-
-    await recipientService.selectRecipients({ recipient_ids: [...newSelected] });
-    localStorage.setItem('selectedRecipientIds', JSON.stringify([...newSelected]));
-    setSelectedCount(newSelected.size);
+  const handleExport = async () => {
+    try {
+      const response = await recipientService.export(activeParams);
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'contacts_export.csv';
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Export failed');
+    }
   };
 
-  const handleSelectAll = async () => {
-    await recipientService.selectRecipients({ select_all: true });
-    localStorage.setItem('selectedRecipientIds', JSON.stringify(recipients.map((r) => r.id)));
-    toast.success('All recipients selected');
-    loadRecipients();
+  const handleSaveSearch = async () => {
+    if (!saveName.trim()) {
+      toast.error('Enter a name for this search');
+      return;
+    }
+    try {
+      await savedSearchService.create({ name: saveName, filters: activeParams });
+      toast.success('Search saved');
+      setSaveModalOpen(false);
+      setSaveName('');
+      const { data } = await savedSearchService.getAll();
+      setSavedSearches(data);
+    } catch {
+      toast.error('Failed to save search');
+    }
   };
 
-  const handleDeselectAll = async () => {
-    await recipientService.selectRecipients({ deselect_all: true });
-    localStorage.setItem('selectedRecipientIds', '[]');
-    setSelectedIds(new Set());
-    setSelectedCount(0);
-    toast.success('All recipients deselected');
-    loadRecipients();
+  const loadSavedSearch = (saved) => {
+    loadSavedSearchFilters(saved.filters);
+    toast.success(`Loaded "${saved.name}"`);
   };
 
-  const industries = [...new Set(recipients.map((r) => r.industry).filter(Boolean))];
+  const handleAddToGroup = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    try {
+      let groupId = targetGroupId;
+      if (!groupId && newGroupName.trim()) {
+        const { data } = await recipientGroupService.create({ name: newGroupName.trim() });
+        groupId = data.id;
+      }
+      if (!groupId) {
+        toast.error('Choose or create a group');
+        return;
+      }
+      await recipientGroupService.addMembers(groupId, ids);
+      toast.success(`Added ${ids.length} contact(s) to group`);
+      setGroupModalOpen(false);
+      setTargetGroupId('');
+      setNewGroupName('');
+      setSelectedIds(new Set());
+      loadGroups();
+    } catch {
+      toast.error('Failed to add to group');
+    }
+  };
+
+  const handleAssignTag = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    try {
+      let tagId = targetTagId;
+      if (!tagId && newTagName.trim()) {
+        const { data } = await tagService.create({ name: newTagName.trim() });
+        tagId = data.id;
+      }
+      if (!tagId) {
+        toast.error('Choose or create a tag');
+        return;
+      }
+      await tagService.assign(tagId, ids);
+      toast.success(`Tagged ${ids.length} contact(s)`);
+      setTagModalOpen(false);
+      setTargetTagId('');
+      setNewTagName('');
+      setSelectedIds(new Set());
+      loadTags();
+    } catch {
+      toast.error('Failed to assign tag');
+    }
+  };
+
+  const handleRenameGroup = async (groupId) => {
+    try {
+      await recipientGroupService.update(groupId, { name: renameValue });
+      setRenamingGroupId(null);
+      loadGroups();
+    } catch {
+      toast.error('Failed to rename group');
+    }
+  };
+
+  const handleDeleteGroup = async () => {
+    try {
+      await recipientGroupService.delete(deletingGroup.id);
+      toast.success('Group deleted');
+      loadGroups();
+    } catch {
+      toast.error('Failed to delete group');
+    }
+  };
+
+  const handleDeleteTag = async () => {
+    try {
+      await tagService.delete(deletingTag.id);
+      toast.success('Tag deleted');
+      loadTags();
+    } catch {
+      toast.error('Failed to delete tag');
+    }
+  };
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Recipients</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Contacts</h1>
           <p className="text-gray-500 mt-1">
-            Manage your email recipient list
-            {selectedCount > 0 && (
-              <span className="ml-2 text-primary-600 font-medium">({selectedCount} selected)</span>
-            )}
+            Search, filter, and organize every contact — individually, by group, by tag, or with any combination of filters.
           </p>
         </div>
-        <label className="btn-primary flex items-center gap-2 cursor-pointer">
-          {uploading ? <LoadingSpinner size="sm" /> : <FiUpload size={18} />}
-          Upload Excel
-          <input type="file" accept=".xlsx,.xls" onChange={handleUpload} className="hidden" />
-        </label>
-      </div>
-
-      {/* Filters */}
-      <div className="card">
-        <div className="flex flex-wrap items-center gap-4">
-          <SearchInput
-            onChange={debouncedSearch}
-            placeholder="Search by name, email, or company..."
-            className="flex-1 min-w-[200px]"
+        <div className="flex items-center gap-2">
+          <input
+            className="input-field w-48"
+            placeholder="Team/Group name (optional)"
+            value={uploadGroupName}
+            onChange={(e) => setUploadGroupName(e.target.value)}
           />
-          <select
-            value={industry}
-            onChange={(e) => { setIndustry(e.target.value); setPage(1); }}
-            className="input-field w-auto"
-          >
-            <option value="">All Industries</option>
-            {industries.map((ind) => (
-              <option key={ind} value={ind}>{ind}</option>
-            ))}
-          </select>
-          <button onClick={handleSelectAll} className="btn-secondary text-sm flex items-center gap-1">
-            <FiCheckSquare size={16} /> Select All
-          </button>
-          <button onClick={handleDeselectAll} className="btn-secondary text-sm flex items-center gap-1">
-            <FiSquare size={16} /> Deselect All
+          <label className="btn-primary flex items-center gap-2 cursor-pointer">
+            {uploading ? <LoadingSpinner size="sm" /> : <FiUpload size={18} />}
+            Upload Excel
+            <input type="file" accept=".xlsx,.xls" onChange={handleUpload} className="hidden" />
+          </label>
+          <button onClick={() => setManageModalOpen(true)} className="btn-secondary flex items-center gap-2" title="Manage groups & tags">
+            <FiSettings size={16} />
           </button>
         </div>
       </div>
 
-      {/* Table */}
+      <div className="card space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <SearchInput
+            onChange={debouncedSearch}
+            placeholder="Quick search (name, email, company)..."
+            className="flex-1 min-w-[240px]"
+          />
+          <select className="input-field w-auto" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+            <option value="name">Sort: Name</option>
+            <option value="email">Sort: Email</option>
+            <option value="company">Sort: Company</option>
+            <option value="designation">Sort: Designation</option>
+            <option value="industry">Sort: Industry</option>
+            <option value="department">Sort: Department</option>
+            <option value="created_at">Sort: Date Added</option>
+          </select>
+          <select className="input-field w-auto" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)}>
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </div>
+
+        <div className="pt-2 border-t border-gray-100">
+          <FilterBuilder
+            activeFieldKeys={activeFieldKeys}
+            values={filterValues}
+            onAddField={handleAddField}
+            onRemoveField={handleRemoveField}
+            onValueChange={handleValueChange}
+            distinctOptions={distinctOptions}
+            distinctLoading={distinctLoading}
+            groups={groups}
+            tags={tags}
+            campaigns={campaigns}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100">
+          <button onClick={clearAllFilters} className="btn-secondary text-sm">Clear All</button>
+          <button onClick={() => setSaveModalOpen(true)} className="btn-secondary text-sm flex items-center gap-1">
+            <FiSave size={14} /> Save Search
+          </button>
+          <button onClick={handleExport} className="btn-secondary text-sm flex items-center gap-1">
+            <FiDownload size={14} /> Export CSV
+          </button>
+          {savedSearches.length > 0 && (
+            <select
+              className="input-field w-auto text-sm"
+              value=""
+              onChange={(e) => {
+                const saved = savedSearches.find((s) => String(s.id) === e.target.value);
+                if (saved) loadSavedSearch(saved);
+              }}
+            >
+              <option value="">Load saved search...</option>
+              {savedSearches.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          )}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-2 ml-auto">
+              <button onClick={() => setTagModalOpen(true)} className="btn-secondary text-sm flex items-center gap-1">
+                <FiTag size={14} /> Tag {selectedIds.size}
+              </button>
+              <button onClick={() => setGroupModalOpen(true)} className="btn-primary text-sm flex items-center gap-1">
+                <FiUserPlus size={14} /> Add {selectedIds.size} to Group
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <p className="text-sm text-gray-600">
+          <span className="font-semibold text-gray-900">{total}</span> matching contact{total !== 1 ? 's' : ''}
+          {selectedIds.size > 0 && <span className="ml-2 text-primary-600 font-medium">({selectedIds.size} selected)</span>}
+        </p>
+        <button onClick={handleSelectAllMatching} disabled={selectingAll || total === 0} className="btn-secondary text-sm flex items-center gap-1">
+          {selectingAll ? <LoadingSpinner size="sm" /> : <FiCheckSquare size={14} />} Select All {total} Matching
+        </button>
+      </div>
+
       <div className="card overflow-hidden p-0">
         {loading ? (
           <div className="flex justify-center py-12"><LoadingSpinner size="lg" /></div>
@@ -143,43 +329,33 @@ export default function RecipientsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b">
                   <tr className="text-left text-gray-500">
-                    <th className="px-4 py-3 w-10">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.size === recipients.length && recipients.length > 0}
-                        onChange={() => selectedIds.size === recipients.length ? handleDeselectAll() : handleSelectAll()}
-                        className="rounded border-gray-300"
-                      />
-                    </th>
+                    <th className="px-4 py-3 w-10"></th>
                     <th className="px-4 py-3 font-medium">Name</th>
                     <th className="px-4 py-3 font-medium">Email</th>
                     <th className="px-4 py-3 font-medium">Company</th>
                     <th className="px-4 py-3 font-medium">Designation</th>
                     <th className="px-4 py-3 font-medium">Industry</th>
+                    <th className="px-4 py-3 font-medium">Location</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {recipients.map((r) => (
+                  {results.map((r) => (
                     <tr key={r.id} className={`border-b border-gray-50 hover:bg-gray-50/50 ${selectedIds.has(r.id) ? 'bg-primary-50/30' : ''}`}>
                       <td className="px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(r.id)}
-                          onChange={() => toggleSelect(r.id)}
-                          className="rounded border-gray-300"
-                        />
+                        <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelect(r.id)} className="rounded border-gray-300" />
                       </td>
                       <td className="px-4 py-3 font-medium text-gray-900">{r.name}</td>
                       <td className="px-4 py-3 text-gray-600">{r.email}</td>
                       <td className="px-4 py-3 text-gray-600">{r.company || '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{r.designation || '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{r.industry || '—'}</td>
+                      <td className="px-4 py-3 text-gray-600">{[r.city, r.state, r.country].filter(Boolean).join(', ') || '—'}</td>
                     </tr>
                   ))}
-                  {recipients.length === 0 && (
+                  {results.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
-                        No recipients found. Upload an Excel file to get started.
+                      <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
+                        No contacts found. Upload an Excel file or adjust your filters.
                       </td>
                     </tr>
                   )}
@@ -187,11 +363,136 @@ export default function RecipientsPage() {
               </table>
             </div>
             <div className="border-t border-gray-100 px-4">
-              <Pagination page={page} pageSize={pageSize} total={total} onPageChange={setPage} />
+              <Pagination page={page} pageSize={10} total={total} onPageChange={setPage} />
             </div>
           </>
         )}
       </div>
+
+      <Modal isOpen={saveModalOpen} onClose={() => setSaveModalOpen(false)} title="Save Search" size="sm">
+        <div className="space-y-4">
+          <div>
+            <label className="label">Search Name</label>
+            <input className="input-field" value={saveName} onChange={(e) => setSaveName(e.target.value)} placeholder="e.g. VP's in IT, India" autoFocus />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setSaveModalOpen(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleSaveSearch} className="btn-primary">Save</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={groupModalOpen} onClose={() => setGroupModalOpen(false)} title="Add to Group" size="sm">
+        <div className="space-y-4">
+          <div>
+            <label className="label">Existing Group</label>
+            <select className="input-field" value={targetGroupId} onChange={(e) => setTargetGroupId(e.target.value)}>
+              <option value="">Select a group...</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>{g.name} ({g.prospect_count})</option>
+              ))}
+            </select>
+          </div>
+          <p className="text-xs text-gray-400 text-center">— or —</p>
+          <div>
+            <label className="label">Create New Group</label>
+            <input className="input-field" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="New group name" />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setGroupModalOpen(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleAddToGroup} className="btn-primary">Add {selectedIds.size} Contact(s)</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={tagModalOpen} onClose={() => setTagModalOpen(false)} title="Tag Contacts" size="sm">
+        <div className="space-y-4">
+          <div>
+            <label className="label">Existing Tag</label>
+            <select className="input-field" value={targetTagId} onChange={(e) => setTargetTagId(e.target.value)}>
+              <option value="">Select a tag...</option>
+              {tags.map((t) => (
+                <option key={t.id} value={t.id}>{t.name} ({t.recipient_count})</option>
+              ))}
+            </select>
+          </div>
+          <p className="text-xs text-gray-400 text-center">— or —</p>
+          <div>
+            <label className="label">Create New Tag</label>
+            <input className="input-field" value={newTagName} onChange={(e) => setNewTagName(e.target.value)} placeholder="e.g. Decision Maker" />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setTagModalOpen(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleAssignTag} className="btn-primary">Tag {selectedIds.size} Contact(s)</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={manageModalOpen} onClose={() => setManageModalOpen(false)} title="Manage Groups & Tags" size="lg">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <p className="text-sm font-semibold text-gray-700 mb-2">Contact Groups</p>
+            <div className="space-y-1.5 max-h-72 overflow-y-auto">
+              {groups.map((g) => (
+                <div key={g.id} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2">
+                  {renamingGroupId === g.id ? (
+                    <input
+                      autoFocus
+                      className="input-field text-sm py-1"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onBlur={() => handleRenameGroup(g.id)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleRenameGroup(g.id)}
+                    />
+                  ) : (
+                    <span className="text-sm text-gray-800 truncate">{g.name} <span className="text-gray-400">({g.prospect_count})</span></span>
+                  )}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button onClick={() => { setRenamingGroupId(g.id); setRenameValue(g.name); }} className="p-1 rounded hover:bg-gray-100 text-gray-400">
+                      <FiEdit2 size={13} />
+                    </button>
+                    <button onClick={() => setDeletingGroup(g)} className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600">
+                      <FiTrash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {groups.length === 0 && <p className="text-sm text-gray-400">No groups yet.</p>}
+            </div>
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-gray-700 mb-2">Tags</p>
+            <div className="space-y-1.5 max-h-72 overflow-y-auto">
+              {tags.map((t) => (
+                <div key={t.id} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2">
+                  <span className="text-sm text-gray-800 truncate">{t.name} <span className="text-gray-400">({t.recipient_count})</span></span>
+                  <button onClick={() => setDeletingTag(t)} className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 flex-shrink-0">
+                    <FiTrash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              {tags.length === 0 && <p className="text-sm text-gray-400">No tags yet.</p>}
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        isOpen={!!deletingGroup}
+        onClose={() => setDeletingGroup(null)}
+        onConfirm={handleDeleteGroup}
+        title="Delete Group"
+        message={`Delete "${deletingGroup?.name}"? Contacts stay in the system — this only removes the group.`}
+        confirmText="Delete"
+      />
+      <ConfirmDialog
+        isOpen={!!deletingTag}
+        onClose={() => setDeletingTag(null)}
+        onConfirm={handleDeleteTag}
+        title="Delete Tag"
+        message={`Delete "${deletingTag?.name}"? This removes the tag from every contact.`}
+        confirmText="Delete"
+      />
     </div>
   );
 }

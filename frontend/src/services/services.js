@@ -19,18 +19,48 @@ export const campaignService = {
   update: (id, data) => api.put(`/campaign/${id}`, data),
   delete: (id) => api.delete(`/campaign/${id}`),
   saveTemplate: (id, data) => api.post(`/campaign/${id}/template`, data),
+  getRecipients: (id) => api.get(`/campaign/${id}/recipients`),
+};
+
+export const sequenceService = {
+  getAll: (campaignId) => api.get(`/campaign/${campaignId}/sequence`),
+  create: (campaignId, data) => api.post(`/campaign/${campaignId}/sequence`, data),
+  update: (stageId, data) => api.put(`/campaign/sequence/${stageId}`, data),
+  delete: (stageId) => api.delete(`/campaign/sequence/${stageId}`),
 };
 
 export const recipientService = {
-  uploadExcel: (file) => {
+  uploadExcel: (file, groupName) => {
     const formData = new FormData();
     formData.append('file', file);
+    if (groupName) formData.append('group_name', groupName);
     return api.post('/recipients/upload-excel', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
   getAll: (params) => api.get('/recipients', { params }),
   selectRecipients: (data) => api.post('/recipients/select-recipients', data),
+  search: (params) => api.get('/recipients/search', { params }),
+  searchIds: (params) => api.get('/recipients/search-ids', { params }),
+  export: (params) => api.get('/recipients/export', { params, responseType: 'blob' }),
+  distinctValues: (fieldName) => api.get('/recipients/distinct-values', { params: { field: fieldName } }),
+};
+
+export const savedSearchService = {
+  getAll: () => api.get('/recipients/saved-searches'),
+  create: (data) => api.post('/recipients/saved-searches', data),
+  delete: (id) => api.delete(`/recipients/saved-searches/${id}`),
+};
+
+export const recipientGroupService = {
+  getAll: (params) => api.get('/recipient-groups', { params }),
+  getById: (id) => api.get(`/recipient-groups/${id}`),
+  create: (data) => api.post('/recipient-groups', data),
+  update: (id, data) => api.put(`/recipient-groups/${id}`, data),
+  delete: (id) => api.delete(`/recipient-groups/${id}`),
+  getMembers: (id, params) => api.get(`/recipient-groups/${id}/members`, { params }),
+  addMembers: (id, recipientIds) => api.post(`/recipient-groups/${id}/members`, { recipient_ids: recipientIds }),
+  removeMember: (id, recipientId) => api.delete(`/recipient-groups/${id}/members/${recipientId}`),
 };
 
 export const templateService = {
@@ -45,4 +75,16 @@ export const emailService = {
 
 export const logService = {
   getAll: (params) => api.get('/logs', { params }),
+};
+
+export const blacklistService = {
+  getAll: (params) => api.get('/blacklist', { params }),
+};
+
+export const tagService = {
+  getAll: (params) => api.get('/tags', { params }),
+  create: (data) => api.post('/tags', data),
+  delete: (id) => api.delete(`/tags/${id}`),
+  assign: (id, recipientIds) => api.post(`/tags/${id}/members`, { recipient_ids: recipientIds }),
+  unassign: (id, recipientId) => api.delete(`/tags/${id}/members/${recipientId}`),
 };

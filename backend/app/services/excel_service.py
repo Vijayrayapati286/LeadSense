@@ -6,7 +6,7 @@ import logging
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from app.models import Recipient
+from app.models import Recipient, SuppressionEntry
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,13 @@ COLUMN_MAP = {
     "Response 2": "response_2",
     "Status": "status",
     "Comments": "comments",
+    "Department": "department",
+    "Company Size": "company_size",
+    "Years of Experience": "years_of_experience",
+    "Skills": "skills",
+    "Country": "country",
+    "City": "city",
+    "Source": "source",
 }
 
 DATE_FIELDS = {"create_date"}
@@ -102,25 +109,40 @@ class ExcelService:
 
         return recipients
 
-    def import_recipients(self, db: Session, file_content: bytes) -> int:
-        """Import recipients from Excel, skipping duplicates by email."""
+    def import_recipients(self, db: Session, file_content: bytes) -> tuple[int, list[int]]:
+        """Import recipients from Excel, skipping duplicates by email. Any
+        email already on the suppression list stays suppressed even on
+        re-upload, so a blacklisted address can't sneak back into sends.
+
+        Returns (imported_count, recipient_ids) where recipient_ids covers
+        every recipient touched by this upload — both newly created rows and
+        pre-existing rows matched by email — so callers (e.g. group
+        assignment) can act on the full uploaded set, not just new rows."""
         parsed = self.parse_excel(file_content)
         imported = 0
+        touched_ids: list[int] = []
 
-        existing_emails = {
-            r.email for r in db.query(Recipient.email).all()
-        }
+        existing = {r.email: r.id for r in db.query(Recipient.email, Recipient.id).all()}
+        suppressed_reasons: dict[str, str] = {}
+        for entry in db.query(SuppressionEntry).order_by(SuppressionEntry.created_at.asc()).all():
+            suppressed_reasons[entry.email] = entry.reason
 
         for data in parsed:
-            if data["email"] in existing_emails:
+            if data["email"] in existing:
+                touched_ids.append(existing[data["email"]])
                 continue
+            if data["email"] in suppressed_reasons:
+                data["is_suppressed"] = True
+                data["suppression_reason"] = suppressed_reasons[data["email"]]
             recipient = Recipient(**data)
             db.add(recipient)
-            existing_emails.add(data["email"])
+            db.flush()
+            existing[data["email"]] = recipient.id
+            touched_ids.append(recipient.id)
             imported += 1
 
         db.commit()
-        return imported
+        return imported, touched_ids
 
     def generate_sample_excel(self) -> bytes:
         """Generate a sample Excel file for download."""

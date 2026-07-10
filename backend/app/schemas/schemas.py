@@ -1,7 +1,7 @@
 """Pydantic schemas for request/response validation."""
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -206,6 +206,17 @@ class RecipientResponse(BaseModel):
     status: str | None = None
     comments: str | None = None
 
+    # ── Suppression / advanced-search fields ──────────────────────────────
+    is_suppressed: bool = False
+    suppression_reason: str | None = None
+    department: str | None = None
+    company_size: str | None = None
+    years_of_experience: str | None = None
+    skills: str | None = None
+    country: str | None = None
+    city: str | None = None
+    source: str | None = None
+
 
 class RecipientListResponse(BaseModel):
     items: list[RecipientResponse]
@@ -224,6 +235,171 @@ class SelectRecipientsRequest(BaseModel):
 class UploadExcelResponse(BaseModel):
     imported: int
     message: str
+    group_name: str | None = None
+
+
+# ── Suppression / Blacklist ───────────────────────────────────────────────────
+
+SuppressionReason = Literal[
+    "hard_bounce", "domain_rejected", "mail_server_blocked", "complaint", "manual"
+]
+
+
+class SuppressionEntryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    company: str | None
+    reason: str
+    campaign_id: int | None
+    campaign_name: str | None = None
+    recipient_id: int | None
+    detail: str | None
+    created_at: datetime
+
+
+class SuppressionEntryListResponse(BaseModel):
+    items: list[SuppressionEntryResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class SimulateEventRequest(BaseModel):
+    email: str
+    event_type: Literal["bounce", "complaint", "reply"]
+    bounce_type: Literal["Permanent", "Transient"] = "Permanent"
+    campaign_id: int | None = None
+
+
+# ── Recipient Groups ───────────────────────────────────────────────────────────
+
+class RecipientGroupCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+
+
+class RecipientGroupUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class RecipientGroupResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str | None
+    created_at: datetime
+    prospect_count: int = 0
+
+
+class AddGroupMembersRequest(BaseModel):
+    recipient_ids: list[int]
+
+
+# ── Tags ───────────────────────────────────────────────────────────────────────
+
+class TagCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class TagResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    created_at: datetime
+    recipient_count: int = 0
+
+
+class AssignTagRequest(BaseModel):
+    recipient_ids: list[int]
+
+
+# ── Saved Searches ─────────────────────────────────────────────────────────────
+
+class SavedSearchCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    filters: dict[str, Any]
+
+
+class SavedSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    filters: dict[str, Any]
+    created_at: datetime
+
+
+# ── Campaign Recipient Tracking ───────────────────────────────────────────────
+
+CampaignRecipientStatus = Literal[
+    "not_contacted", "sent", "delivered", "opened", "clicked",
+    "replied", "bounced", "invalid_email", "suppressed",
+]
+
+
+class CampaignRecipientResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    campaign_id: int
+    recipient_id: int
+    status: str
+    current_stage: int
+    next_send_at: datetime | None
+    last_sent_at: datetime | None
+    replied_at: datetime | None
+    bounced_at: datetime | None
+    recipient_name: str | None = None
+    recipient_email: str | None = None
+    recipient_company: str | None = None
+
+
+class CampaignRecipientListResponse(BaseModel):
+    items: list[CampaignRecipientResponse]
+    total: int
+
+
+# ── Campaign Sequence Stages ───────────────────────────────────────────────────
+
+DelayUnit = Literal["minutes", "hours", "days"]
+
+
+class CampaignSequenceStageCreate(BaseModel):
+    stage_order: int = Field(..., ge=1)
+    delay_value: int = Field(..., ge=1)
+    delay_unit: DelayUnit = "days"
+    subject: str
+    body: str
+    closing: str | None = None
+    cta: str | None = None
+
+
+class CampaignSequenceStageUpdate(BaseModel):
+    delay_value: int | None = None
+    delay_unit: DelayUnit | None = None
+    subject: str | None = None
+    body: str | None = None
+    closing: str | None = None
+    cta: str | None = None
+
+
+class CampaignSequenceStageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    campaign_id: int
+    stage_order: int
+    delay_value: int
+    delay_unit: str
+    subject: str
+    body: str
+    closing: str | None
+    cta: str | None
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────
@@ -240,6 +416,7 @@ class SendEmailResponse(BaseModel):
     failed: int
     pending: int
     details: list[dict[str, Any]]
+    skipped_suppressed: int = 0
 
 
 # ── Logs ──────────────────────────────────────────────────────────────────────

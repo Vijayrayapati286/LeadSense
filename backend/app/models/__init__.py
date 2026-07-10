@@ -1,3 +1,31 @@
-from app.models.models import Campaign, EmailLog, Recipient, Template, User
+from app.models.models import (
+    Campaign,
+    CampaignRecipient,
+    CampaignSequenceStage,
+    EmailLog,
+    Recipient,
+    RecipientGroup,
+    RecipientGroupMember,
+    RecipientTag,
+    SavedSearch,
+    SuppressionEntry,
+    Tag,
+    Template,
+    User,
+)
 
-__all__ = ["User", "Campaign", "Template", "Recipient", "EmailLog"]
+__all__ = [
+    "User",
+    "Campaign",
+    "Template",
+    "Recipient",
+    "EmailLog",
+    "SuppressionEntry",
+    "RecipientGroup",
+    "RecipientGroupMember",
+    "Tag",
+    "RecipientTag",
+    "SavedSearch",
+    "CampaignRecipient",
+    "CampaignSequenceStage",
+]

@@ -9,7 +9,20 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database.connection import init_db
-from app.routers import auth, campaign, dashboard, email, logs, recipients, templates
+from app.services.scheduler_service import start_scheduler, stop_scheduler
+from app.routers import (
+    auth,
+    blacklist,
+    campaign,
+    dashboard,
+    email,
+    logs,
+    recipient_groups,
+    recipients,
+    tags,
+    templates,
+    webhooks,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +37,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting %s", settings.app_name)
     init_db()
     logger.info("Database initialized with seed data")
+    start_scheduler()
     yield
+    stop_scheduler()
     logger.info("Shutting down")
 
 
@@ -59,9 +74,13 @@ app.include_router(auth.router, prefix=API_PREFIX)
 app.include_router(dashboard.router, prefix=API_PREFIX)
 app.include_router(campaign.router, prefix=API_PREFIX)
 app.include_router(recipients.router, prefix=API_PREFIX)
+app.include_router(recipient_groups.router, prefix=API_PREFIX)
+app.include_router(tags.router, prefix=API_PREFIX)
 app.include_router(templates.router, prefix=API_PREFIX)
 app.include_router(email.router, prefix=API_PREFIX)
 app.include_router(logs.router, prefix=API_PREFIX)
+app.include_router(blacklist.router, prefix=API_PREFIX)
+app.include_router(webhooks.router, prefix=API_PREFIX)
 
 
 @app.get("/")

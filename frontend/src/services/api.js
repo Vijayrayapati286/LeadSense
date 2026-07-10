@@ -5,6 +5,9 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
+  // Serialize array params as repeated `key=value` pairs (industry=A&industry=B)
+  // instead of axios's default `key[]=A&key[]=B`, matching FastAPI's Query(list[str]) binding.
+  paramsSerializer: { indexes: null },
 });
 
 api.interceptors.request.use((config) => {

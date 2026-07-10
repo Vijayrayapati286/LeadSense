@@ -11,6 +11,7 @@ import RecipientsPage from './pages/RecipientsPage';
 import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
 import SettingsPage from './pages/SettingsPage';
+import BlacklistPage from './pages/BlacklistPage';
 
 export default function App() {
   return (
@@ -26,6 +27,9 @@ export default function App() {
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
           <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />
           <Route path="/recipients" element={<RecipientsPage />} />
+          <Route path="/blacklist" element={<BlacklistPage />} />
+          <Route path="/recipient-groups" element={<Navigate to="/recipients" replace />} />
+          <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/logs" element={<EmailLogsPage />} />
           <Route path="/settings" element={<SettingsPage />} />

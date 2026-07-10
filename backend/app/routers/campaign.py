@@ -5,10 +5,15 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
-from app.models import User
+from app.models import CampaignRecipient, Recipient, User
 from app.schemas.schemas import (
+    CampaignRecipientListResponse,
+    CampaignRecipientResponse,
     CampaignCreate,
     CampaignResponse,
+    CampaignSequenceStageCreate,
+    CampaignSequenceStageResponse,
+    CampaignSequenceStageUpdate,
     CampaignUpdate,
     MessageResponse,
     TemplateCreate,
@@ -107,3 +112,77 @@ def save_campaign_template(
         return TemplateResponse.model_validate(template)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/campaign/{campaign_id}/sequence", response_model=list[CampaignSequenceStageResponse])
+def list_sequence_stages(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stages = campaign_service.list_sequence_stages(db, campaign_id)
+    return [CampaignSequenceStageResponse.model_validate(s) for s in stages]
+
+
+@router.post("/campaign/{campaign_id}/sequence", response_model=CampaignSequenceStageResponse, status_code=201)
+def create_sequence_stage(
+    campaign_id: int,
+    data: CampaignSequenceStageCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        stage = campaign_service.create_sequence_stage(db, campaign_id, data)
+        return CampaignSequenceStageResponse.model_validate(stage)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.put("/campaign/sequence/{stage_id}", response_model=CampaignSequenceStageResponse)
+def update_sequence_stage(
+    stage_id: int,
+    data: CampaignSequenceStageUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        stage = campaign_service.update_sequence_stage(db, stage_id, data.model_dump(exclude_unset=True))
+        return CampaignSequenceStageResponse.model_validate(stage)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/campaign/sequence/{stage_id}", response_model=MessageResponse)
+def delete_sequence_stage(
+    stage_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        campaign_service.delete_sequence_stage(db, stage_id)
+        return MessageResponse(message="Sequence stage deleted")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/campaign/{campaign_id}/recipients", response_model=CampaignRecipientListResponse)
+def get_campaign_recipients(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = (
+        db.query(CampaignRecipient)
+        .filter(CampaignRecipient.campaign_id == campaign_id)
+        .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
+        .all()
+    )
+    items = []
+    for cr in rows:
+        response = CampaignRecipientResponse.model_validate(cr)
+        response.recipient_name = cr.recipient.name
+        response.recipient_email = cr.recipient.email
+        response.recipient_company = cr.recipient.company
+        items.append(response)
+
+    return CampaignRecipientListResponse(items=items, total=len(items))

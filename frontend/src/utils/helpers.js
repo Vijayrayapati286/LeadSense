@@ -87,6 +87,21 @@ export function getStatusColor(status) {
     sent: 'bg-green-100 text-green-800',
     failed: 'bg-red-100 text-red-800',
     pending: 'bg-yellow-100 text-yellow-800',
+    // Blacklist reasons
+    hard_bounce: 'bg-red-100 text-red-800',
+    domain_rejected: 'bg-red-100 text-red-800',
+    mail_server_blocked: 'bg-red-100 text-red-800',
+    complaint: 'bg-orange-100 text-orange-800',
+    manual: 'bg-gray-100 text-gray-800',
+    // Campaign-recipient tracking statuses
+    not_contacted: 'bg-gray-100 text-gray-800',
+    delivered: 'bg-green-100 text-green-800',
+    opened: 'bg-blue-100 text-blue-800',
+    clicked: 'bg-purple-100 text-purple-800',
+    replied: 'bg-emerald-100 text-emerald-800',
+    bounced: 'bg-red-100 text-red-800',
+    invalid_email: 'bg-red-100 text-red-800',
+    suppressed: 'bg-orange-100 text-orange-800',
   };
   return colors[status?.toLowerCase()] || 'bg-gray-100 text-gray-800';
 }
