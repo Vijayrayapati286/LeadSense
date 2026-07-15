@@ -15,11 +15,14 @@ from app.schemas.schemas import (
     MessageResponse,
     RecipientListResponse,
     RecipientResponse,
+    ResponseTagRequest,
+    ResponseTagResult,
     SavedSearchCreate,
     SavedSearchResponse,
     SelectRecipientsRequest,
     UploadExcelResponse,
 )
+from app.services.app_settings_service import AppSettingsService
 from app.services.excel_service import ExcelService
 from app.services.recipient_group_service import RecipientGroupService
 from app.services.recipient_query_service import (
@@ -28,10 +31,13 @@ from app.services.recipient_query_service import (
     build_query,
     get_distinct_values,
 )
+from app.services.suppression_service import SuppressionService
 
 router = APIRouter(prefix="/recipients", tags=["Recipients"])
 excel_service = ExcelService()
 group_service = RecipientGroupService()
+app_settings_service = AppSettingsService()
+suppression_service = SuppressionService()
 
 EXPORT_COLUMNS = [
     "id", "name", "email", "company", "designation", "designation_level", "industry",
@@ -57,9 +63,11 @@ def _search_filters(
     seniority_level: list[str] = Query([]),
     email_domain: str = Query(""),
     lead_status: list[str] = Query([]),
+    response_tag: list[str] = Query([]),
     source: str = Query(""),
     group_ids: list[int] = Query([]),
     tag_ids: list[int] = Query([]),
+    exclude_suppressed: bool = Query(False),
     campaign_id: int | None = Query(None),
     campaign_status: str = Query(""),
     sort_by: str = Query("name"),
@@ -70,7 +78,8 @@ def _search_filters(
         department=department, country=country, state=state, city=city,
         company_size=company_size, years_of_experience=years_of_experience, skills=skills,
         seniority_level=seniority_level, email_domain=email_domain, lead_status=lead_status,
-        source=source, group_ids=group_ids, tag_ids=tag_ids,
+        response_tag=response_tag,
+        source=source, group_ids=group_ids, tag_ids=tag_ids, exclude_suppressed=exclude_suppressed,
         campaign_id=campaign_id, campaign_status=campaign_status,
         sort_by=sort_by, sort_order=sort_order,
     )
@@ -79,26 +88,25 @@ def _search_filters(
 @router.post("/upload-excel", response_model=UploadExcelResponse)
 async def upload_excel(
     file: UploadFile = File(...),
-    group_name: str | None = Form(None),
+    group_name: str = Form(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are supported")
+    if not group_name.strip():
+        raise HTTPException(status_code=422, detail="A list name is required")
 
     content = await file.read()
     try:
         imported, recipient_ids = excel_service.import_recipients(db, content)
 
-        if group_name:
-            group = group_service.get_or_create(db, group_name)
-            group_service.add_members(db, group.id, recipient_ids)
+        group = group_service.get_or_create(db, group_name.strip())
+        group_service.add_members(db, group.id, recipient_ids)
 
-        message = f"Successfully imported {imported} recipients"
-        if group_name:
-            message += f" into group '{group_name}'"
+        message = f"Successfully imported {imported} recipients into list '{group_name.strip()}'"
 
-        return UploadExcelResponse(imported=imported, message=message, group_name=group_name)
+        return UploadExcelResponse(imported=imported, message=message, group_name=group_name.strip())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -269,6 +277,30 @@ def delete_saved_search(
     db.delete(saved)
     db.commit()
     return MessageResponse(message="Saved search deleted")
+
+
+@router.post("/response-tag", response_model=ResponseTagResult)
+def tag_response(
+    data: ResponseTagRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Bulk-apply a manual response tag (Cold/Negative/Warm/Hot) to selected
+    prospects. If this tag is configured (in Settings) to auto-suppress,
+    every tagged recipient is immediately blacklisted too."""
+    recipients = db.query(Recipient).filter(Recipient.id.in_(data.recipient_ids)).all()
+    for recipient in recipients:
+        recipient.response_tag = data.tag
+    db.commit()
+
+    suppressed = 0
+    if data.tag in app_settings_service.get_suppress_on_tags(db):
+        for recipient in recipients:
+            if not recipient.is_suppressed:
+                suppression_service.add(db, recipient, reason="manual_response_tag", detail=f"Tagged as {data.tag}")
+                suppressed += 1
+
+    return ResponseTagResult(tagged=len(recipients), suppressed=suppressed)
 
 
 @router.post("/select-recipients", response_model=MessageResponse)

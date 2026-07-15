@@ -6,13 +6,14 @@ no new infrastructure (queue/worker), it just runs inside the FastAPI process.
 """
 
 import logging
-from datetime import timedelta
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 
 from app.database.connection import SessionLocal
-from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient
+from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template
 from app.services.ses_service import SESService
 from app.utils.helpers import render_template, utc_now
 
@@ -23,6 +24,26 @@ ses_service = SESService()
 TERMINAL_STATUSES = {"replied", "suppressed", "bounced", "invalid_email"}
 
 POLL_INTERVAL_SECONDS = 300
+QUEUED_SEND_POLL_INTERVAL_SECONDS = 5
+BUSINESS_HOURS_START = 9
+BUSINESS_HOURS_END = 18
+
+
+def next_business_hour_utc(tz_name: str, now_utc: datetime) -> datetime | None:
+    """None if `now_utc` already falls within the recipient's local 9am-6pm
+    business hours; otherwise the next local 9am, converted back to UTC."""
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        return None
+    local_now = now_utc.astimezone(tz)
+    if BUSINESS_HOURS_START <= local_now.hour < BUSINESS_HOURS_END:
+        return None
+    next_day = local_now.date()
+    if local_now.hour >= BUSINESS_HOURS_END:
+        next_day += timedelta(days=1)
+    next_9am_local = datetime.combine(next_day, time(hour=BUSINESS_HOURS_START), tzinfo=tz)
+    return next_9am_local.astimezone(timezone.utc)
 
 _scheduler: AsyncIOScheduler | None = None
 
@@ -123,14 +144,102 @@ def process_due_followups() -> None:
         db.close()
 
 
+def process_queued_initial_sends() -> None:
+    """Send the campaign's stage-0 Template to recipients whose queued send
+    time (staggered at queue time by the configured send interval) has come
+    due. Mirrors process_due_followups' approach for later stages."""
+    db: Session = SessionLocal()
+    try:
+        due = (
+            db.query(CampaignRecipient)
+            .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
+            .filter(
+                CampaignRecipient.status == "queued",
+                CampaignRecipient.next_send_at.isnot(None),
+                CampaignRecipient.next_send_at <= utc_now(),
+                Recipient.is_suppressed == False,  # noqa: E712
+            )
+            .all()
+        )
+
+        for cr in due:
+            recipient = cr.recipient
+
+            if cr.campaign.use_recipient_timezone and recipient.timezone:
+                reschedule = next_business_hour_utc(recipient.timezone, utc_now())
+                if reschedule is not None:
+                    cr.next_send_at = reschedule
+                    continue  # stays "queued" — outside business hours, try again then
+
+            template = db.query(Template).filter(Template.campaign_id == cr.campaign_id).first()
+            if not template:
+                cr.status = "failed"
+                cr.next_send_at = None
+                continue
+            context = {
+                "Name": recipient.name,
+                "Email": recipient.email,
+                "Company": recipient.company or "",
+                "Designation": recipient.designation or "",
+                "Industry": recipient.industry or "",
+            }
+            subject = render_template(template.subject, context)
+            body = render_template(template.body, context)
+            if template.closing:
+                body = f"{body}\n\n{render_template(template.closing, context)}"
+
+            result = ses_service.send_email(
+                to_email=recipient.email,
+                subject=subject,
+                body_html=body.replace("\n", "<br>"),
+                body_text=body,
+            )
+
+            db.add(
+                EmailLog(
+                    campaign_id=cr.campaign_id,
+                    recipient_id=recipient.id,
+                    status=result["status"],
+                    error_message=result.get("error"),
+                )
+            )
+
+            cr.status = result["status"]
+            cr.last_sent_at = utc_now()
+            if result["status"] == "sent":
+                cr.campaign.emails_sent += 1
+                next_stage = (
+                    db.query(CampaignSequenceStage)
+                    .filter(CampaignSequenceStage.campaign_id == cr.campaign_id, CampaignSequenceStage.stage_order == 1)
+                    .first()
+                )
+                cr.next_send_at = compute_next_send_at(next_stage) if next_stage else None
+            else:
+                cr.next_send_at = None
+
+        db.commit()
+        if due:
+            logger.info("Sent %d queued initial email(s)", len(due))
+    except Exception:
+        logger.exception("Error processing queued initial sends")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def start_scheduler() -> None:
     global _scheduler
     if _scheduler is not None:
         return
     _scheduler = AsyncIOScheduler()
     _scheduler.add_job(process_due_followups, "interval", seconds=POLL_INTERVAL_SECONDS, id="process_due_followups")
+    _scheduler.add_job(
+        process_queued_initial_sends, "interval",
+        seconds=QUEUED_SEND_POLL_INTERVAL_SECONDS, id="process_queued_initial_sends",
+    )
     _scheduler.start()
     logger.info("Follow-up scheduler started (polling every %ds)", POLL_INTERVAL_SECONDS)
+    logger.info("Queued-send scheduler started (polling every %ds)", QUEUED_SEND_POLL_INTERVAL_SECONDS)
 
 
 def stop_scheduler() -> None:

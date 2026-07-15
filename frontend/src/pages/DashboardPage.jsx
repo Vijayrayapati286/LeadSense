@@ -6,6 +6,7 @@ import {
   FiAlertCircle,
   FiActivity,
   FiZap,
+  FiTrendingDown,
 } from 'react-icons/fi';
 import {
   BarChart,
@@ -68,13 +69,20 @@ export default function DashboardPage() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4">
         <StatCard title="Total Campaigns" value={stats.total_campaigns} icon={FiMail} color="primary" />
         <StatCard title="Emails Sent" value={stats.emails_sent} icon={FiSend} color="green" />
         <StatCard title="Pending Emails" value={stats.pending_emails} icon={FiClock} color="amber" />
         <StatCard title="Failed Emails" value={stats.failed_emails} icon={FiAlertCircle} color="red" />
         <StatCard title="Active Campaigns" value={stats.active_campaigns} icon={FiActivity} color="blue" />
         <StatCard title="AI Generated" value={stats.ai_generated_emails} icon={FiZap} color="purple" />
+        <StatCard
+          title="Bounce Rate"
+          value={`${stats.bounce_rate}%`}
+          icon={FiTrendingDown}
+          color="red"
+          subtitle={`${stats.hard_bounces} hard · ${stats.soft_bounces_pending} soft pending`}
+        />
       </div>
 
       {/* Charts */}

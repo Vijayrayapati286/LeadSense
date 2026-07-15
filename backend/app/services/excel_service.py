@@ -7,6 +7,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.models import Recipient, SuppressionEntry
+from app.utils.timezone_lookup import lookup_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +112,9 @@ class ExcelService:
 
     def import_recipients(self, db: Session, file_content: bytes) -> tuple[int, list[int]]:
         """Import recipients from Excel, skipping duplicates by email. Any
-        email already on the suppression list stays suppressed even on
-        re-upload, so a blacklisted address can't sneak back into sends.
+        email with an active (non-overridden) suppression entry stays
+        suppressed even on re-upload, so a blacklisted address can't sneak
+        back into sends without an explicit admin override first.
 
         Returns (imported_count, recipient_ids) where recipient_ids covers
         every recipient touched by this upload — both newly created rows and
@@ -124,7 +126,13 @@ class ExcelService:
 
         existing = {r.email: r.id for r in db.query(Recipient.email, Recipient.id).all()}
         suppressed_reasons: dict[str, str] = {}
-        for entry in db.query(SuppressionEntry).order_by(SuppressionEntry.created_at.asc()).all():
+        active_entries = (
+            db.query(SuppressionEntry)
+            .filter(SuppressionEntry.overridden_at.is_(None))
+            .order_by(SuppressionEntry.created_at.asc())
+            .all()
+        )
+        for entry in active_entries:
             suppressed_reasons[entry.email] = entry.reason
 
         for data in parsed:
@@ -134,6 +142,7 @@ class ExcelService:
             if data["email"] in suppressed_reasons:
                 data["is_suppressed"] = True
                 data["suppression_reason"] = suppressed_reasons[data["email"]]
+            data["timezone"] = lookup_timezone(data.get("country"), data.get("state"))
             recipient = Recipient(**data)
             db.add(recipient)
             db.flush()

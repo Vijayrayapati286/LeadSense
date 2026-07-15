@@ -37,6 +37,9 @@ class DashboardStats(BaseModel):
     failed_emails: int
     active_campaigns: int
     ai_generated_emails: int
+    hard_bounces: int = 0
+    soft_bounces_pending: int = 0
+    bounce_rate: float = 0.0
 
 
 class DailyEmailStat(BaseModel):
@@ -85,6 +88,8 @@ class CampaignCreate(BaseModel):
     target_audience: str | None = None
     subject: str | None = None
     status: str = "draft"
+    scheduled_at: datetime | None = None
+    use_recipient_timezone: bool = False
 
 
 class CampaignUpdate(BaseModel):
@@ -95,6 +100,8 @@ class CampaignUpdate(BaseModel):
     target_audience: str | None = None
     subject: str | None = None
     status: str | None = None
+    scheduled_at: datetime | None = None
+    use_recipient_timezone: bool | None = None
 
 
 class CampaignResponse(BaseModel):
@@ -111,6 +118,8 @@ class CampaignResponse(BaseModel):
     status: str
     emails_sent: int
     created_at: datetime
+    scheduled_at: datetime | None = None
+    use_recipient_timezone: bool = False
 
 
 # ── Template ──────────────────────────────────────────────────────────────────
@@ -134,6 +143,49 @@ class TemplateResponse(BaseModel):
     body: str
     closing: str | None
     cta: str | None
+
+
+class MailerCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    type: str = Field(..., pattern="^(manual|placeholder|ai)$")
+    subject: str
+    body: str
+    closing: str | None = None
+    cta: str | None = None
+
+
+class MailerUpdate(BaseModel):
+    name: str | None = None
+    type: str | None = Field(None, pattern="^(manual|placeholder|ai)$")
+    subject: str | None = None
+    body: str | None = None
+    closing: str | None = None
+    cta: str | None = None
+
+
+class MailerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    type: str
+    subject: str
+    body: str
+    closing: str | None
+    cta: str | None
+    created_at: datetime
+
+
+class AppSettingResponse(BaseModel):
+    soft_bounce_threshold: int
+    send_interval_seconds: int
+    suppress_on_tags: list[str]
+
+
+class AppSettingUpdate(BaseModel):
+    soft_bounce_threshold: int | None = Field(None, ge=1)
+    send_interval_seconds: int | None = Field(None, ge=1)
+    suppress_on_tags: list[str] | None = None
 
 
 class AITemplateRequest(BaseModel):
@@ -209,6 +261,8 @@ class RecipientResponse(BaseModel):
     # ── Suppression / advanced-search fields ──────────────────────────────
     is_suppressed: bool = False
     suppression_reason: str | None = None
+    soft_bounce_count: int = 0
+    response_tag: str | None = None
     department: str | None = None
     company_size: str | None = None
     years_of_experience: str | None = None
@@ -238,10 +292,21 @@ class UploadExcelResponse(BaseModel):
     group_name: str | None = None
 
 
+class ResponseTagRequest(BaseModel):
+    recipient_ids: list[int] = Field(..., min_length=1)
+    tag: Literal["Cold", "Negative", "Warm", "Hot"]
+
+
+class ResponseTagResult(BaseModel):
+    tagged: int
+    suppressed: int
+
+
 # ── Suppression / Blacklist ───────────────────────────────────────────────────
 
 SuppressionReason = Literal[
-    "hard_bounce", "domain_rejected", "mail_server_blocked", "complaint", "manual"
+    "hard_bounce", "soft_bounce_threshold_exceeded", "domain_rejected",
+    "mail_server_blocked", "complaint", "manual",
 ]
 
 
@@ -252,11 +317,14 @@ class SuppressionEntryResponse(BaseModel):
     email: str
     company: str | None
     reason: str
+    bounce_type: str | None = None
+    smtp_code: str | None = None
     campaign_id: int | None
     campaign_name: str | None = None
     recipient_id: int | None
     detail: str | None
     created_at: datetime
+    overridden_at: datetime | None = None
 
 
 class SuppressionEntryListResponse(BaseModel):
@@ -271,6 +339,8 @@ class SimulateEventRequest(BaseModel):
     event_type: Literal["bounce", "complaint", "reply"]
     bounce_type: Literal["Permanent", "Transient"] = "Permanent"
     campaign_id: int | None = None
+    smtp_code: str | None = None
+    detail: str | None = None
 
 
 # ── Recipient Groups ───────────────────────────────────────────────────────────
@@ -412,11 +482,9 @@ class SendEmailRequest(BaseModel):
 
 
 class SendEmailResponse(BaseModel):
-    sent: int
-    failed: int
-    pending: int
-    details: list[dict[str, Any]]
+    queued: int
     skipped_suppressed: int = 0
+    immediate_sent: int = 0
 
 
 # ── Logs ──────────────────────────────────────────────────────────────────────

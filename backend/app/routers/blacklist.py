@@ -1,9 +1,11 @@
-"""Read-only blacklist/suppression list routes. There is deliberately no
-create/update/delete endpoint here — entries are only ever added by
-suppression_service (via excel import cross-check or event_service), never
-edited or removed through the API."""
+"""Blacklist/suppression list routes.
 
-from fastapi import APIRouter, Depends, Query
+Entries are only ever added automatically (via excel import cross-check or
+event_service on a bounce/complaint) — there is no manual "add" endpoint.
+The one write path is the admin override below, which un-suppresses an
+address without deleting its history (see SuppressionService.override)."""
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -35,3 +37,21 @@ def list_blacklist(
     return SuppressionEntryListResponse(
         items=responses, total=total, page=page, page_size=page_size
     )
+
+
+@router.post("/{entry_id}/override", response_model=SuppressionEntryResponse)
+def override_suppression(
+    entry_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Admin override: allow this address to receive campaigns/follow-ups
+    again. The suppression entry is kept as a historical record — only its
+    `overridden_at` timestamp is set."""
+    try:
+        entry = suppression_service.override(db, entry_id)
+        response = SuppressionEntryResponse.model_validate(entry)
+        response.campaign_name = entry.campaign.campaign_name if entry.campaign else None
+        return response
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

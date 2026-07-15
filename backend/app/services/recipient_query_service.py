@@ -62,8 +62,10 @@ class RecipientSearchFilters:
     state: list[str] = field(default_factory=list)
     city: list[str] = field(default_factory=list)
     lead_status: list[str] = field(default_factory=list)
+    response_tag: list[str] = field(default_factory=list)
     group_ids: list[int] = field(default_factory=list)
     tag_ids: list[int] = field(default_factory=list)
+    exclude_suppressed: bool = False
 
     campaign_id: int | None = None
     campaign_status: str = ""
@@ -98,6 +100,9 @@ def build_query(db: Session, filters: RecipientSearchFilters) -> Query:
     query = _multi_ilike(query, Recipient.city, filters.city)
     query = _multi_ilike(query, Recipient.status, filters.lead_status)
 
+    if filters.response_tag:
+        query = query.filter(Recipient.response_tag.in_(filters.response_tag))
+
     single_ilike_fields = {
         "name": filters.name,
         "email": filters.email,
@@ -113,6 +118,9 @@ def build_query(db: Session, filters: RecipientSearchFilters) -> Query:
 
     if filters.email_domain:
         query = query.filter(Recipient.email.ilike(f"%@{filters.email_domain}"))
+
+    if filters.exclude_suppressed:
+        query = query.filter(Recipient.is_suppressed == False)  # noqa: E712
 
     # Groups/tags use an IN-subquery (not a join) so a recipient belonging to
     # multiple selected groups/tags still appears exactly once in the results.

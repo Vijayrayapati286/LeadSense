@@ -11,12 +11,14 @@ from app.config import get_settings
 from app.database.connection import init_db
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 from app.routers import (
+    app_settings,
     auth,
     blacklist,
     campaign,
     dashboard,
     email,
     logs,
+    mailers,
     recipient_groups,
     recipients,
     tags,
@@ -77,10 +79,12 @@ app.include_router(recipients.router, prefix=API_PREFIX)
 app.include_router(recipient_groups.router, prefix=API_PREFIX)
 app.include_router(tags.router, prefix=API_PREFIX)
 app.include_router(templates.router, prefix=API_PREFIX)
+app.include_router(mailers.router, prefix=API_PREFIX)
 app.include_router(email.router, prefix=API_PREFIX)
 app.include_router(logs.router, prefix=API_PREFIX)
 app.include_router(blacklist.router, prefix=API_PREFIX)
 app.include_router(webhooks.router, prefix=API_PREFIX)
+app.include_router(app_settings.router, prefix=API_PREFIX)
 
 
 @app.get("/")

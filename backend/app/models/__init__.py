@@ -1,8 +1,10 @@
 from app.models.models import (
+    AppSetting,
     Campaign,
     CampaignRecipient,
     CampaignSequenceStage,
     EmailLog,
+    Mailer,
     Recipient,
     RecipientGroup,
     RecipientGroupMember,
@@ -18,6 +20,7 @@ __all__ = [
     "User",
     "Campaign",
     "Template",
+    "Mailer",
     "Recipient",
     "EmailLog",
     "SuppressionEntry",
@@ -28,4 +31,5 @@ __all__ = [
     "SavedSearch",
     "CampaignRecipient",
     "CampaignSequenceStage",
+    "AppSetting",
 ]

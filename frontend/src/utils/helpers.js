@@ -71,6 +71,15 @@ export function formatDateTime(dateStr) {
   });
 }
 
+/** Convert an ISO datetime string to the local value a `datetime-local`
+ * input expects ("YYYY-MM-DDTHH:mm"), or '' if unset. */
+export function toDatetimeLocalValue(isoStr) {
+  if (!isoStr) return '';
+  const date = new Date(isoStr);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 /** Generate campaign ID */
 export function generateCampaignId() {
   const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
@@ -89,12 +98,14 @@ export function getStatusColor(status) {
     pending: 'bg-yellow-100 text-yellow-800',
     // Blacklist reasons
     hard_bounce: 'bg-red-100 text-red-800',
+    soft_bounce_threshold_exceeded: 'bg-amber-100 text-amber-800',
     domain_rejected: 'bg-red-100 text-red-800',
     mail_server_blocked: 'bg-red-100 text-red-800',
     complaint: 'bg-orange-100 text-orange-800',
     manual: 'bg-gray-100 text-gray-800',
     // Campaign-recipient tracking statuses
     not_contacted: 'bg-gray-100 text-gray-800',
+    queued: 'bg-blue-100 text-blue-800',
     delivered: 'bg-green-100 text-green-800',
     opened: 'bg-blue-100 text-blue-800',
     clicked: 'bg-purple-100 text-purple-800',

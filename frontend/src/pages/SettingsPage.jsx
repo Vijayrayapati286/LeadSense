@@ -1,8 +1,50 @@
-import { FiUser, FiMail, FiBriefcase, FiShield } from 'react-icons/fi';
+import { useEffect, useState } from 'react';
+import { FiUser, FiMail, FiBriefcase, FiShield, FiSliders, FiSave } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
+import { useToast } from '../hooks/useToast';
+import { appSettingsService } from '../services/services';
+import { RESPONSE_TAGS } from '../components/FilterBuilder';
+import LoadingSpinner from '../components/ui/LoadingSpinner';
 
 export default function SettingsPage() {
   const { user } = useAuth();
+  const toast = useToast();
+  const [appSettings, setAppSettings] = useState(null);
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  useEffect(() => {
+    appSettingsService.get()
+      .then(({ data }) => setAppSettings(data))
+      .catch(() => toast.error('Failed to load deliverability settings'))
+      .finally(() => setLoadingSettings(false));
+  }, [toast]);
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const { data } = await appSettingsService.update({
+        soft_bounce_threshold: Number(appSettings.soft_bounce_threshold),
+        send_interval_seconds: Number(appSettings.send_interval_seconds),
+        suppress_on_tags: appSettings.suppress_on_tags,
+      });
+      setAppSettings(data);
+      toast.success('Deliverability settings saved');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to save settings');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const toggleSuppressOnTag = (tag) => {
+    setAppSettings((p) => ({
+      ...p,
+      suppress_on_tags: p.suppress_on_tags.includes(tag)
+        ? p.suppress_on_tags.filter((t) => t !== tag)
+        : [...p.suppress_on_tags, tag],
+    }));
+  };
 
   return (
     <div className="max-w-2xl mx-auto space-y-6 animate-fade-in">
@@ -41,6 +83,69 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="card">
+        <h2 className="text-lg font-semibold mb-1 flex items-center gap-2">
+          <FiSliders size={20} /> Deliverability
+        </h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Controls how aggressively bounces get suppressed and how fast campaigns send.
+        </p>
+        {loadingSettings ? (
+          <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+        ) : appSettings && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="label">Soft Bounce Threshold</label>
+                <input
+                  type="number"
+                  min={1}
+                  className="input-field"
+                  value={appSettings.soft_bounce_threshold}
+                  onChange={(e) => setAppSettings((p) => ({ ...p, soft_bounce_threshold: e.target.value }))}
+                />
+                <p className="text-xs text-gray-400 mt-1">Retries before a repeatedly soft-bouncing address is suppressed.</p>
+              </div>
+              <div>
+                <label className="label">Send Interval (seconds)</label>
+                <input
+                  type="number"
+                  min={1}
+                  className="input-field"
+                  value={appSettings.send_interval_seconds}
+                  onChange={(e) => setAppSettings((p) => ({ ...p, send_interval_seconds: e.target.value }))}
+                />
+                <p className="text-xs text-gray-400 mt-1">Minimum gap enforced between each outgoing campaign email.</p>
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Auto-Suppress On Response Tag</label>
+              <p className="text-xs text-gray-400 mb-2">
+                Prospects manually tagged with a checked response are blacklisted immediately.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {RESPONSE_TAGS.map((tag) => (
+                  <label key={tag} className="flex items-center gap-2 text-sm px-3 py-2 border border-gray-200 rounded-lg cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={appSettings.suppress_on_tags.includes(tag)}
+                      onChange={() => toggleSuppressOnTag(tag)}
+                      className="rounded border-gray-300"
+                    />
+                    {tag}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={handleSaveSettings} disabled={savingSettings} className="btn-primary flex items-center gap-2">
+              {savingSettings ? <LoadingSpinner size="sm" /> : <><FiSave size={16} /> Save Settings</>}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="card">

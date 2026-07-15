@@ -11,11 +11,13 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.models import CampaignRecipient, Recipient
+from app.services.app_settings_service import AppSettingsService
 from app.services.suppression_service import SuppressionService
 from app.utils.helpers import utc_now
 
 logger = logging.getLogger(__name__)
 suppression_service = SuppressionService()
+app_settings_service = AppSettingsService()
 
 
 def _mark_campaign_recipients(
@@ -36,23 +38,61 @@ def _mark_campaign_recipients(
 
 
 def handle_bounce(
-    db: Session, email: str, bounce_type: str = "Permanent", campaign_id: int | None = None, detail: str | None = None
+    db: Session,
+    email: str,
+    bounce_type: str = "Permanent",
+    campaign_id: int | None = None,
+    detail: str | None = None,
+    smtp_code: str | None = None,
 ) -> None:
-    """Permanent bounces are hard failures: suppress and mark invalid. Transient
-    bounces are temporary (mailbox full, etc.) and are logged but not suppressed."""
+    """Hard (Permanent) bounces — invalid/non-existent mailbox, domain doesn't
+    exist — are suppressed immediately, since retrying can only hurt sender
+    reputation. Soft (Transient) bounces — full mailbox, temporary server
+    error — are retried: each occurrence increments a per-recipient counter,
+    and only once that count exceeds `settings.soft_bounce_threshold` does
+    the address get suppressed too (as `soft_bounce_threshold_exceeded`)."""
+    recipients = db.query(Recipient).filter(Recipient.email == email).all()
+
     if bounce_type != "Permanent":
-        logger.info("Transient bounce for %s — not suppressing", email)
+        if not recipients:
+            logger.info("Transient bounce for unknown recipient %s — nothing to track", email)
+            return
+
+        for recipient in recipients:
+            recipient.soft_bounce_count += 1
+        db.commit()
+
+        threshold = app_settings_service.get(db).soft_bounce_threshold
+        if recipients[0].soft_bounce_count <= threshold:
+            logger.info(
+                "Transient bounce %d/%d for %s — retrying",
+                recipients[0].soft_bounce_count, threshold, email,
+            )
+            return
+
+        logger.info(
+            "Soft bounce threshold exceeded for %s (%d > %d) — suppressing",
+            email, recipients[0].soft_bounce_count, threshold,
+        )
+        for recipient in recipients:
+            suppression_service.add(
+                db, recipient, reason="soft_bounce_threshold_exceeded",
+                detail=detail, campaign_id=campaign_id,
+                bounce_type=bounce_type, smtp_code=smtp_code,
+            )
+        _mark_campaign_recipients(db, email, campaign_id, "bounced", "bounced_at")
         return
 
-    recipients = db.query(Recipient).filter(Recipient.email == email).all()
     if recipients:
         for recipient in recipients:
             suppression_service.add(
-                db, recipient, reason="hard_bounce", detail=detail, campaign_id=campaign_id
+                db, recipient, reason="hard_bounce", detail=detail, campaign_id=campaign_id,
+                bounce_type=bounce_type, smtp_code=smtp_code,
             )
     else:
         suppression_service.add_by_email(
-            db, email, reason="hard_bounce", detail=detail, campaign_id=campaign_id
+            db, email, reason="hard_bounce", detail=detail, campaign_id=campaign_id,
+            bounce_type=bounce_type, smtp_code=smtp_code,
         )
 
     _mark_campaign_recipients(db, email, campaign_id, "bounced", "bounced_at")

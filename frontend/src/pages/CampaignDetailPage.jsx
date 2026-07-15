@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import {
   FiArrowLeft,
   FiEdit2,
@@ -35,7 +35,7 @@ const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'template', label: 'Template' },
   { id: 'sequence', label: 'Follow-up Sequence' },
-  { id: 'candidates', label: 'Contacts' },
+  { id: 'candidates', label: 'Prospects' },
   { id: 'tracking', label: 'Tracking' },
 ];
 
@@ -44,12 +44,15 @@ const EMPTY_STAGE_FORM = { delay_value: 3, delay_unit: 'days', subject: '', body
 export default function CampaignDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
+
+  const preselectedContactIds = location.state?.preselectedContactIds;
 
   const [campaign, setCampaign] = useState(null);
   const [template, setTemplate] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(preselectedContactIds ? 'candidates' : 'overview');
 
   const {
     search, setSearch, sortBy, setSortBy, sortOrder, setSortOrder,
@@ -59,8 +62,15 @@ export default function CampaignDetailPage() {
     handleAddField, handleRemoveField, handleValueChange, clearAllFilters,
   } = useContactSearch({ toast });
 
-  const [selectedIds, setSelectedIds] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(preselectedContactIds || []);
   const [selectingAll, setSelectingAll] = useState(false);
+
+  useEffect(() => {
+    if (preselectedContactIds?.length) {
+      toast.success(`${preselectedContactIds.length} prospect(s) carried over from creation`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRecipientId, setPreviewRecipientId] = useState(null);
@@ -110,21 +120,29 @@ export default function CampaignDetailPage() {
     if (activeTab === 'sequence') loadStages();
   }, [activeTab, loadStages]);
 
-  const loadTracking = useCallback(async () => {
-    setTrackingLoading(true);
+  const loadTracking = useCallback(async (silent = false) => {
+    if (!silent) setTrackingLoading(true);
     try {
       const { data } = await campaignService.getRecipients(id);
       setTracking(data.items);
     } catch {
-      toast.error('Failed to load tracking data');
+      if (!silent) toast.error('Failed to load tracking data');
     } finally {
-      setTrackingLoading(false);
+      if (!silent) setTrackingLoading(false);
     }
   }, [id, toast]);
 
   useEffect(() => {
     if (activeTab === 'tracking') loadTracking();
   }, [activeTab, loadTracking]);
+
+  const hasQueuedRows = tracking.some((t) => t.status === 'queued');
+
+  useEffect(() => {
+    if (activeTab !== 'tracking' || !hasQueuedRows) return;
+    const interval = setInterval(() => loadTracking(true), 5000);
+    return () => clearInterval(interval);
+  }, [activeTab, hasQueuedRows, loadTracking]);
 
   const handleAddStage = async () => {
     if (!stageForm.subject || !stageForm.body) {
@@ -168,11 +186,11 @@ export default function CampaignDetailPage() {
   const handleSelectAllMatching = async () => {
     setSelectingAll(true);
     try {
-      const { data } = await recipientService.searchIds(activeParams);
+      const { data } = await recipientService.searchIds({ ...activeParams, exclude_suppressed: true });
       setSelectedIds(data.ids);
-      toast.success(`Selected all ${data.total} matching contact(s)`);
+      toast.success(`Selected all ${data.total} matching prospect(s)`);
     } catch {
-      toast.error('Failed to select all matching contacts');
+      toast.error('Failed to select all matching prospects');
     } finally {
       setSelectingAll(false);
     }
@@ -203,10 +221,12 @@ export default function CampaignDetailPage() {
   const handleOpenPreview = () => {
     if (!template) {
       toast.error('This campaign has no template yet. Add one from Edit Campaign.');
+      setActiveTab('template');
       return;
     }
     if (selectedIds.length === 0) {
-      toast.error('Select at least one contact first');
+      toast.error('Select at least one prospect first');
+      setActiveTab('candidates');
       return;
     }
     setPreviewOpen(true);
@@ -221,10 +241,19 @@ export default function CampaignDetailPage() {
         body: template.body + (template.closing ? `\n\n${template.closing}` : ''),
         recipient_ids: selectedIds,
       });
-      toast.success(`Send complete. Sent: ${data.sent}, Failed: ${data.failed}, Pending: ${data.pending}`);
+      if (data.immediate_sent > 0) {
+        toast.success('Test email sent (mock mode, no real prospects selected)');
+      } else {
+        let message = `Queued ${data.queued} email(s) — sending in the background, spaced out to protect deliverability. Track progress in the Tracking tab.`;
+        if (data.skipped_suppressed > 0) {
+          message += ` (${data.skipped_suppressed} skipped — blacklisted)`;
+        }
+        toast.success(message);
+      }
       setPreviewOpen(false);
       clearSelection();
       loadCampaign();
+      setActiveTab('tracking');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to send emails');
     } finally {
@@ -259,9 +288,17 @@ export default function CampaignDetailPage() {
             <p className="text-gray-500 mt-1">{campaign.campaign_id}</p>
           </div>
         </div>
-        <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="btn-primary flex items-center gap-2">
-          <FiEdit2 size={16} /> Edit Campaign
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="btn-secondary flex items-center gap-2">
+            <FiEdit2 size={16} /> Edit Campaign
+          </button>
+          <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
+            <FiSend size={16} /> Send Campaign
+            {selectedIds.length > 0 && (
+              <span className="bg-white/20 rounded-full px-1.5 text-xs">{selectedIds.length}</span>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -307,6 +344,18 @@ export default function CampaignDetailPage() {
                 <div>
                   <p className="text-gray-500">Created</p>
                   <p className="font-medium text-gray-900">{formatDate(campaign.created_at)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Scheduled For</p>
+                  <p className="font-medium text-gray-900">
+                    {campaign.scheduled_at ? formatDateTime(campaign.scheduled_at) : 'Not scheduled — sends immediately'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Time-Zone Optimization</p>
+                  <p className="font-medium text-gray-900">
+                    {campaign.use_recipient_timezone ? 'On — sends within each prospect\'s local business hours' : 'Off'}
+                  </p>
                 </div>
               </div>
               {campaign.description && (
@@ -366,7 +415,7 @@ export default function CampaignDetailPage() {
               </h2>
               <p className="text-sm text-gray-500 mt-1">
                 Stage 0 is the email on the Template tab, sent immediately. Add follow-up stages below —
-                each fires automatically after the configured delay, as long as the contact hasn't
+                each fires automatically after the configured delay, as long as the prospect hasn't
                 replied, bounced, or been suppressed.
               </p>
 
@@ -451,7 +500,7 @@ export default function CampaignDetailPage() {
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
                   <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <FiUsers size={18} /> Contacts
+                    <FiUsers size={18} /> Prospects
                   </h2>
                   <p className="text-sm text-gray-500 mt-1">
                     Search, filter, and select who should receive this campaign, then preview and send.
@@ -519,7 +568,7 @@ export default function CampaignDetailPage() {
               </div>
 
               <p className="text-sm text-gray-600 mt-3">
-                <span className="font-semibold text-gray-900">{total}</span> matching contact{total !== 1 ? 's' : ''}
+                <span className="font-semibold text-gray-900">{total}</span> matching prospect{total !== 1 ? 's' : ''}
                 {selectedIds.length > 0 && <span className="ml-2 text-primary-600 font-medium">({selectedIds.length} selected)</span>}
               </p>
 
@@ -529,7 +578,7 @@ export default function CampaignDetailPage() {
                 </div>
               ) : results.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 mt-3">
-                  No contacts found. Upload contacts from the Contacts page or adjust your filters.
+                  No prospects found. Upload prospects from the Prospects page or adjust your filters.
                 </div>
               ) : (
                 <>
@@ -537,23 +586,32 @@ export default function CampaignDetailPage() {
                     {results.map((r) => (
                       <label
                         key={r.id}
-                        className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-white p-3 hover:border-primary-300"
+                        className={`flex items-start gap-3 rounded-xl border p-3 ${
+                          r.is_suppressed
+                            ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
+                            : 'cursor-pointer border-gray-200 bg-white hover:border-primary-300'
+                        }`}
                       >
                         <input
                           type="checkbox"
-                          checked={selectedIds.includes(r.id)}
+                          checked={!r.is_suppressed && selectedIds.includes(r.id)}
                           onChange={() => toggleRecipient(r.id)}
-                          className="mt-1 rounded border-gray-300"
+                          disabled={r.is_suppressed}
+                          title={r.is_suppressed ? 'Blacklisted prospects cannot be selected' : undefined}
+                          className="mt-1 rounded border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
                         />
                         <div className="flex-1">
                           <div className="flex items-center justify-between gap-3">
-                            <p className="font-medium text-gray-900">{r.name}</p>
+                            <p className={`font-medium ${r.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{r.name}</p>
                             <span className="text-xs text-gray-500">{r.company || '—'}</span>
                           </div>
-                          <p className="text-sm text-gray-600">{r.email}</p>
+                          <p className={`text-sm ${r.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{r.email}</p>
                           <p className="text-xs text-gray-500">
                             {r.designation || '—'} • {r.industry || '—'}
                           </p>
+                          {r.is_suppressed && (
+                            <div className="mt-1"><StatusBadge status={r.suppression_reason} /></div>
+                          )}
                         </div>
                       </label>
                     ))}
@@ -569,11 +627,42 @@ export default function CampaignDetailPage() {
           {activeTab === 'tracking' && (
             <div className="card overflow-hidden">
               <h2 className="text-lg font-semibold flex items-center gap-2">
-                <FiBarChart2 size={18} /> Contact Tracking
+                <FiBarChart2 size={18} /> Prospect Tracking
               </h2>
               <p className="text-sm text-gray-500 mt-1">
-                Per-contact delivery status for this campaign, updated as emails are sent and follow-ups fire.
+                Per-prospect delivery status for this campaign, updated as emails are sent and follow-ups fire.
               </p>
+
+              {!trackingLoading && tracking.length > 0 && (
+                <>
+                  {hasQueuedRows && (
+                    <p className="text-sm text-primary-600 mt-4 flex items-center gap-2">
+                      <LoadingSpinner size="sm" />
+                      {tracking.filter((t) => t.status === 'sent').length} of {tracking.length} sent so far — still sending in the background...
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-3 mt-4 text-sm">
+                    <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700">
+                      {tracking.filter((t) => t.status === 'queued').length} queued
+                    </span>
+                    <span className="px-3 py-1 rounded-full bg-green-50 text-green-700">
+                      {tracking.filter((t) => t.status === 'sent').length} sent
+                    </span>
+                    <span className="px-3 py-1 rounded-full bg-red-50 text-red-700">
+                      {tracking.filter((t) => t.status === 'bounced').length} bounced
+                    </span>
+                    <span className="px-3 py-1 rounded-full bg-purple-50 text-purple-700">
+                      {tracking.filter((t) => t.status === 'replied').length} replied
+                    </span>
+                    <span className="px-3 py-1 rounded-full bg-gray-100 text-gray-600">
+                      {tracking.filter((t) => t.status === 'suppressed').length} suppressed
+                    </span>
+                    <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-700">
+                      {tracking.filter((t) => t.status === 'failed').length} failed
+                    </span>
+                  </div>
+                </>
+              )}
 
               {trackingLoading ? (
                 <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
@@ -637,7 +726,7 @@ export default function CampaignDetailPage() {
             <ul className="mt-4 space-y-2 text-sm text-gray-600">
               <li>• Review the campaign details in the Overview tab.</li>
               <li>• Confirm the email content in the Template tab.</li>
-              <li>• Select contacts and preview & send from the Contacts tab.</li>
+              <li>• Select prospects and preview & send from the Prospects tab.</li>
             </ul>
           </div>
         </div>
@@ -670,7 +759,7 @@ export default function CampaignDetailPage() {
               cta={template.cta}
             />
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
-              Sending to {selectedIds.length} contact{selectedIds.length !== 1 ? 's' : ''}
+              Sending to {selectedIds.length} prospect{selectedIds.length !== 1 ? 's' : ''}
             </div>
             <div className="flex justify-end gap-3">
               <button className="btn-secondary" onClick={() => setPreviewOpen(false)} disabled={sending}>
@@ -695,7 +784,7 @@ export default function CampaignDetailPage() {
         onClose={() => setDeletingStageId(null)}
         onConfirm={handleDeleteStage}
         title="Remove Follow-up Stage"
-        message="Remove this follow-up stage? Contacts already scheduled for it will no longer receive it."
+        message="Remove this follow-up stage? Prospects already scheduled for it will no longer receive it."
         confirmText="Remove"
       />
     </div>

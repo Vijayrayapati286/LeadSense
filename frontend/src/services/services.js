@@ -44,6 +44,7 @@ export const recipientService = {
   searchIds: (params) => api.get('/recipients/search-ids', { params }),
   export: (params) => api.get('/recipients/export', { params, responseType: 'blob' }),
   distinctValues: (fieldName) => api.get('/recipients/distinct-values', { params: { field: fieldName } }),
+  tagResponse: (recipientIds, tag) => api.post('/recipients/response-tag', { recipient_ids: recipientIds, tag }),
 };
 
 export const savedSearchService = {
@@ -79,6 +80,7 @@ export const logService = {
 
 export const blacklistService = {
   getAll: (params) => api.get('/blacklist', { params }),
+  override: (id) => api.post(`/blacklist/${id}/override`),
 };
 
 export const tagService = {
@@ -87,4 +89,17 @@ export const tagService = {
   delete: (id) => api.delete(`/tags/${id}`),
   assign: (id, recipientIds) => api.post(`/tags/${id}/members`, { recipient_ids: recipientIds }),
   unassign: (id, recipientId) => api.delete(`/tags/${id}/members/${recipientId}`),
+};
+
+export const appSettingsService = {
+  get: () => api.get('/settings/app'),
+  update: (data) => api.put('/settings/app', data),
+};
+
+export const mailerService = {
+  getAll: (params) => api.get('/mailers', { params }),
+  getById: (id) => api.get(`/mailers/${id}`),
+  create: (data) => api.post('/mailers', data),
+  update: (id, data) => api.put(`/mailers/${id}`, data),
+  delete: (id) => api.delete(`/mailers/${id}`),
 };

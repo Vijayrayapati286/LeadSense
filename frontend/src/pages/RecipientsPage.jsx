@@ -11,8 +11,16 @@ import Pagination from '../components/ui/Pagination';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import FilterBuilder from '../components/FilterBuilder';
+import StatusBadge from '../components/ui/StatusBadge';
+import FilterBuilder, { RESPONSE_TAGS } from '../components/FilterBuilder';
 import { debounce } from '../utils/helpers';
+
+const RESPONSE_TAG_COLORS = {
+  Cold: 'bg-blue-50 text-blue-700',
+  Negative: 'bg-red-50 text-red-700',
+  Warm: 'bg-amber-50 text-amber-700',
+  Hot: 'bg-green-50 text-green-700',
+};
 
 export default function RecipientsPage() {
   const toast = useToast();
@@ -67,9 +75,9 @@ export default function RecipientsPage() {
     try {
       const { data } = await recipientService.searchIds(activeParams);
       setSelectedIds(new Set(data.ids));
-      toast.success(`Selected all ${data.total} matching contact(s) — duplicates across overlapping filters are automatically merged`);
+      toast.success(`Selected all ${data.total} matching prospect(s) — duplicates across overlapping filters are automatically merged`);
     } catch {
-      toast.error('Failed to select all matching contacts');
+      toast.error('Failed to select all matching prospects');
     } finally {
       setSelectingAll(false);
     }
@@ -78,9 +86,14 @@ export default function RecipientsPage() {
   const handleUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!uploadGroupName.trim()) {
+      toast.error('Name this list before uploading — it makes the list identifiable and reusable later');
+      e.target.value = '';
+      return;
+    }
     setUploading(true);
     try {
-      const { data } = await recipientService.uploadExcel(file, uploadGroupName.trim() || undefined);
+      const { data } = await recipientService.uploadExcel(file, uploadGroupName.trim());
       toast.success(data.message);
       setUploadGroupName('');
       loadResults();
@@ -100,7 +113,7 @@ export default function RecipientsPage() {
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'contacts_export.csv';
+      link.download = 'prospects_export.csv';
       link.click();
       window.URL.revokeObjectURL(url);
     } catch {
@@ -144,7 +157,7 @@ export default function RecipientsPage() {
         return;
       }
       await recipientGroupService.addMembers(groupId, ids);
-      toast.success(`Added ${ids.length} contact(s) to group`);
+      toast.success(`Added ${ids.length} prospect(s) to group`);
       setGroupModalOpen(false);
       setTargetGroupId('');
       setNewGroupName('');
@@ -169,7 +182,7 @@ export default function RecipientsPage() {
         return;
       }
       await tagService.assign(tagId, ids);
-      toast.success(`Tagged ${ids.length} contact(s)`);
+      toast.success(`Tagged ${ids.length} prospect(s)`);
       setTagModalOpen(false);
       setTargetTagId('');
       setNewTagName('');
@@ -210,19 +223,48 @@ export default function RecipientsPage() {
     }
   };
 
+  const handleInlineResponseTag = async (recipientId, tag) => {
+    try {
+      const { data } = await recipientService.tagResponse([recipientId], tag);
+      if (data.suppressed > 0) toast.success(`Tagged as ${tag} — auto-suppressed (blacklisted)`);
+      else toast.success(`Tagged as ${tag}`);
+      loadResults();
+    } catch {
+      toast.error('Failed to tag response');
+    }
+  };
+
+  const handleBulkResponseTag = async (tag) => {
+    const ids = [...selectedIds];
+    if (ids.length === 0 || !tag) return;
+    try {
+      const { data } = await recipientService.tagResponse(ids, tag);
+      toast.success(
+        data.suppressed > 0
+          ? `Tagged ${data.tagged} prospect(s) as ${tag} — ${data.suppressed} auto-suppressed`
+          : `Tagged ${data.tagged} prospect(s) as ${tag}`
+      );
+      setSelectedIds(new Set());
+      loadResults();
+    } catch {
+      toast.error('Failed to tag response');
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Contacts</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Prospects</h1>
           <p className="text-gray-500 mt-1">
-            Search, filter, and organize every contact — individually, by group, by tag, or with any combination of filters.
+            Search, filter, and organize every prospect — individually, by group, by tag, or with any combination of filters.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <input
             className="input-field w-48"
-            placeholder="Team/Group name (optional)"
+            placeholder="List name *"
+            title="Required — names this list so it's identifiable and reusable in future campaigns"
             value={uploadGroupName}
             onChange={(e) => setUploadGroupName(e.target.value)}
           />
@@ -299,6 +341,17 @@ export default function RecipientsPage() {
           )}
           {selectedIds.size > 0 && (
             <div className="flex items-center gap-2 ml-auto">
+              <select
+                className="input-field w-auto text-sm"
+                value=""
+                onChange={(e) => handleBulkResponseTag(e.target.value)}
+                title="Tag response for selected prospects"
+              >
+                <option value="">Tag Response ({selectedIds.size})...</option>
+                {RESPONSE_TAGS.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
               <button onClick={() => setTagModalOpen(true)} className="btn-secondary text-sm flex items-center gap-1">
                 <FiTag size={14} /> Tag {selectedIds.size}
               </button>
@@ -312,7 +365,7 @@ export default function RecipientsPage() {
 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <p className="text-sm text-gray-600">
-          <span className="font-semibold text-gray-900">{total}</span> matching contact{total !== 1 ? 's' : ''}
+          <span className="font-semibold text-gray-900">{total}</span> matching prospect{total !== 1 ? 's' : ''}
           {selectedIds.size > 0 && <span className="ml-2 text-primary-600 font-medium">({selectedIds.size} selected)</span>}
         </p>
         <button onClick={handleSelectAllMatching} disabled={selectingAll || total === 0} className="btn-secondary text-sm flex items-center gap-1">
@@ -336,26 +389,61 @@ export default function RecipientsPage() {
                     <th className="px-4 py-3 font-medium">Designation</th>
                     <th className="px-4 py-3 font-medium">Industry</th>
                     <th className="px-4 py-3 font-medium">Location</th>
+                    <th className="px-4 py-3 font-medium">Response</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {results.map((r) => (
-                    <tr key={r.id} className={`border-b border-gray-50 hover:bg-gray-50/50 ${selectedIds.has(r.id) ? 'bg-primary-50/30' : ''}`}>
+                    <tr
+                      key={r.id}
+                      className={`border-b border-gray-50 ${
+                        r.is_suppressed ? 'bg-gray-50 text-gray-400' : `hover:bg-gray-50/50 ${selectedIds.has(r.id) ? 'bg-primary-50/30' : ''}`
+                      }`}
+                    >
                       <td className="px-4 py-3">
-                        <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelect(r.id)} className="rounded border-gray-300" />
+                        <input
+                          type="checkbox"
+                          checked={!r.is_suppressed && selectedIds.has(r.id)}
+                          onChange={() => toggleSelect(r.id)}
+                          disabled={r.is_suppressed}
+                          title={r.is_suppressed ? 'Blacklisted prospects cannot be selected' : undefined}
+                          className="rounded border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                        />
                       </td>
-                      <td className="px-4 py-3 font-medium text-gray-900">{r.name}</td>
-                      <td className="px-4 py-3 text-gray-600">{r.email}</td>
-                      <td className="px-4 py-3 text-gray-600">{r.company || '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{r.designation || '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{r.industry || '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{[r.city, r.state, r.country].filter(Boolean).join(', ') || '—'}</td>
+                      <td className={`px-4 py-3 font-medium ${r.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{r.name}</td>
+                      <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{r.email}</td>
+                      <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{r.company || '—'}</td>
+                      <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{r.designation || '—'}</td>
+                      <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{r.industry || '—'}</td>
+                      <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{[r.city, r.state, r.country].filter(Boolean).join(', ') || '—'}</td>
+                      <td className="px-4 py-3">
+                        <select
+                          className={`input-field text-xs py-1 ${r.response_tag ? RESPONSE_TAG_COLORS[r.response_tag] : ''}`}
+                          value={r.response_tag || ''}
+                          onChange={(e) => e.target.value && handleInlineResponseTag(r.id, e.target.value)}
+                        >
+                          <option value="">—</option>
+                          {RESPONSE_TAGS.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-4 py-3">
+                        {r.is_suppressed ? (
+                          <span title={`Blacklisted: ${r.suppression_reason}`}>
+                            <StatusBadge status={r.suppression_reason} />
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {results.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
-                        No contacts found. Upload an Excel file or adjust your filters.
+                      <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
+                        No prospects found. Upload an Excel file or adjust your filters.
                       </td>
                     </tr>
                   )}
@@ -400,12 +488,12 @@ export default function RecipientsPage() {
           </div>
           <div className="flex justify-end gap-3">
             <button onClick={() => setGroupModalOpen(false)} className="btn-secondary">Cancel</button>
-            <button onClick={handleAddToGroup} className="btn-primary">Add {selectedIds.size} Contact(s)</button>
+            <button onClick={handleAddToGroup} className="btn-primary">Add {selectedIds.size} Prospect(s)</button>
           </div>
         </div>
       </Modal>
 
-      <Modal isOpen={tagModalOpen} onClose={() => setTagModalOpen(false)} title="Tag Contacts" size="sm">
+      <Modal isOpen={tagModalOpen} onClose={() => setTagModalOpen(false)} title="Tag Prospects" size="sm">
         <div className="space-y-4">
           <div>
             <label className="label">Existing Tag</label>
@@ -423,7 +511,7 @@ export default function RecipientsPage() {
           </div>
           <div className="flex justify-end gap-3">
             <button onClick={() => setTagModalOpen(false)} className="btn-secondary">Cancel</button>
-            <button onClick={handleAssignTag} className="btn-primary">Tag {selectedIds.size} Contact(s)</button>
+            <button onClick={handleAssignTag} className="btn-primary">Tag {selectedIds.size} Prospect(s)</button>
           </div>
         </div>
       </Modal>
@@ -431,7 +519,7 @@ export default function RecipientsPage() {
       <Modal isOpen={manageModalOpen} onClose={() => setManageModalOpen(false)} title="Manage Groups & Tags" size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <p className="text-sm font-semibold text-gray-700 mb-2">Contact Groups</p>
+            <p className="text-sm font-semibold text-gray-700 mb-2">Prospect Groups</p>
             <div className="space-y-1.5 max-h-72 overflow-y-auto">
               {groups.map((g) => (
                 <div key={g.id} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2">
@@ -482,7 +570,7 @@ export default function RecipientsPage() {
         onClose={() => setDeletingGroup(null)}
         onConfirm={handleDeleteGroup}
         title="Delete Group"
-        message={`Delete "${deletingGroup?.name}"? Contacts stay in the system — this only removes the group.`}
+        message={`Delete "${deletingGroup?.name}"? Prospects stay in the system — this only removes the group.`}
         confirmText="Delete"
       />
       <ConfirmDialog
@@ -490,7 +578,7 @@ export default function RecipientsPage() {
         onClose={() => setDeletingTag(null)}
         onConfirm={handleDeleteTag}
         title="Delete Tag"
-        message={`Delete "${deletingTag?.name}"? This removes the tag from every contact.`}
+        message={`Delete "${deletingTag?.name}"? This removes the tag from every prospect.`}
         confirmText="Delete"
       />
     </div>

@@ -37,6 +37,10 @@ class Campaign(Base):
     user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # ── Scheduling ─────────────────────────────────────────────────────────
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    use_recipient_timezone: Mapped[bool] = mapped_column(Boolean, default=False)
+
     owner_user: Mapped["User | None"] = relationship("User", back_populates="campaigns")
     templates: Mapped[list["Template"]] = relationship(
         "Template", back_populates="campaign", cascade="all, delete-orphan"
@@ -66,6 +70,23 @@ class Template(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="templates")
+
+
+class Mailer(Base):
+    """A reusable, named email template — independent of any single campaign,
+    unlike Template (which is deleted/recreated per campaign). Save once,
+    search/reuse across future campaigns."""
+
+    __tablename__ = "mailers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)  # manual, placeholder, ai
+    subject: Mapped[str] = mapped_column(String(500), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    closing: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cta: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Recipient(Base):
@@ -109,6 +130,10 @@ class Recipient(Base):
     # ── Suppression / blacklist ───────────────────────────────────────────
     is_suppressed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     suppression_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    soft_bounce_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # ── Manual response tagging ───────────────────────────────────────────
+    response_tag: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)  # Cold, Negative, Warm, Hot
 
     # ── Advanced-search fields ────────────────────────────────────────────
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -118,6 +143,7 @@ class Recipient(Base):
     country: Mapped[str | None] = mapped_column(String(255), nullable=True)
     city: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)  # IANA name, e.g. "Asia/Kolkata"
 
     email_logs: Mapped[list["EmailLog"]] = relationship("EmailLog", back_populates="recipient")
     group_memberships: Mapped[list["RecipientGroupMember"]] = relationship(
@@ -132,18 +158,24 @@ class Recipient(Base):
 
 
 class SuppressionEntry(Base):
-    """Append-only blacklist audit log. View-only from the UI — never edited/deleted."""
+    """Blacklist audit log. Rows are never edited or hard-deleted — an admin
+    override sets `overridden_at` instead, so the historical record (why an
+    address was suppressed, and that it was later manually cleared) survives.
+    An entry is "currently active" iff `overridden_at is None`."""
 
     __tablename__ = "suppression_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    reason: Mapped[str] = mapped_column(String(50), nullable=False)  # hard_bounce, domain_rejected, mail_server_blocked, complaint, manual
+    reason: Mapped[str] = mapped_column(String(50), nullable=False)  # hard_bounce, soft_bounce_threshold_exceeded, domain_rejected, mail_server_blocked, complaint, manual
+    bounce_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # Permanent, Transient
+    smtp_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     campaign_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=True)
     recipient_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("recipients.id"), nullable=True)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    overridden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     campaign: Mapped["Campaign | None"] = relationship("Campaign")
     recipient: Mapped["Recipient | None"] = relationship("Recipient")
@@ -246,6 +278,19 @@ class CampaignSequenceStage(Base):
     cta: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="sequence_stages")
+
+
+class AppSetting(Base):
+    """Single-row table (id is always 1) holding runtime-configurable
+    deliverability settings, so they can be changed from Settings without a
+    server restart or env var edit."""
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    soft_bounce_threshold: Mapped[int] = mapped_column(Integer, default=3)
+    send_interval_seconds: Mapped[int] = mapped_column(Integer, default=12)
+    suppress_on_tags: Mapped[str] = mapped_column(Text, default="[]")  # JSON list, e.g. ["Negative", "Cold"]
 
 
 class EmailLog(Base):

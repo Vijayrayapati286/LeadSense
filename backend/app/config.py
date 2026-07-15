@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     use_mock_groq: bool = True
 
+    # Soft bounces (transient delivery failures) are retried; after this many
+    # soft bounces for the same address, it gets suppressed too.
+    soft_bounce_threshold: int = 3
+
     @property
     def azure_authority(self) -> str:
         return f"https://login.microsoftonline.com/{self.azure_tenant_id}"

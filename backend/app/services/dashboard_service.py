@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import Campaign, EmailLog, Template
+from app.models import Campaign, EmailLog, Recipient, SuppressionEntry, Template
 
 
 class DashboardService:
@@ -20,6 +20,26 @@ class DashboardService:
 
         ai_templates = db.query(Template).filter(Template.type == "ai").count()
 
+        hard_bounces = (
+            db.query(SuppressionEntry)
+            .filter(SuppressionEntry.reason == "hard_bounce", SuppressionEntry.overridden_at.is_(None))
+            .count()
+        )
+        soft_bounces_pending = (
+            db.query(Recipient)
+            .filter(Recipient.soft_bounce_count > 0, Recipient.is_suppressed == False)  # noqa: E712
+            .count()
+        )
+        bounced_suppressions = (
+            db.query(SuppressionEntry)
+            .filter(
+                SuppressionEntry.reason.in_(["hard_bounce", "soft_bounce_threshold_exceeded"]),
+                SuppressionEntry.overridden_at.is_(None),
+            )
+            .count()
+        )
+        bounce_rate = round((bounced_suppressions / sent_count) * 100, 2) if sent_count else 0.0
+
         return {
             "total_campaigns": total_campaigns,
             "emails_sent": sent_count,
@@ -27,6 +47,9 @@ class DashboardService:
             "failed_emails": failed_count,
             "active_campaigns": active_campaigns,
             "ai_generated_emails": ai_templates,
+            "hard_bounces": hard_bounces,
+            "soft_bounces_pending": soft_bounces_pending,
+            "bounce_rate": bounce_rate,
         }
 
     def get_emails_per_day(self, db: Session, days: int = 7) -> list[dict]:

@@ -1,4 +1,4 @@
-export default function StatCard({ title, value, icon: Icon, color = 'primary', trend }) {
+export default function StatCard({ title, value, icon: Icon, color = 'primary', trend, subtitle }) {
   const colorClasses = {
     primary: 'bg-primary-50 text-primary-600',
     green: 'bg-green-50 text-green-600',
@@ -14,6 +14,7 @@ export default function StatCard({ title, value, icon: Icon, color = 'primary', 
         <div>
           <p className="text-sm font-medium text-gray-500">{title}</p>
           <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
+          {subtitle && <p className="text-xs text-gray-400 mt-1">{subtitle}</p>}
           {trend && (
             <p className={`text-xs mt-1 ${trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
               {trend > 0 ? '↑' : '↓'} {Math.abs(trend)}% from last week

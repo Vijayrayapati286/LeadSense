@@ -52,7 +52,7 @@ export default function EmailLogsPage() {
         <div className="flex flex-wrap items-center gap-4">
           <SearchInput
             onChange={debouncedSearch}
-            placeholder="Search by contact or campaign..."
+            placeholder="Search by prospect or campaign..."
             className="flex-1 min-w-[200px]"
           />
           <select
@@ -77,7 +77,7 @@ export default function EmailLogsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b">
                   <tr className="text-left text-gray-500">
-                    <th className="px-6 py-3 font-medium">Contact</th>
+                    <th className="px-6 py-3 font-medium">Prospect</th>
                     <th className="px-6 py-3 font-medium">Campaign</th>
                     <th className="px-6 py-3 font-medium">Date</th>
                     <th className="px-6 py-3 font-medium">Status</th>
@@ -88,7 +88,7 @@ export default function EmailLogsPage() {
                   {logs.map((log) => (
                     <tr key={log.id} className="border-b border-gray-50 hover:bg-gray-50/50">
                       <td className="px-6 py-4">
-                        <p className="font-medium text-gray-900">{log.recipient_name || `Contact #${log.recipient_id}`}</p>
+                        <p className="font-medium text-gray-900">{log.recipient_name || `Prospect #${log.recipient_id}`}</p>
                         <p className="text-xs text-gray-500">{log.recipient_email}</p>
                       </td>
                       <td className="px-6 py-4 text-gray-600">{log.campaign_name || `Campaign #${log.campaign_id}`}</td>

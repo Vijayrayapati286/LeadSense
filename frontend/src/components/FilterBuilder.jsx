@@ -20,16 +20,19 @@ export const FIELD_DEFS = [
   { key: 'skills', label: 'Skills', type: 'distinct' },
   { key: 'seniority_level', label: 'Seniority Level', type: 'distinct' },
   { key: 'lead_status', label: 'Lead Status', type: 'distinct' },
+  { key: 'response_tag', label: 'Response', type: 'fixed_options' },
   { key: 'campaign_status', label: 'Campaign Status', type: 'campaign_status' },
   { key: 'source', label: 'Source', type: 'text' },
-  { key: 'group_ids', label: 'Contact Group', type: 'groups' },
+  { key: 'group_ids', label: 'Prospect Group', type: 'groups' },
   { key: 'tag_ids', label: 'Tags', type: 'tags' },
 ];
 
 const CAMPAIGN_STATUSES = [
-  'not_contacted', 'sent', 'delivered', 'opened', 'clicked',
+  'not_contacted', 'queued', 'sent', 'delivered', 'opened', 'clicked',
   'replied', 'bounced', 'invalid_email', 'suppressed',
 ];
+
+export const RESPONSE_TAGS = ['Cold', 'Negative', 'Warm', 'Hot'];
 
 function AddFilterMenu({ availableFields, onAdd }) {
   const [open, setOpen] = useState(false);
@@ -143,6 +146,15 @@ export default function FilterBuilder({
                     options={tags.map((t) => t.name)}
                     selected={(values[f.key] || []).map((id) => tags.find((t) => t.id === id)?.name).filter(Boolean)}
                     onChange={(names) => onValueChange(f.key, names.map((n) => tags.find((t) => t.name === n)?.id).filter(Boolean))}
+                  />
+                )}
+
+                {f.type === 'fixed_options' && (
+                  <MultiSelectDropdown
+                    label={f.label}
+                    options={RESPONSE_TAGS}
+                    selected={values[f.key] || []}
+                    onChange={(vals) => onValueChange(f.key, vals)}
                   />
                 )}
 

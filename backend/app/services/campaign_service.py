@@ -22,6 +22,8 @@ class CampaignService:
             subject=data.subject,
             status=data.status,
             user_id=user_id,
+            scheduled_at=data.scheduled_at,
+            use_recipient_timezone=data.use_recipient_timezone,
         )
         db.add(campaign)
         db.commit()
