@@ -3,9 +3,11 @@ from app.models.models import (
     Campaign,
     CampaignRecipient,
     CampaignSequenceStage,
+    CustomField,
     EmailLog,
     Mailer,
     Recipient,
+    RecipientCustomValue,
     RecipientGroup,
     RecipientGroupMember,
     RecipientTag,
@@ -32,4 +34,6 @@ __all__ = [
     "CampaignRecipient",
     "CampaignSequenceStage",
     "AppSetting",
+    "CustomField",
+    "RecipientCustomValue",
 ]

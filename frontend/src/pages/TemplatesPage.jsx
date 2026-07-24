@@ -3,6 +3,7 @@ import { FiPlus, FiEdit2, FiTrash2, FiBookOpen } from 'react-icons/fi';
 import { mailerService, templateService } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import { extractPlaceholders } from '../utils/helpers';
+import { buildSamplePreviewContext } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import SearchInput from '../components/ui/SearchInput';
 import Modal from '../components/ui/Modal';
@@ -89,13 +90,7 @@ export default function TemplatesPage() {
     }
   };
 
-  const previewContext = {
-    Name: placeholderValues.Name || 'John Doe',
-    Company: placeholderValues.Company || 'Acme Corp',
-    Designation: placeholderValues.Designation || 'CEO',
-    Industry: placeholderValues.Industry || 'Technology',
-    Email: 'john@acme.com',
-  };
+  const previewContext = buildSamplePreviewContext(placeholderValues);
 
   const openNewMailer = () => {
     setEditingMailer(null);

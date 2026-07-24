@@ -5,19 +5,29 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.config import get_settings
-from app.database.connection import Base
-from app.models import Campaign, EmailLog, Recipient, Template, User  # noqa: F401
+from app.database.connection import Base, DATABASE_URL
+from app.models import (  # noqa: F401
+    Campaign,
+    CampaignRecipient,
+    CampaignSequenceStage,
+    CustomField,
+    EmailLog,
+    Recipient,
+    RecipientCustomValue,
+    RecipientGroup,
+    Template,
+    User,
+)
 
 config = context.config
-settings = get_settings()
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", settings.database_url.replace(
-    "postgresql://", "postgresql+psycopg2://"
-) if settings.database_url.startswith("postgresql") else "sqlite:///./bulk_email.db")
+# Reuse the app's own resolved URL (handles the Postgres-unavailable ->
+# SQLite fallback) instead of recomputing it here, so `alembic upgrade head`
+# actually targets whichever database the running app is using.
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 target_metadata = Base.metadata
 

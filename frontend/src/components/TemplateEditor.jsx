@@ -1,6 +1,25 @@
 import { FiZap, FiEdit3, FiFileText } from 'react-icons/fi';
 import LoadingSpinner from './ui/LoadingSpinner';
 import { renderTemplate, renderMarkdownLite } from '../utils/helpers';
+import { KNOWN_MERGE_FIELDS } from '../utils/mergeFields';
+
+/** Compact reference list of every supported {{Field}} merge tag, so users
+ * don't have to guess which prospect fields a template can pull in. */
+function MergeFieldHints() {
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2">
+      {KNOWN_MERGE_FIELDS.map(({ key, label }) => (
+        <span
+          key={key}
+          title={label}
+          className="text-xs font-mono px-1.5 py-0.5 rounded bg-gray-100 text-gray-600"
+        >
+          {`{{${key}}}`}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export const TEMPLATE_TYPES = [
   { id: 'manual', label: 'Manual', icon: FiEdit3, desc: 'Write your own email with rich text' },
@@ -56,6 +75,8 @@ export default function TemplateEditor({
           <div>
             <label className="label">Email Body</label>
             <textarea className="input-field font-mono text-sm" rows={10} value={emailContent.body} onChange={(e) => updateContent('body', e.target.value)} placeholder="Write your email content here. Use {{Name}}, {{Company}} for personalization. Wrap text in **double asterisks** for bold, and start a line with '- ' for a bullet point." />
+            <p className="text-xs text-gray-400 mt-2">Available fields:</p>
+            <MergeFieldHints />
           </div>
           <div>
             <label className="label">Closing</label>

@@ -28,6 +28,11 @@ class DevLoginRequest(BaseModel):
     name: str | None = None
 
 
+class PasswordLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 class DashboardStats(BaseModel):
@@ -126,9 +131,19 @@ class CampaignResponse(BaseModel):
 
 class TemplateCreate(BaseModel):
     campaign_id: int
+    name: str | None = None
     type: str = Field(..., pattern="^(manual|placeholder|ai)$")
     subject: str
     body: str
+    closing: str | None = None
+    cta: str | None = None
+
+
+class TemplateUpdate(BaseModel):
+    name: str | None = None
+    type: str | None = Field(None, pattern="^(manual|placeholder|ai)$")
+    subject: str | None = None
+    body: str | None = None
     closing: str | None = None
     cta: str | None = None
 
@@ -138,6 +153,7 @@ class TemplateResponse(BaseModel):
 
     id: int
     campaign_id: int
+    name: str | None = None
     type: str
     subject: str
     body: str
@@ -272,6 +288,20 @@ class RecipientResponse(BaseModel):
     source: str | None = None
 
 
+class RecipientCreate(BaseModel):
+    """Single-prospect "Add Manually" form — optionally tagged straight into
+    a campaign (and one of its templates/lists) in the same call."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    email: EmailStr
+    company: str | None = None
+    designation: str | None = None
+    industry: str | None = None
+    campaign_id: int | None = None
+    template_id: int | None = None
+    group_name: str | None = None
+
+
 class RecipientListResponse(BaseModel):
     items: list[RecipientResponse]
     total: int
@@ -288,6 +318,7 @@ class SelectRecipientsRequest(BaseModel):
 
 class UploadExcelResponse(BaseModel):
     imported: int
+    updated: int = 0
     message: str
     group_name: str | None = None
 
@@ -369,6 +400,20 @@ class AddGroupMembersRequest(BaseModel):
     recipient_ids: list[int]
 
 
+# ── Custom Merge Fields ─────────────────────────────────────────────────────────
+
+class CustomFieldCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class CustomFieldResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    created_at: datetime
+
+
 # ── Tags ───────────────────────────────────────────────────────────────────────
 
 class TagCreate(BaseModel):
@@ -434,6 +479,33 @@ class CampaignRecipientListResponse(BaseModel):
     total: int
 
 
+# ── Campaign Lists ("By List" browse mode) ────────────────────────────────────
+
+class CampaignListSummaryResponse(BaseModel):
+    group_id: int
+    name: str
+    total: int
+    sent_count: int
+    template_id: int | None = None
+
+
+class CampaignListMemberResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    company: str | None = None
+    designation: str | None = None
+    industry: str | None = None
+    is_suppressed: bool = False
+    suppression_reason: str | None = None
+    status: str
+    template_id: int | None = None
+
+
+class RetagListRequest(BaseModel):
+    template_id: int | None = None
+
+
 # ── Campaign Sequence Stages ───────────────────────────────────────────────────
 
 DelayUnit = Literal["minutes", "hours", "days"]
@@ -481,9 +553,16 @@ class SendEmailRequest(BaseModel):
     recipient_ids: list[int] | None = None
 
 
+class IncompleteRecipientInfo(BaseModel):
+    email: str
+    missing_fields: list[str]
+
+
 class SendEmailResponse(BaseModel):
     queued: int
     skipped_suppressed: int = 0
+    skipped_incomplete_data: int = 0
+    incomplete: list[IncompleteRecipientInfo] = []
     immediate_sent: int = 0
 
 

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiMail, FiShield } from 'react-icons/fi';
+import { FiMail, FiShield, FiLock } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import { authService } from '../services/services';
@@ -10,9 +10,26 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [devName, setDevName] = useState('');
   const [devEmail, setDevEmail] = useState('');
-  const { devLogin } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const { devLogin, passwordLogin } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+
+  const handlePasswordLogin = async (e) => {
+    e.preventDefault();
+    setPasswordLoading(true);
+    try {
+      await passwordLogin(email.trim(), password);
+      toast.success('Logged in successfully');
+      navigate('/dashboard');
+    } catch {
+      toast.error('Invalid email or password');
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
 
   const handleMicrosoftLogin = async () => {
     setLoading(true);
@@ -80,6 +97,52 @@ export default function LoginPage() {
           </div>
 
           <div className="card">
+            <form onSubmit={handlePasswordLogin} className="space-y-3 mb-4">
+              <div>
+                <label className="label">Email</label>
+                <input
+                  type="email"
+                  required
+                  placeholder="you@feuji.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label className="label">Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={passwordLoading}
+                className="w-full btn-primary flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {passwordLoading ? <LoadingSpinner size="sm" /> : (
+                  <>
+                    <FiLock size={16} />
+                    Sign in
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200" />
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="px-3 bg-white text-gray-500">or</span>
+              </div>
+            </div>
+
             <button
               onClick={handleMicrosoftLogin}
               disabled={loading}

@@ -59,9 +59,9 @@ def get_db() -> Generator:
 
 
 def init_db() -> None:
-    """Create all tables and seed dummy data if empty."""
+    """Create all tables, seed dummy data if empty, and provision named users."""
     from app.models import Campaign, EmailLog, Recipient, Template, User
-    from app.services.seed_service import seed_dummy_data
+    from app.services.seed_service import provision_core_users, seed_dummy_data
 
     Base.metadata.create_all(bind=engine)
 
@@ -69,5 +69,6 @@ def init_db() -> None:
     try:
         if db.query(Campaign).count() == 0:
             seed_dummy_data(db)
+        provision_core_users(db)
     finally:
         db.close()

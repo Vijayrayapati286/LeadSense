@@ -10,6 +10,41 @@ def extract_placeholders(text: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"\{\{(\w+)\}\}", text)))
 
 
+# Every {{Key}} -> Recipient column a template can merge in, matching the
+# mandatory prospect-info header set (Name, Email, Company, Designation,
+# Designation Level, Industry, Department, Country, State, City, Company
+# Size, Years of Experience, Skills, Source, Status). Kept in sync with
+# frontend/src/utils/mergeFields.js — mirrored there since preview rendering
+# happens client-side.
+KNOWN_MERGE_FIELDS: dict[str, str] = {
+    "Name": "name",
+    "Email": "email",
+    "Company": "company",
+    "Designation": "designation",
+    "DesignationLevel": "designation_level",
+    "Industry": "industry",
+    "Department": "department",
+    "Country": "country",
+    "State": "state",
+    "City": "city",
+    "CompanySize": "company_size",
+    "YearsOfExperience": "years_of_experience",
+    "Skills": "skills",
+    "Source": "source",
+    "Status": "status",
+}
+
+
+def build_recipient_context(recipient) -> dict[str, str]:
+    """Build the {{Key}}: value context for rendering a template against a
+    real Recipient row — every known merge field, plus any approved custom
+    fields (RecipientCustomValue) this recipient has a value for."""
+    context = {key: (getattr(recipient, field, None) or "") for key, field in KNOWN_MERGE_FIELDS.items()}
+    for cv in getattr(recipient, "custom_values", []) or []:
+        context[cv.custom_field.name] = cv.value or ""
+    return context
+
+
 def render_template(text: str, context: dict[str, str]) -> str:
     """Replace {{Key}} placeholders with context values."""
     result = text

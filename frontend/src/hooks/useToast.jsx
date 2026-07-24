@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo } from 'react';
 
 const ToastContext = createContext(null);
 
@@ -15,12 +15,16 @@ export function ToastProvider({ children }) {
     }, duration);
   }, []);
 
-  const toast = {
+  // Stable identity across re-renders — a fresh object here would break any
+  // consumer that puts `toast` in a useCallback/useEffect dependency array:
+  // every toast.error() would re-render this provider, minting a new object,
+  // re-triggering that effect, which could error and toast again — a loop.
+  const toast = useMemo(() => ({
     success: (msg) => addToast(msg, 'success'),
     error: (msg) => addToast(msg, 'error'),
     info: (msg) => addToast(msg, 'info'),
     warning: (msg) => addToast(msg, 'warning'),
-  };
+  }), [addToast]);
 
   const removeToast = (id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));

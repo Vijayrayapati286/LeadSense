@@ -13,6 +13,7 @@ from app.middleware.auth import get_current_user
 from app.models import Recipient, SavedSearch, User
 from app.schemas.schemas import (
     MessageResponse,
+    RecipientCreate,
     RecipientListResponse,
     RecipientResponse,
     ResponseTagRequest,
@@ -23,6 +24,7 @@ from app.schemas.schemas import (
     UploadExcelResponse,
 )
 from app.services.app_settings_service import AppSettingsService
+from app.services.campaign_service import CampaignService
 from app.services.excel_service import ExcelService
 from app.services.recipient_group_service import RecipientGroupService
 from app.services.recipient_query_service import (
@@ -38,6 +40,7 @@ excel_service = ExcelService()
 group_service = RecipientGroupService()
 app_settings_service = AppSettingsService()
 suppression_service = SuppressionService()
+campaign_service = CampaignService()
 
 EXPORT_COLUMNS = [
     "id", "name", "email", "company", "designation", "designation_level", "industry",
@@ -89,6 +92,8 @@ def _search_filters(
 async def upload_excel(
     file: UploadFile = File(...),
     group_name: str = Form(...),
+    campaign_id: int | None = Form(None),
+    template_id: int | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -99,16 +104,47 @@ async def upload_excel(
 
     content = await file.read()
     try:
-        imported, recipient_ids = excel_service.import_recipients(db, content)
+        imported, updated, recipient_ids = excel_service.import_recipients(db, content)
 
         group = group_service.get_or_create(db, group_name.strip())
         group_service.add_members(db, group.id, recipient_ids)
 
-        message = f"Successfully imported {imported} recipients into list '{group_name.strip()}'"
+        if campaign_id is not None:
+            campaign_service.tag_recipients(db, campaign_id, recipient_ids, template_id, group_id=group.id)
 
-        return UploadExcelResponse(imported=imported, message=message, group_name=group_name.strip())
+        message = f"Imported {imported} new recipient(s)"
+        if updated:
+            message += f" and updated {updated} existing recipient(s)"
+        message += f" into list '{group_name.strip()}'"
+
+        return UploadExcelResponse(imported=imported, updated=updated, message=message, group_name=group_name.strip())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("", response_model=RecipientResponse, status_code=201)
+def create_recipient(
+    data: RecipientCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The "Add Manually" prospect form — creates (or reuses, if the email
+    already exists) a single recipient, optionally tagging it straight into
+    a campaign + template + list in the same call."""
+    recipient, _created = excel_service.create_single_recipient(
+        db, {"name": data.name, "email": data.email, "company": data.company,
+             "designation": data.designation, "industry": data.industry}
+    )
+
+    group_id = None
+    if data.group_name and data.group_name.strip():
+        group = group_service.get_or_create(db, data.group_name.strip())
+        group_service.add_members(db, group.id, [recipient.id])
+        group_id = group.id
+
+    if data.campaign_id is not None:
+        campaign_service.tag_recipients(db, data.campaign_id, [recipient.id], data.template_id, group_id=group_id)
+    return RecipientResponse.model_validate(recipient)
 
 
 @router.get("", response_model=RecipientListResponse)

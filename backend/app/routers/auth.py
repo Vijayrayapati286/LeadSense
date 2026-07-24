@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import User
-from app.schemas.schemas import AuthCallbackResponse, DevLoginRequest, UserResponse
+from app.schemas.schemas import AuthCallbackResponse, DevLoginRequest, PasswordLoginRequest, UserResponse
 from app.services.auth_service import AuthService
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,21 @@ def dev_login(data: DevLoginRequest | None = None, db: Session = Depends(get_db)
         kwargs["name"] = data.name
 
     result = auth_service.dev_login(db, **kwargs)
+    return AuthCallbackResponse(
+        access_token=result["access_token"],
+        user=UserResponse.model_validate(result["user"]),
+    )
+
+
+@router.post("/login", response_model=AuthCallbackResponse)
+def password_login(data: PasswordLoginRequest, db: Session = Depends(get_db)):
+    """Email+password login for named team members (see provision_core_users) —
+    distinct from both real Azure AD SSO and the unauthenticated dev-login
+    fallback used before real accounts exist."""
+    try:
+        result = auth_service.password_login(db, data.email, data.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
     return AuthCallbackResponse(
         access_token=result["access_token"],
         user=UserResponse.model_validate(result["user"]),

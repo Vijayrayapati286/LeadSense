@@ -5,7 +5,7 @@ import random
 import uuid
 
 from app.config import get_settings
-from app.utils.helpers import markdown_to_html, markdown_to_plain, render_template
+from app.utils.helpers import KNOWN_MERGE_FIELDS, markdown_to_html, markdown_to_plain, render_template
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -37,8 +37,11 @@ class SESService:
         return to_email
 
     def _build_source(self, from_name: str | None) -> str:
-        """Build the SES Source header. Display name is freeform (e.g. the
-        sender's SSO email) but the address must stay the verified SES identity."""
+        """Build the SES Source header. Display name is the sending rep's
+        real name (from their SSO user record); the address stays the single
+        verified SES sender identity — swapping AWS_SES_SENDER_EMAIL to the
+        isolated go.feuji.com subdomain address, once that identity exists in
+        SES/DNS, requires no further code change here."""
         if from_name:
             return f'"{from_name}" <{self.settings.aws_ses_sender_email}>'
         return self.settings.aws_ses_sender_email
@@ -89,19 +92,15 @@ class SESService:
         """
         Send bulk emails with placeholder replacement.
 
-        Each recipient dict should have: email, name, company, designation, industry
+        Each recipient dict maps merge-field keys (Name, Email, Company, ...
+        every key in KNOWN_MERGE_FIELDS) to values; any field the caller
+        didn't supply just renders blank.
         """
         sent, failed, pending = 0, 0, 0
         details = []
 
         for recipient in recipients:
-            context = {
-                "Name": recipient.get("name", ""),
-                "Email": recipient.get("email", ""),
-                "Company": recipient.get("company", ""),
-                "Designation": recipient.get("designation", ""),
-                "Industry": recipient.get("industry", ""),
-            }
+            context = {key: recipient.get(field, "") for key, field in KNOWN_MERGE_FIELDS.items()}
 
             rendered_subject = render_template(subject_template, context)
             rendered_body = render_template(body_template, context)

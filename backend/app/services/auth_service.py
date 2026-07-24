@@ -4,6 +4,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import msal
 from jose import jwt
 from sqlalchemy.orm import Session
@@ -92,6 +93,24 @@ class AuthService:
             "department": "Sales",
         }
         user = self._upsert_user(db, profile)
+        token = self._create_jwt(user)
+        return {"access_token": token, "user": user}
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    @staticmethod
+    def verify_password(password: str, password_hash: str) -> bool:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+
+    def password_login(self, db: Session, email: str, password: str) -> dict:
+        """Email+password login for named team members provisioned with a
+        set password (see seed_service.provision_core_users), independent of
+        both Azure AD and the unauthenticated dev-login fallback."""
+        user = db.query(User).filter(User.email == email).first()
+        if not user or not user.password_hash or not self.verify_password(password, user.password_hash):
+            raise ValueError("Invalid email or password")
         token = self._create_jwt(user)
         return {"access_token": token, "user": user}
 

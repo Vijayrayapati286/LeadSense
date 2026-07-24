@@ -3,6 +3,7 @@ import api from './api';
 export const authService = {
   getLoginUrl: () => api.get('/auth/login'),
   devLogin: (data) => api.post('/auth/dev-login', data),
+  passwordLogin: (email, password) => api.post('/auth/login', { email, password }),
   getMe: () => api.get('/auth/me'),
   logout: () => api.post('/auth/logout'),
 };
@@ -16,10 +17,16 @@ export const campaignService = {
   getAll: () => api.get('/campaigns'),
   getById: (id) => api.get(`/campaign/${id}`),
   getTemplate: (id) => api.get(`/campaign/${id}/template`),
+  getTemplates: (id) => api.get(`/campaign/${id}/templates`),
+  deleteTemplate: (templateId) => api.delete(`/campaign/template/${templateId}`),
+  updateTemplate: (templateId, data) => api.put(`/campaign/template/${templateId}`, data),
   update: (id, data) => api.put(`/campaign/${id}`, data),
   delete: (id) => api.delete(`/campaign/${id}`),
   saveTemplate: (id, data) => api.post(`/campaign/${id}/template`, data),
   getRecipients: (id) => api.get(`/campaign/${id}/recipients`),
+  getLists: (id) => api.get(`/campaign/${id}/lists`),
+  getListMembers: (id, groupId) => api.get(`/campaign/${id}/lists/${groupId}/recipients`),
+  retagList: (id, groupId, templateId) => api.put(`/campaign/${id}/lists/${groupId}/template`, { template_id: templateId }),
 };
 
 export const sequenceService = {
@@ -30,14 +37,17 @@ export const sequenceService = {
 };
 
 export const recipientService = {
-  uploadExcel: (file, groupName) => {
+  uploadExcel: (file, groupName, campaignId, templateId) => {
     const formData = new FormData();
     formData.append('file', file);
     if (groupName) formData.append('group_name', groupName);
+    if (campaignId) formData.append('campaign_id', campaignId);
+    if (templateId) formData.append('template_id', templateId);
     return api.post('/recipients/upload-excel', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+  create: (data) => api.post('/recipients', data),
   getAll: (params) => api.get('/recipients', { params }),
   selectRecipients: (data) => api.post('/recipients/select-recipients', data),
   search: (params) => api.get('/recipients/search', { params }),
@@ -89,6 +99,11 @@ export const tagService = {
   delete: (id) => api.delete(`/tags/${id}`),
   assign: (id, recipientIds) => api.post(`/tags/${id}/members`, { recipient_ids: recipientIds }),
   unassign: (id, recipientId) => api.delete(`/tags/${id}/members/${recipientId}`),
+};
+
+export const customFieldService = {
+  getAll: () => api.get('/custom-fields'),
+  create: (name) => api.post('/custom-fields', { name }),
 };
 
 export const appSettingsService = {

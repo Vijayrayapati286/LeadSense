@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import SessionLocal
 from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template
 from app.services.ses_service import SESService
-from app.utils.helpers import render_template, utc_now
+from app.utils.helpers import build_recipient_context, render_template, utc_now
 
 logger = logging.getLogger(__name__)
 ses_service = SESService()
@@ -90,23 +90,20 @@ def process_due_followups() -> None:
                 continue
 
             recipient = cr.recipient
-            context = {
-                "Name": recipient.name,
-                "Email": recipient.email,
-                "Company": recipient.company or "",
-                "Designation": recipient.designation or "",
-                "Industry": recipient.industry or "",
-            }
+            context = build_recipient_context(recipient)
             subject = render_template(stage.subject, context)
             body = render_template(stage.body, context)
             if stage.closing:
                 body = f"{body}\n\n{render_template(stage.closing, context)}"
 
+            owner = cr.campaign.owner_user
             result = ses_service.send_email(
                 to_email=recipient.email,
                 subject=subject,
                 body_html=body.replace("\n", "<br>"),
                 body_text=body,
+                from_name=owner.name if owner else None,
+                reply_to=owner.email if owner else None,
             )
 
             db.add(
@@ -171,28 +168,36 @@ def process_queued_initial_sends() -> None:
                     cr.next_send_at = reschedule
                     continue  # stays "queued" — outside business hours, try again then
 
-            template = db.query(Template).filter(Template.campaign_id == cr.campaign_id).first()
+            template = None
+            if cr.template_id:
+                template = db.query(Template).filter(Template.id == cr.template_id).first()
+            if not template:
+                # Untagged, or the tagged template was deleted — fall back to
+                # the campaign's primary (first-created) template.
+                template = (
+                    db.query(Template)
+                    .filter(Template.campaign_id == cr.campaign_id)
+                    .order_by(Template.created_at.asc())
+                    .first()
+                )
             if not template:
                 cr.status = "failed"
                 cr.next_send_at = None
                 continue
-            context = {
-                "Name": recipient.name,
-                "Email": recipient.email,
-                "Company": recipient.company or "",
-                "Designation": recipient.designation or "",
-                "Industry": recipient.industry or "",
-            }
+            context = build_recipient_context(recipient)
             subject = render_template(template.subject, context)
             body = render_template(template.body, context)
             if template.closing:
                 body = f"{body}\n\n{render_template(template.closing, context)}"
 
+            owner = cr.campaign.owner_user
             result = ses_service.send_email(
                 to_email=recipient.email,
                 subject=subject,
                 body_html=body.replace("\n", "<br>"),
                 body_text=body,
+                from_name=owner.name if owner else None,
+                reply_to=owner.email if owner else None,
             )
 
             db.add(

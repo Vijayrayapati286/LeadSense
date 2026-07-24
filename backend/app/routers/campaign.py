@@ -7,6 +7,8 @@ from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import CampaignRecipient, Recipient, User
 from app.schemas.schemas import (
+    CampaignListMemberResponse,
+    CampaignListSummaryResponse,
     CampaignRecipientListResponse,
     CampaignRecipientResponse,
     CampaignCreate,
@@ -16,8 +18,10 @@ from app.schemas.schemas import (
     CampaignSequenceStageUpdate,
     CampaignUpdate,
     MessageResponse,
+    RetagListRequest,
     TemplateCreate,
     TemplateResponse,
+    TemplateUpdate,
 )
 from app.services.campaign_service import CampaignService
 
@@ -71,6 +75,43 @@ def get_campaign_template(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     return TemplateResponse.model_validate(template)
+
+
+@router.get("/campaign/{campaign_id}/templates", response_model=list[TemplateResponse])
+def list_campaign_templates(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    templates = campaign_service.list_templates(db, campaign_id)
+    return [TemplateResponse.model_validate(t) for t in templates]
+
+
+@router.delete("/campaign/template/{template_id}", response_model=MessageResponse)
+def delete_campaign_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        campaign_service.delete_template(db, template_id)
+        return MessageResponse(message="Template deleted")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.put("/campaign/template/{template_id}", response_model=TemplateResponse)
+def update_campaign_template(
+    template_id: int,
+    data: TemplateUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        template = campaign_service.update_template(db, template_id, data.model_dump(exclude_unset=True))
+        return TemplateResponse.model_validate(template)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.put("/campaign/{campaign_id}", response_model=CampaignResponse)
@@ -186,3 +227,49 @@ def get_campaign_recipients(
         items.append(response)
 
     return CampaignRecipientListResponse(items=items, total=len(items))
+
+
+@router.get("/campaign/{campaign_id}/lists", response_model=list[CampaignListSummaryResponse])
+def list_campaign_lists(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return campaign_service.list_campaign_lists(db, campaign_id)
+
+
+@router.get("/campaign/{campaign_id}/lists/{group_id}/recipients", response_model=list[CampaignListMemberResponse])
+def get_campaign_list_members(
+    campaign_id: int,
+    group_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = campaign_service.get_list_members(db, campaign_id, group_id)
+    return [
+        CampaignListMemberResponse(
+            id=recipient.id,
+            name=recipient.name,
+            email=recipient.email,
+            company=recipient.company,
+            designation=recipient.designation,
+            industry=recipient.industry,
+            is_suppressed=recipient.is_suppressed,
+            suppression_reason=recipient.suppression_reason,
+            status=cr.status,
+            template_id=cr.template_id,
+        )
+        for cr, recipient in rows
+    ]
+
+
+@router.put("/campaign/{campaign_id}/lists/{group_id}/template", response_model=MessageResponse)
+def retag_campaign_list(
+    campaign_id: int,
+    group_id: int,
+    data: RetagListRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    updated = campaign_service.retag_list(db, campaign_id, group_id, data.template_id)
+    return MessageResponse(message=f"Re-tagged {updated} prospect(s)")

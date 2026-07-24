@@ -16,6 +16,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     department: Mapped[str] = mapped_column(String(255), default="Sales")
     azure_oid: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     campaigns: Mapped[list["Campaign"]] = relationship("Campaign", back_populates="owner_user")
@@ -62,6 +63,7 @@ class Template(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     campaign_id: Mapped[int] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     type: Mapped[str] = mapped_column(String(50), nullable=False)  # manual, placeholder, ai
     subject: Mapped[str] = mapped_column(String(500), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
@@ -155,6 +157,9 @@ class Recipient(Base):
     tag_links: Mapped[list["RecipientTag"]] = relationship(
         "RecipientTag", back_populates="recipient", cascade="all, delete-orphan"
     )
+    custom_values: Mapped[list["RecipientCustomValue"]] = relationship(
+        "RecipientCustomValue", back_populates="recipient", cascade="all, delete-orphan"
+    )
 
 
 class SuppressionEntry(Base):
@@ -228,6 +233,39 @@ class RecipientTag(Base):
     tag: Mapped["Tag"] = relationship("Tag", back_populates="recipient_links")
 
 
+class CustomField(Base):
+    """A merge-field name a user has approved beyond the standard header set
+    (Name, Email, Company, Designation, ...) — registered the first time
+    someone chooses to proceed with an unrecognized {{Field}} in a template,
+    so it's recognized (not re-flagged) from then on. Actual per-prospect
+    values live in RecipientCustomValue, populated via Excel upload columns
+    matching this field's name."""
+
+    __tablename__ = "custom_fields"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RecipientCustomValue(Base):
+    """A recipient's value for one approved custom merge field — captured
+    from an Excel upload column whose (normalized) header matches a
+    CustomField's name. Upserted on re-upload so adding the column later
+    backfills existing prospects rather than requiring a fresh import."""
+
+    __tablename__ = "recipient_custom_values"
+    __table_args__ = (UniqueConstraint("recipient_id", "custom_field_id", name="uq_recipient_custom_field"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    recipient_id: Mapped[int] = mapped_column(Integer, ForeignKey("recipients.id"), nullable=False)
+    custom_field_id: Mapped[int] = mapped_column(Integer, ForeignKey("custom_fields.id"), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+
+    recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="custom_values")
+    custom_field: Mapped["CustomField"] = relationship("CustomField")
+
+
 class SavedSearch(Base):
     __tablename__ = "saved_searches"
 
@@ -248,6 +286,8 @@ class CampaignRecipient(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     campaign_id: Mapped[int] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=False)
     recipient_id: Mapped[int] = mapped_column(Integer, ForeignKey("recipients.id"), nullable=False)
+    template_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("templates.id"), nullable=True)
+    group_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("recipient_groups.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="not_contacted", index=True)
     current_stage: Mapped[int] = mapped_column(Integer, default=0)
     next_send_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -258,6 +298,8 @@ class CampaignRecipient(Base):
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="campaign_recipients")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="campaign_links")
+    template: Mapped["Template | None"] = relationship("Template")
+    group: Mapped["RecipientGroup | None"] = relationship("RecipientGroup")
 
 
 class CampaignSequenceStage(Base):

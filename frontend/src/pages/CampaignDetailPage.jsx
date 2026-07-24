@@ -11,16 +11,27 @@ import {
   FiClock,
   FiPlus,
   FiTrash2,
-  FiBarChart2,
+  FiUpload,
+  FiUserPlus,
+  FiSave,
+  FiBookOpen,
+  FiList,
+  FiGrid,
+  FiLayers,
 } from 'react-icons/fi';
 import {
   campaignService,
   recipientService,
   sequenceService,
+  templateService,
+  mailerService,
   emailService,
+  customFieldService,
 } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import { useContactSearch } from '../hooks/useContactSearch';
+import { extractPlaceholders } from '../utils/helpers';
+import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
 import SearchInput from '../components/ui/SearchInput';
@@ -29,17 +40,28 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmailPreview from '../components/EmailPreview';
 import FilterBuilder from '../components/FilterBuilder';
+import TemplateEditor from '../components/TemplateEditor';
 import { formatDate, formatDateTime, renderTemplate, debounce } from '../utils/helpers';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'template', label: 'Template' },
-  { id: 'sequence', label: 'Follow-up Sequence' },
   { id: 'candidates', label: 'Prospects' },
-  { id: 'tracking', label: 'Tracking' },
+  { id: 'sequence', label: 'Follow-up Sequence' },
 ];
 
 const EMPTY_STAGE_FORM = { delay_value: 3, delay_unit: 'days', subject: '', body: '', closing: '', cta: '' };
+const EMPTY_TEMPLATE_CONTENT = { subject: '', body: '', closing: '', cta: '' };
+const EMPTY_RECIPIENT_FORM = { name: '', email: '', company: '', designation: '', industry: '' };
+
+// Local time, 5 minutes out — formatted for a <input type="datetime-local">'s
+// value/min, and a sensible default the moment "Schedule for later" is picked.
+function defaultScheduleValue() {
+  const d = new Date(Date.now() + 5 * 60 * 1000);
+  d.setSeconds(0, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 export default function CampaignDetailPage() {
   const { id } = useParams();
@@ -50,7 +72,8 @@ export default function CampaignDetailPage() {
   const preselectedContactIds = location.state?.preselectedContactIds;
 
   const [campaign, setCampaign] = useState(null);
-  const [template, setTemplate] = useState(null);
+  const [templates, setTemplates] = useState([]);
+  const primaryTemplate = templates[0] ?? null;
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(preselectedContactIds ? 'candidates' : 'overview');
 
@@ -58,7 +81,7 @@ export default function CampaignDetailPage() {
     search, setSearch, sortBy, setSortBy, sortOrder, setSortOrder,
     activeFieldKeys, filterValues, distinctOptions, distinctLoading,
     results, total, page, setPage, loading: contactsLoading,
-    groups, tags, campaigns, activeParams,
+    groups, tags, campaigns, activeParams, loadResults,
     handleAddField, handleRemoveField, handleValueChange, clearAllFilters,
   } = useContactSearch({ toast });
 
@@ -74,6 +97,8 @@ export default function CampaignDetailPage() {
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRecipientId, setPreviewRecipientId] = useState(null);
+  const [scheduleAt, setScheduleAt] = useState('');
+  const [useRecipientTz, setUseRecipientTz] = useState(false);
   const [sending, setSending] = useState(false);
 
   const [stages, setStages] = useState([]);
@@ -82,17 +107,14 @@ export default function CampaignDetailPage() {
   const [addingStage, setAddingStage] = useState(false);
   const [deletingStageId, setDeletingStageId] = useState(null);
 
-  const [tracking, setTracking] = useState([]);
-  const [trackingLoading, setTrackingLoading] = useState(false);
-
   const loadCampaign = useCallback(async () => {
     try {
-      const [campaignRes, templateRes] = await Promise.all([
+      const [campaignRes, templatesRes] = await Promise.all([
         campaignService.getById(id),
-        campaignService.getTemplate(id).catch(() => null),
+        campaignService.getTemplates(id).catch(() => ({ data: [] })),
       ]);
       setCampaign(campaignRes.data);
-      setTemplate(templateRes?.data ?? null);
+      setTemplates(templatesRes?.data ?? []);
     } catch {
       toast.error('Failed to load campaign details');
     } finally {
@@ -103,6 +125,15 @@ export default function CampaignDetailPage() {
   useEffect(() => {
     loadCampaign();
   }, [loadCampaign]);
+
+  const loadTemplates = useCallback(async () => {
+    try {
+      const { data } = await campaignService.getTemplates(id);
+      setTemplates(data);
+    } catch {
+      toast.error('Failed to load templates');
+    }
+  }, [id, toast]);
 
   const loadStages = useCallback(async () => {
     setStageLoading(true);
@@ -119,30 +150,6 @@ export default function CampaignDetailPage() {
   useEffect(() => {
     if (activeTab === 'sequence') loadStages();
   }, [activeTab, loadStages]);
-
-  const loadTracking = useCallback(async (silent = false) => {
-    if (!silent) setTrackingLoading(true);
-    try {
-      const { data } = await campaignService.getRecipients(id);
-      setTracking(data.items);
-    } catch {
-      if (!silent) toast.error('Failed to load tracking data');
-    } finally {
-      if (!silent) setTrackingLoading(false);
-    }
-  }, [id, toast]);
-
-  useEffect(() => {
-    if (activeTab === 'tracking') loadTracking();
-  }, [activeTab, loadTracking]);
-
-  const hasQueuedRows = tracking.some((t) => t.status === 'queued');
-
-  useEffect(() => {
-    if (activeTab !== 'tracking' || !hasQueuedRows) return;
-    const interval = setInterval(() => loadTracking(true), 5000);
-    return () => clearInterval(interval);
-  }, [activeTab, hasQueuedRows, loadTracking]);
 
   const handleAddStage = async () => {
     if (!stageForm.subject || !stageForm.body) {
@@ -173,6 +180,436 @@ export default function CampaignDetailPage() {
     }
   };
 
+  // ── Template tab — "Add New Template" popup (same fields/options as the
+  // Create Campaign wizard's Template step, reusing <TemplateEditor>). ──────
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState('');
+  const [templateType, setTemplateType] = useState('manual');
+  const [emailContent, setEmailContent] = useState(EMPTY_TEMPLATE_CONTENT);
+  const [placeholderTemplates, setPlaceholderTemplates] = useState([]);
+  const [selectedPlaceholderTemplate, setSelectedPlaceholderTemplate] = useState(null);
+  const [placeholderValues, setPlaceholderValues] = useState({});
+  const [aiPrompt, setAiPrompt] = useState({ additional_context: '' });
+  const [aiLoading, setAiLoading] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [deletingTemplateId, setDeletingTemplateId] = useState(null);
+  const [editingTemplateId, setEditingTemplateId] = useState(null);
+
+  const [mailers, setMailers] = useState([]);
+  const [saveMailerModalOpen, setSaveMailerModalOpen] = useState(false);
+  const [newMailerName, setNewMailerName] = useState('');
+  const [savingMailer, setSavingMailer] = useState(false);
+
+  const [customFields, setCustomFields] = useState([]);
+  const [unknownFields, setUnknownFields] = useState(null);
+
+  useEffect(() => {
+    customFieldService.getAll().then(({ data }) => setCustomFields(data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    mailerService.getAll().then(({ data }) => setMailers(data)).catch(() => {});
+  }, []);
+
+  const resetTemplateForm = () => {
+    setNewTemplateName('');
+    setTemplateType('manual');
+    setEmailContent(EMPTY_TEMPLATE_CONTENT);
+    setSelectedPlaceholderTemplate(null);
+    setPlaceholderValues({});
+    setAiPrompt({ additional_context: '' });
+  };
+
+  const handleOpenAddTemplate = () => {
+    resetTemplateForm();
+    setEditingTemplateId(null);
+    setTemplateModalOpen(true);
+  };
+
+  const handleOpenEditTemplate = (template) => {
+    setEditingTemplateId(template.id);
+    setNewTemplateName(template.name || '');
+    setTemplateType(template.type);
+    setEmailContent({
+      subject: template.subject || '',
+      body: template.body || '',
+      closing: template.closing || '',
+      cta: template.cta || '',
+    });
+    setSelectedPlaceholderTemplate(null);
+    setPlaceholderValues({});
+    setAiPrompt({ additional_context: '' });
+    setTemplateModalOpen(true);
+  };
+
+  const loadPlaceholderTemplates = async () => {
+    if (placeholderTemplates.length > 0) return;
+    try {
+      const { data } = await templateService.getPlaceholderTemplates();
+      setPlaceholderTemplates(data);
+    } catch {
+      toast.error('Failed to load templates');
+    }
+  };
+
+  const handleTemplateTypeChange = (type) => {
+    setTemplateType(type);
+    if (type === 'placeholder') loadPlaceholderTemplates();
+  };
+
+  const handleSelectPlaceholderTemplate = (tpl) => {
+    setSelectedPlaceholderTemplate(tpl);
+    const placeholders = extractPlaceholders(tpl.subject + ' ' + tpl.body);
+    const values = {};
+    placeholders.forEach((p) => { values[p] = ''; });
+    setPlaceholderValues(values);
+    setEmailContent({ subject: tpl.subject, body: tpl.body, closing: '', cta: '' });
+  };
+
+  const handleGenerateAI = async () => {
+    setAiLoading(true);
+    try {
+      const { data } = await templateService.generateAI({
+        campaign_name: campaign.campaign_name,
+        campaign_description: campaign.description,
+        target_audience: campaign.target_audience,
+        additional_context: aiPrompt.additional_context,
+      });
+      setEmailContent({ subject: data.subject, body: data.body, closing: data.closing, cta: data.cta });
+      if (data.is_mock) toast.info('Using mock AI response (OpenAI not configured)');
+      else toast.success('AI email generated successfully');
+    } catch {
+      toast.error('Failed to generate AI template');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleSelectMailer = (mailerId) => {
+    const mailer = mailers.find((m) => String(m.id) === mailerId);
+    if (!mailer) return;
+    setTemplateType(mailer.type);
+    setEmailContent({ subject: mailer.subject, body: mailer.body, closing: mailer.closing || '', cta: mailer.cta || '' });
+    toast.success(`Loaded mailer "${mailer.name}"`);
+  };
+
+  const handleConfirmSaveMailer = async () => {
+    if (!newMailerName.trim()) {
+      toast.error('Enter a name for this mailer');
+      return;
+    }
+    if (!emailContent.subject.trim() || !emailContent.body.trim()) {
+      toast.error('Subject and body are required to save a mailer');
+      return;
+    }
+    setSavingMailer(true);
+    try {
+      await mailerService.create({
+        name: newMailerName.trim(),
+        type: templateType,
+        subject: emailContent.subject,
+        body: emailContent.body,
+        closing: emailContent.closing,
+        cta: emailContent.cta,
+      });
+      toast.success('Saved as a reusable mailer');
+      setSaveMailerModalOpen(false);
+      setNewMailerName('');
+      const { data } = await mailerService.getAll();
+      setMailers(data);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to save mailer');
+    } finally {
+      setSavingMailer(false);
+    }
+  };
+
+  const templatePreviewContext = buildSamplePreviewContext(placeholderValues);
+
+  const performSaveTemplate = async () => {
+    setSavingTemplate(true);
+    try {
+      const payload = {
+        name: newTemplateName.trim() || undefined,
+        type: templateType,
+        subject: emailContent.subject,
+        body: emailContent.body,
+        closing: emailContent.closing,
+        cta: emailContent.cta,
+      };
+      if (editingTemplateId) {
+        await campaignService.updateTemplate(editingTemplateId, payload);
+        toast.success('Template updated');
+      } else {
+        await campaignService.saveTemplate(id, { ...payload, campaign_id: Number(id) });
+        toast.success('Template added');
+      }
+      setTemplateModalOpen(false);
+      setEditingTemplateId(null);
+      loadTemplates();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to save template');
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const handleSaveTemplate = () => {
+    if (!emailContent.subject.trim() || !emailContent.body.trim()) {
+      toast.error('Subject and body are required');
+      return;
+    }
+    const unknown = getUnknownPlaceholders(
+      [emailContent.subject, emailContent.body, emailContent.closing, emailContent.cta],
+      customFields.map((f) => f.name)
+    );
+    if (unknown.length > 0) {
+      setUnknownFields(unknown);
+      return;
+    }
+    performSaveTemplate();
+  };
+
+  const handleProceedWithUnknownFields = async () => {
+    try {
+      await Promise.all(unknownFields.map((name) => customFieldService.create(name)));
+      const { data } = await customFieldService.getAll();
+      setCustomFields(data);
+    } catch {
+      // Registration failing shouldn't block the save the user already confirmed.
+    } finally {
+      performSaveTemplate();
+    }
+  };
+
+  const handleDeleteTemplate = async () => {
+    try {
+      await campaignService.deleteTemplate(deletingTemplateId);
+      toast.success('Template removed');
+      loadTemplates();
+    } catch {
+      toast.error('Failed to remove template');
+    } finally {
+      setDeletingTemplateId(null);
+    }
+  };
+
+  // ── Prospects tab — Upload Excel / Add Manually, both tag the touched
+  // recipient(s) to the chosen template for this campaign. ─────────────────
+  const [uploadGroupName, setUploadGroupName] = useState('');
+  const [listNameError, setListNameError] = useState(false);
+  const [uploadTemplateId, setUploadTemplateId] = useState('');
+  const [uploadingProspects, setUploadingProspects] = useState(false);
+
+  const [addProspectModalOpen, setAddProspectModalOpen] = useState(false);
+  const [recipientForm, setRecipientForm] = useState(EMPTY_RECIPIENT_FORM);
+  const [recipientTemplateId, setRecipientTemplateId] = useState('');
+  const [addRecipientGroupName, setAddRecipientGroupName] = useState('');
+  const [savingRecipient, setSavingRecipient] = useState(false);
+  const [uploadingToList, setUploadingToList] = useState(false);
+
+  const handleListNameChange = (value) => {
+    setUploadGroupName(value);
+    if (value.trim()) setListNameError(false);
+  };
+
+  const requireListName = () => {
+    if (!uploadGroupName.trim()) {
+      setListNameError(true);
+      toast.error('Enter a list name first');
+      return false;
+    }
+    return true;
+  };
+
+  const handleUploadClick = (e) => {
+    if (!requireListName()) e.preventDefault();
+  };
+
+  const handleUploadProspects = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!requireListName()) {
+      e.target.value = '';
+      return;
+    }
+    setUploadingProspects(true);
+    try {
+      const { data } = await recipientService.uploadExcel(file, uploadGroupName.trim(), id, uploadTemplateId || null);
+      toast.success(data.message);
+      setUploadGroupName('');
+      loadResults();
+      if (browseMode === 'lists') loadLists();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Upload failed');
+    } finally {
+      setUploadingProspects(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleOpenAddProspect = () => {
+    if (!requireListName()) return;
+    setRecipientForm(EMPTY_RECIPIENT_FORM);
+    setRecipientTemplateId(uploadTemplateId);
+    setAddRecipientGroupName(uploadGroupName.trim());
+    setAddProspectModalOpen(true);
+  };
+
+  // ── Adding directly into an already-open list — reuses the same modal and
+  // endpoint as the toolbar's "Add Manually", but targets the currently
+  // opened list's name/template instead of requiring it to be retyped. ────
+  const handleOpenAddToList = () => {
+    setRecipientForm(EMPTY_RECIPIENT_FORM);
+    setRecipientTemplateId(listTemplateId);
+    setAddRecipientGroupName(openListName);
+    setAddProspectModalOpen(true);
+  };
+
+  const handleUploadToList = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingToList(true);
+    try {
+      const { data } = await recipientService.uploadExcel(file, openListName, id, listTemplateId || null);
+      toast.success(data.message);
+      loadListMembers(openListId);
+      loadLists();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Upload failed');
+    } finally {
+      setUploadingToList(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleAddRecipient = async () => {
+    if (!recipientForm.name.trim() || !recipientForm.email.trim()) {
+      toast.error('Name and Email are required');
+      return;
+    }
+    setSavingRecipient(true);
+    try {
+      await recipientService.create({
+        ...recipientForm,
+        campaign_id: Number(id),
+        template_id: recipientTemplateId || null,
+        group_name: addRecipientGroupName,
+      });
+      toast.success('Prospect added to this campaign');
+      setAddProspectModalOpen(false);
+      loadResults();
+      if (browseMode === 'lists') {
+        loadLists();
+        if (openListId) loadListMembers(openListId);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to add prospect');
+    } finally {
+      setSavingRecipient(false);
+    }
+  };
+
+  // ── Prospects tab — "By List" browse mode: group prospects by the list
+  // (RecipientGroup) they were tagged under for this campaign, with a
+  // per-list default template and its own select/send/status view. ────────
+  const [browseMode, setBrowseMode] = useState('lists'); // 'all' | 'lists'
+  const [lists, setLists] = useState([]);
+  const [listsLoading, setListsLoading] = useState(false);
+  const [openListId, setOpenListId] = useState(null);
+  const [openListName, setOpenListName] = useState('');
+  const [listMembers, setListMembers] = useState([]);
+  const [listMembersLoading, setListMembersLoading] = useState(false);
+  const [listSelectedIds, setListSelectedIds] = useState([]);
+  const [listSearch, setListSearch] = useState('');
+  const [listDisplayMode, setListDisplayMode] = useState('table'); // 'table' | 'catalog'
+  const [listTemplateId, setListTemplateId] = useState('');
+  const [retaggingList, setRetaggingList] = useState(false);
+
+  const loadLists = useCallback(async () => {
+    setListsLoading(true);
+    try {
+      const { data } = await campaignService.getLists(id);
+      setLists(data);
+    } catch {
+      toast.error('Failed to load lists');
+    } finally {
+      setListsLoading(false);
+    }
+  }, [id, toast]);
+
+  useEffect(() => {
+    if (activeTab === 'candidates' && browseMode === 'lists' && !openListId) loadLists();
+  }, [activeTab, browseMode, openListId, loadLists]);
+
+  const loadListMembers = useCallback(async (groupId) => {
+    setListMembersLoading(true);
+    try {
+      const { data } = await campaignService.getListMembers(id, groupId);
+      setListMembers(data);
+    } catch {
+      toast.error('Failed to load list members');
+    } finally {
+      setListMembersLoading(false);
+    }
+  }, [id, toast]);
+
+  const handleOpenList = (list) => {
+    setOpenListId(list.group_id);
+    setOpenListName(list.name);
+    setListTemplateId(list.template_id ? String(list.template_id) : '');
+    setListSelectedIds([]);
+    setListSearch('');
+    loadListMembers(list.group_id);
+  };
+
+  const handleBackToLists = () => {
+    setOpenListId(null);
+    setOpenListName('');
+    setListMembers([]);
+    setListSelectedIds([]);
+  };
+
+  const handleChangeListTemplate = async (newTemplateId) => {
+    setListTemplateId(newTemplateId);
+    setRetaggingList(true);
+    try {
+      await campaignService.retagList(id, openListId, newTemplateId || null);
+      toast.success('List re-tagged to the new template');
+      loadListMembers(openListId);
+      loadLists();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to re-tag list');
+    } finally {
+      setRetaggingList(false);
+    }
+  };
+
+  const toggleListRecipient = (recipientId) => {
+    setListSelectedIds((prev) =>
+      prev.includes(recipientId) ? prev.filter((rid) => rid !== recipientId) : [...prev, recipientId]
+    );
+  };
+
+  const clearListSelection = () => setListSelectedIds([]);
+
+  const filteredListMembers = listMembers.filter((m) => {
+    if (!listSearch.trim()) return true;
+    const q = listSearch.toLowerCase();
+    return m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q);
+  });
+
+  const handleSelectAllListMembers = () => {
+    setListSelectedIds(filteredListMembers.filter((m) => !m.is_suppressed).map((m) => m.id));
+  };
+
+  const isListMode = browseMode === 'lists' && !!openListId;
+  // What's actually about to be sent/previewed — the opened list's tagged
+  // template when browsing "By List", else the campaign's primary template.
+  const effectiveTemplate = isListMode
+    ? templates.find((t) => t.id === Number(listTemplateId)) || primaryTemplate
+    : primaryTemplate;
+
   const debouncedSearch = useCallback(debounce((val) => { setSearch(val); setPage(1); }, 400), []);
 
   const toggleRecipient = (recipientId) => {
@@ -196,7 +633,9 @@ export default function CampaignDetailPage() {
     }
   };
 
-  const selectedRecipients = results.filter((r) => selectedIds.includes(r.id));
+  const activeSelectedIds = isListMode ? listSelectedIds : selectedIds;
+  const activeResultsPool = isListMode ? listMembers : results;
+  const selectedRecipients = activeResultsPool.filter((r) => activeSelectedIds.includes(r.id));
 
   useEffect(() => {
     if (selectedRecipients.length === 0) {
@@ -205,55 +644,83 @@ export default function CampaignDetailPage() {
       setPreviewRecipientId(selectedRecipients[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIds, results]);
+  }, [activeSelectedIds, activeResultsPool]);
 
-  const previewRecipient = results.find((r) => r.id === previewRecipientId);
-  const previewContext = previewRecipient
-    ? {
-        Name: previewRecipient.name,
-        Company: previewRecipient.company || '—',
-        Designation: previewRecipient.designation || '—',
-        Industry: previewRecipient.industry || '—',
-        Email: previewRecipient.email,
-      }
-    : null;
+  const previewRecipient = activeResultsPool.find((r) => r.id === previewRecipientId);
+  const previewContext = previewRecipient ? buildRecipientContext(previewRecipient) : null;
 
   const handleOpenPreview = () => {
-    if (!template) {
-      toast.error('This campaign has no template yet. Add one from Edit Campaign.');
+    if (!effectiveTemplate) {
+      toast.error('This campaign has no template yet. Add one from the Template tab.');
       setActiveTab('template');
       return;
     }
-    if (selectedIds.length === 0) {
+    if (activeSelectedIds.length === 0) {
       toast.error('Select at least one prospect first');
       setActiveTab('candidates');
       return;
     }
+    setUseRecipientTz(!!campaign.use_recipient_timezone);
     setPreviewOpen(true);
   };
 
   const handleSend = async () => {
     setSending(true);
     try {
+      if (scheduleAt || useRecipientTz !== !!campaign.use_recipient_timezone) {
+        await campaignService.update(campaign.id, {
+          ...(scheduleAt ? { scheduled_at: new Date(scheduleAt).toISOString() } : {}),
+          use_recipient_timezone: useRecipientTz,
+        });
+      }
       const { data } = await emailService.send({
         campaign_id: campaign.id,
-        subject: template.subject,
-        body: template.body + (template.closing ? `\n\n${template.closing}` : ''),
-        recipient_ids: selectedIds,
+        subject: effectiveTemplate.subject,
+        body: effectiveTemplate.body + (effectiveTemplate.closing ? `\n\n${effectiveTemplate.closing}` : ''),
+        recipient_ids: activeSelectedIds,
       });
       if (data.immediate_sent > 0) {
         toast.success('Test email sent (mock mode, no real prospects selected)');
       } else {
-        let message = `Queued ${data.queued} email(s) — sending in the background, spaced out to protect deliverability. Track progress in the Tracking tab.`;
-        if (data.skipped_suppressed > 0) {
-          message += ` (${data.skipped_suppressed} skipped — blacklisted)`;
+        if (data.queued > 0) {
+          let message = scheduleAt
+            ? `Scheduled ${data.queued} email(s) for ${new Date(scheduleAt).toLocaleString()}, staggered from there to protect deliverability.`
+            : `Queued ${data.queued} email(s) — sending in the background, spaced out to protect deliverability. Each prospect uses their tagged template.`;
+          if (data.skipped_suppressed > 0) {
+            message += ` (${data.skipped_suppressed} skipped — blacklisted)`;
+          }
+          toast.success(message);
         }
-        toast.success(message);
+        if (data.skipped_incomplete_data > 0) {
+          const byField = {};
+          (data.incomplete || []).forEach(({ email, missing_fields }) => {
+            missing_fields.forEach((field) => {
+              (byField[field] = byField[field] || []).push(email);
+            });
+          });
+          const detail = Object.entries(byField)
+            .map(([field, emails]) => {
+              const shown = emails.slice(0, 3).join(', ');
+              const more = emails.length > 3 ? ` +${emails.length - 3} more` : '';
+              return `{{${field}}} missing for ${shown}${more}`;
+            })
+            .join('; ');
+          toast.error(
+            `${data.skipped_incomplete_data} prospect(s) skipped — ${detail}. Re-upload the list with that column filled in, then resend to them.`
+          );
+        }
       }
       setPreviewOpen(false);
-      clearSelection();
+      setScheduleAt('');
+      if (isListMode) {
+        clearListSelection();
+        loadListMembers(openListId);
+        loadLists();
+      } else {
+        clearSelection();
+      }
       loadCampaign();
-      setActiveTab('tracking');
+      setActiveTab('candidates');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to send emails');
     } finally {
@@ -294,8 +761,8 @@ export default function CampaignDetailPage() {
           </button>
           <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
             <FiSend size={16} /> Send Campaign
-            {selectedIds.length > 0 && (
-              <span className="bg-white/20 rounded-full px-1.5 text-xs">{selectedIds.length}</span>
+            {activeSelectedIds.length > 0 && (
+              <span className="bg-white/20 rounded-full px-1.5 text-xs">{activeSelectedIds.length}</span>
             )}
           </button>
         </div>
@@ -320,8 +787,8 @@ export default function CampaignDetailPage() {
         </nav>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
+      <div className={`grid grid-cols-1 gap-6 ${activeTab === 'overview' ? 'lg:grid-cols-3' : ''}`}>
+        <div className={activeTab === 'overview' ? 'lg:col-span-2 space-y-6' : 'space-y-6'}>
           {activeTab === 'overview' && (
             <div className="card">
               <div className="flex items-center justify-between">
@@ -369,40 +836,57 @@ export default function CampaignDetailPage() {
 
           {activeTab === 'template' && (
             <div className="card">
-              <h2 className="text-lg font-semibold">Email Template</h2>
-              {template ? (
-                <div className="mt-4 space-y-3 text-sm">
-                  <div>
-                    <p className="text-gray-500">Type</p>
-                    <p className="font-medium text-gray-900 capitalize">{template.type}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">Subject</p>
-                    <p className="font-medium text-gray-900">{template.subject}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">Body</p>
-                    <p className="text-gray-700 whitespace-pre-wrap">{template.body}</p>
-                  </div>
-                  {template.closing && (
-                    <div>
-                      <p className="text-gray-500">Closing</p>
-                      <p className="text-gray-700 whitespace-pre-wrap">{template.closing}</p>
-                    </div>
-                  )}
-                  {template.cta && (
-                    <div>
-                      <p className="text-gray-500">CTA</p>
-                      <p className="text-gray-700">{template.cta}</p>
-                    </div>
-                  )}
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <h2 className="text-lg font-semibold">Email Templates</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    A campaign can hold several templates — tag a prospect list to one from the Prospects tab.
+                  </p>
+                </div>
+                <button onClick={handleOpenAddTemplate} className="btn-primary text-sm flex items-center gap-2 flex-shrink-0">
+                  <FiPlus size={16} /> Add New Template
+                </button>
+              </div>
+
+              {templates.length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
+                  No templates yet — click "Add New Template" to create the first one.
                 </div>
               ) : (
                 <div className="mt-4 space-y-3">
-                  <p className="text-sm text-gray-500">No template has been saved for this campaign yet.</p>
-                  <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="btn-secondary text-sm">
-                    Add a template
-                  </button>
+                  {templates.map((t, i) => (
+                    <div key={t.id} className="rounded-xl border border-gray-200 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-gray-900">{t.name || `Template ${i + 1}`}</p>
+                            {i === 0 && (
+                              <span className="text-xs px-1.5 py-0.5 rounded-full bg-primary-50 text-primary-600">Primary</span>
+                            )}
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 capitalize">{t.type}</span>
+                          </div>
+                          <p className="text-sm text-gray-700 mt-1.5">{t.subject}</p>
+                          <p className="text-xs text-gray-500 mt-1 line-clamp-2 whitespace-pre-wrap">{t.body}</p>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            onClick={() => handleOpenEditTemplate(t)}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700"
+                            title="Edit template"
+                          >
+                            <FiEdit2 size={15} />
+                          </button>
+                          <button
+                            onClick={() => setDeletingTemplateId(t.id)}
+                            className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600"
+                            title="Delete template"
+                          >
+                            <FiTrash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -508,233 +992,388 @@ export default function CampaignDetailPage() {
                 </div>
                 <button
                   onClick={handleOpenPreview}
-                  disabled={selectedIds.length === 0}
+                  disabled={activeSelectedIds.length === 0}
                   className="btn-primary flex items-center gap-2 disabled:opacity-50"
                 >
                   <FiEye size={16} /> Preview & Send
                 </button>
               </div>
 
-              {!template && (
+              <div className="mt-4 inline-flex rounded-lg border border-gray-200 p-1 bg-gray-50">
+                <button
+                  onClick={() => setBrowseMode('all')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    browseMode === 'all' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  All Prospects
+                </button>
+                <button
+                  onClick={() => setBrowseMode('lists')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    browseMode === 'lists' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <FiLayers size={14} /> By List
+                </button>
+              </div>
+
+              {!primaryTemplate && (
                 <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                   This campaign doesn't have an email template yet.{' '}
-                  <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="underline font-medium">
+                  <button onClick={() => setActiveTab('template')} className="underline font-medium">
                     Add one
                   </button>{' '}
                   before sending.
                 </div>
               )}
 
-              <div className="mt-4 space-y-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <SearchInput
-                    onChange={debouncedSearch}
-                    placeholder="Quick search (name, email, company)..."
-                    className="flex-1 min-w-[200px]"
-                  />
-                  <select className="input-field w-auto" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                    <option value="name">Sort: Name</option>
-                    <option value="email">Sort: Email</option>
-                    <option value="company">Sort: Company</option>
-                    <option value="designation">Sort: Designation</option>
-                    <option value="industry">Sort: Industry</option>
-                  </select>
-                  <select className="input-field w-auto" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)}>
-                    <option value="asc">Ascending</option>
-                    <option value="desc">Descending</option>
-                  </select>
-                </div>
-
-                <FilterBuilder
-                  activeFieldKeys={activeFieldKeys}
-                  values={filterValues}
-                  onAddField={handleAddField}
-                  onRemoveField={handleRemoveField}
-                  onValueChange={handleValueChange}
-                  distinctOptions={distinctOptions}
-                  distinctLoading={distinctLoading}
-                  groups={groups}
-                  tags={tags}
-                  campaigns={campaigns}
-                />
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={clearAllFilters} className="btn-secondary text-sm">Clear All</button>
-                  <button onClick={clearSelection} className="btn-secondary text-sm">Clear Selection</button>
-                  <button onClick={handleSelectAllMatching} disabled={selectingAll || total === 0} className="btn-secondary text-sm flex items-center gap-1 ml-auto">
-                    {selectingAll ? <LoadingSpinner size="sm" /> : <FiCheckSquare size={14} />} Select All {total} Matching
-                  </button>
-                </div>
-              </div>
-
-              <p className="text-sm text-gray-600 mt-3">
-                <span className="font-semibold text-gray-900">{total}</span> matching prospect{total !== 1 ? 's' : ''}
-                {selectedIds.length > 0 && <span className="ml-2 text-primary-600 font-medium">({selectedIds.length} selected)</span>}
-              </p>
-
-              {contactsLoading ? (
-                <div className="flex justify-center py-6">
-                  <LoadingSpinner size="md" />
-                </div>
-              ) : results.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 mt-3">
-                  No prospects found. Upload prospects from the Prospects page or adjust your filters.
-                </div>
-              ) : (
-                <>
-                  <div className="space-y-2 max-h-96 overflow-y-auto pr-1 mt-3">
-                    {results.map((r) => (
-                      <label
-                        key={r.id}
-                        className={`flex items-start gap-3 rounded-xl border p-3 ${
-                          r.is_suppressed
-                            ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
-                            : 'cursor-pointer border-gray-200 bg-white hover:border-primary-300'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={!r.is_suppressed && selectedIds.includes(r.id)}
-                          onChange={() => toggleRecipient(r.id)}
-                          disabled={r.is_suppressed}
-                          title={r.is_suppressed ? 'Blacklisted prospects cannot be selected' : undefined}
-                          className="mt-1 rounded border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
-                        />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className={`font-medium ${r.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{r.name}</p>
-                            <span className="text-xs text-gray-500">{r.company || '—'}</span>
-                          </div>
-                          <p className={`text-sm ${r.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{r.email}</p>
-                          <p className="text-xs text-gray-500">
-                            {r.designation || '—'} • {r.industry || '—'}
-                          </p>
-                          {r.is_suppressed && (
-                            <div className="mt-1"><StatusBadge status={r.suppression_reason} /></div>
-                          )}
-                        </div>
-                      </label>
-                    ))}
+              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <p className="text-sm font-semibold text-gray-700 mb-3">Add Prospects to This Campaign</p>
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="w-full sm:w-56">
+                    <label className="label">List Name *</label>
+                    <input
+                      className={`input-field ${listNameError ? 'border-red-500 ring-1 ring-red-500 focus:ring-red-500' : ''}`}
+                      placeholder="e.g. Uploaded — Jul batch"
+                      value={uploadGroupName}
+                      onChange={(e) => handleListNameChange(e.target.value)}
+                    />
+                    {listNameError && <p className="text-xs text-red-600 mt-1">List name is required</p>}
                   </div>
-                  <div className="mt-2">
-                    <Pagination page={page} pageSize={10} total={total} onPageChange={setPage} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'tracking' && (
-            <div className="card overflow-hidden">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <FiBarChart2 size={18} /> Prospect Tracking
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">
-                Per-prospect delivery status for this campaign, updated as emails are sent and follow-ups fire.
-              </p>
-
-              {!trackingLoading && tracking.length > 0 && (
-                <>
-                  {hasQueuedRows && (
-                    <p className="text-sm text-primary-600 mt-4 flex items-center gap-2">
-                      <LoadingSpinner size="sm" />
-                      {tracking.filter((t) => t.status === 'sent').length} of {tracking.length} sent so far — still sending in the background...
-                    </p>
-                  )}
-                  <div className="flex flex-wrap gap-3 mt-4 text-sm">
-                    <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700">
-                      {tracking.filter((t) => t.status === 'queued').length} queued
-                    </span>
-                    <span className="px-3 py-1 rounded-full bg-green-50 text-green-700">
-                      {tracking.filter((t) => t.status === 'sent').length} sent
-                    </span>
-                    <span className="px-3 py-1 rounded-full bg-red-50 text-red-700">
-                      {tracking.filter((t) => t.status === 'bounced').length} bounced
-                    </span>
-                    <span className="px-3 py-1 rounded-full bg-purple-50 text-purple-700">
-                      {tracking.filter((t) => t.status === 'replied').length} replied
-                    </span>
-                    <span className="px-3 py-1 rounded-full bg-gray-100 text-gray-600">
-                      {tracking.filter((t) => t.status === 'suppressed').length} suppressed
-                    </span>
-                    <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-700">
-                      {tracking.filter((t) => t.status === 'failed').length} failed
-                    </span>
-                  </div>
-                </>
-              )}
-
-              {trackingLoading ? (
-                <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
-              ) : tracking.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 mt-4">
-                  No sends recorded yet for this campaign.
-                </div>
-              ) : (
-                <div className="overflow-x-auto mt-4 -mx-6">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-y">
-                      <tr className="text-left text-gray-500">
-                        <th className="px-6 py-3 font-medium">Name</th>
-                        <th className="px-4 py-3 font-medium">Email</th>
-                        <th className="px-4 py-3 font-medium">Company</th>
-                        <th className="px-4 py-3 font-medium">Status</th>
-                        <th className="px-4 py-3 font-medium">Stage</th>
-                        <th className="px-4 py-3 font-medium">Last Sent</th>
-                        <th className="px-6 py-3 font-medium">Replied At</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tracking.map((t) => (
-                        <tr key={t.id} className="border-b border-gray-50">
-                          <td className="px-6 py-3 font-medium text-gray-900">{t.recipient_name}</td>
-                          <td className="px-4 py-3 text-gray-600">{t.recipient_email}</td>
-                          <td className="px-4 py-3 text-gray-600">{t.recipient_company || '—'}</td>
-                          <td className="px-4 py-3"><StatusBadge status={t.status} /></td>
-                          <td className="px-4 py-3 text-gray-600">{t.current_stage}</td>
-                          <td className="px-4 py-3 text-gray-600">{formatDateTime(t.last_sent_at)}</td>
-                          <td className="px-6 py-3 text-gray-600">{formatDateTime(t.replied_at)}</td>
-                        </tr>
+                  <div className="w-full sm:w-52">
+                    <label className="label">Tag to Template</label>
+                    <select
+                      className="input-field"
+                      value={uploadTemplateId}
+                      onChange={(e) => setUploadTemplateId(e.target.value)}
+                      disabled={templates.length === 0}
+                    >
+                      <option value="">{templates.length === 0 ? 'No templates yet' : 'Primary template'}</option>
+                      {templates.map((t, i) => (
+                        <option key={t.id} value={t.id}>{t.name || `Template ${i + 1}`}</option>
                       ))}
-                    </tbody>
-                  </table>
+                    </select>
+                  </div>
+                  <div>
+                    <span className="label invisible block">Upload</span>
+                    <label onClick={handleUploadClick} className="btn-primary h-[42px] flex items-center gap-2 cursor-pointer flex-shrink-0">
+                      {uploadingProspects ? <LoadingSpinner size="sm" /> : <FiUpload size={16} />}
+                      Upload Excel
+                      <input type="file" accept=".xlsx,.xls" onChange={handleUploadProspects} className="hidden" />
+                    </label>
+                  </div>
+                  <div>
+                    <span className="label invisible block">Add</span>
+                    <button onClick={handleOpenAddProspect} className="btn-primary h-[42px] flex items-center gap-2 flex-shrink-0">
+                      <FiUserPlus size={16} /> Add Manually
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {browseMode === 'all' && (
+                <>
+                  <div className="mt-4 space-y-3">
+                    <div className="flex flex-wrap items-start gap-2">
+                      <SearchInput
+                        onChange={debouncedSearch}
+                        placeholder="Search name, email, company..."
+                        className="w-64"
+                      />
+                      <select className="input-field w-auto text-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+                        <option value="name">Sort: Name</option>
+                        <option value="email">Sort: Email</option>
+                        <option value="company">Sort: Company</option>
+                        <option value="designation">Sort: Designation</option>
+                        <option value="industry">Sort: Industry</option>
+                      </select>
+                      <select className="input-field w-auto text-sm" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)}>
+                        <option value="asc">Ascending</option>
+                        <option value="desc">Descending</option>
+                      </select>
+                      <FilterBuilder
+                        activeFieldKeys={activeFieldKeys}
+                        values={filterValues}
+                        onAddField={handleAddField}
+                        onRemoveField={handleRemoveField}
+                        onValueChange={handleValueChange}
+                        distinctOptions={distinctOptions}
+                        distinctLoading={distinctLoading}
+                        groups={groups}
+                        tags={tags}
+                        campaigns={campaigns}
+                      />
+                      <button onClick={clearAllFilters} className="btn-secondary text-sm">Clear All</button>
+                      <button onClick={clearSelection} className="btn-secondary text-sm">Clear Selection</button>
+                      <button onClick={handleSelectAllMatching} disabled={selectingAll || total === 0} className="btn-secondary text-sm flex items-center gap-1 ml-auto">
+                        {selectingAll ? <LoadingSpinner size="sm" /> : <FiCheckSquare size={14} />} Select All {total} Matching
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="text-sm text-gray-600 mt-3">
+                    <span className="font-semibold text-gray-900">{total}</span> matching prospect{total !== 1 ? 's' : ''}
+                    {selectedIds.length > 0 && <span className="ml-2 text-primary-600 font-medium">({selectedIds.length} selected)</span>}
+                  </p>
+
+                  {contactsLoading ? (
+                    <div className="flex justify-center py-6">
+                      <LoadingSpinner size="md" />
+                    </div>
+                  ) : results.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 mt-3">
+                      No prospects found. Upload prospects from the Prospects page or adjust your filters.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-2 max-h-96 overflow-y-auto pr-1 mt-3">
+                        {results.map((r) => (
+                          <label
+                            key={r.id}
+                            className={`flex items-start gap-3 rounded-xl border p-3 ${
+                              r.is_suppressed
+                                ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
+                                : 'cursor-pointer border-gray-200 bg-white hover:border-primary-300'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={!r.is_suppressed && selectedIds.includes(r.id)}
+                              onChange={() => toggleRecipient(r.id)}
+                              disabled={r.is_suppressed}
+                              title={r.is_suppressed ? 'Blacklisted prospects cannot be selected' : undefined}
+                              className="mt-1 rounded border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                            />
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className={`font-medium ${r.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{r.name}</p>
+                                <span className="text-xs text-gray-500">{r.company || '—'}</span>
+                              </div>
+                              <p className={`text-sm ${r.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{r.email}</p>
+                              <p className="text-xs text-gray-500">
+                                {r.designation || '—'} • {r.industry || '—'}
+                              </p>
+                              {r.is_suppressed && (
+                                <div className="mt-1"><StatusBadge status={r.suppression_reason} /></div>
+                              )}
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="mt-2">
+                        <Pagination page={page} pageSize={10} total={total} onPageChange={setPage} />
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              {browseMode === 'lists' && (
+                <div className="mt-4">
+                  {!openListId ? (
+                    listsLoading ? (
+                      <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+                    ) : lists.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
+                        No lists yet — upload an Excel file or add a prospect manually above with a List Name to create one.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {lists.map((l) => {
+                          const tpl = templates.find((t) => t.id === l.template_id);
+                          return (
+                            <button
+                              key={l.group_id}
+                              onClick={() => handleOpenList(l)}
+                              className="text-left rounded-xl border border-gray-200 bg-white p-4 hover:border-primary-300 hover:shadow-sm transition-all"
+                            >
+                              <p className="font-semibold text-gray-900">{l.name}</p>
+                              <p className="text-sm text-gray-500 mt-1">{l.total} prospect{l.total !== 1 ? 's' : ''}</p>
+                              <p className="text-xs text-gray-500 mt-1">Sent {l.sent_count} / {l.total}</p>
+                              <p className="text-xs text-gray-500 mt-2">
+                                Template: <span className="font-medium text-gray-700">{tpl ? (tpl.name || 'Untitled') : 'No template'}</span>
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
+                  ) : (
+                    <div>
+                      <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                        <button onClick={handleBackToLists} className="btn-secondary text-sm flex items-center gap-2">
+                          <FiArrowLeft size={14} /> Back to Lists
+                        </button>
+                        <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-1">
+                          <button
+                            onClick={() => setListDisplayMode('table')}
+                            className={`p-1.5 rounded ${listDisplayMode === 'table' ? 'bg-gray-100 text-gray-900' : 'text-gray-400'}`}
+                            title="List view"
+                          >
+                            <FiList size={16} />
+                          </button>
+                          <button
+                            onClick={() => setListDisplayMode('catalog')}
+                            className={`p-1.5 rounded ${listDisplayMode === 'catalog' ? 'bg-gray-100 text-gray-900' : 'text-gray-400'}`}
+                            title="Catalog view"
+                          >
+                            <FiGrid size={16} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <h3 className="text-base font-semibold text-gray-900">{openListName}</h3>
+
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <span className="text-sm text-gray-500 mr-1">Add more prospects to this list:</span>
+                        <label className="btn-primary text-sm flex items-center gap-2 cursor-pointer">
+                          {uploadingToList ? <LoadingSpinner size="sm" /> : <FiUpload size={14} />}
+                          Upload Excel
+                          <input type="file" accept=".xlsx,.xls" onChange={handleUploadToList} className="hidden" />
+                        </label>
+                        <button onClick={handleOpenAddToList} className="btn-primary text-sm flex items-center gap-2">
+                          <FiUserPlus size={14} /> Add Manually
+                        </button>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap items-end gap-3">
+                        <div className="w-full sm:w-56">
+                          <label className="label">Default Template</label>
+                          <select
+                            className="input-field"
+                            value={listTemplateId}
+                            onChange={(e) => handleChangeListTemplate(e.target.value)}
+                            disabled={retaggingList || templates.length === 0}
+                          >
+                            <option value="">{templates.length === 0 ? 'No templates yet' : 'Primary template'}</option>
+                            {templates.map((t, i) => (
+                              <option key={t.id} value={t.id}>{t.name || `Template ${i + 1}`}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <SearchInput
+                          key={openListId}
+                          onChange={setListSearch}
+                          placeholder="Search this list..."
+                          className="w-56"
+                        />
+                        <button onClick={handleSelectAllListMembers} className="btn-secondary text-sm">Select All</button>
+                        <button onClick={clearListSelection} className="btn-secondary text-sm">Clear Selection</button>
+                      </div>
+
+                      <p className="text-sm text-gray-600 mt-3">
+                        <span className="font-semibold text-gray-900">{filteredListMembers.length}</span> prospect{filteredListMembers.length !== 1 ? 's' : ''}
+                        {listSelectedIds.length > 0 && <span className="ml-2 text-primary-600 font-medium">({listSelectedIds.length} selected)</span>}
+                      </p>
+
+                      {listMembersLoading ? (
+                        <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+                      ) : filteredListMembers.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 mt-3">
+                          No prospects match.
+                        </div>
+                      ) : listDisplayMode === 'table' ? (
+                        <div className="space-y-2 max-h-96 overflow-y-auto pr-1 mt-3">
+                          {filteredListMembers.map((m) => (
+                            <label
+                              key={m.id}
+                              className={`flex items-start gap-3 rounded-xl border p-3 ${
+                                m.is_suppressed
+                                  ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
+                                  : 'cursor-pointer border-gray-200 bg-white hover:border-primary-300'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={!m.is_suppressed && listSelectedIds.includes(m.id)}
+                                onChange={() => toggleListRecipient(m.id)}
+                                disabled={m.is_suppressed}
+                                title={m.is_suppressed ? 'Blacklisted prospects cannot be selected' : undefined}
+                                className="mt-1 rounded border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                              />
+                              <div className="flex-1">
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className={`font-medium ${m.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{m.name}</p>
+                                  <StatusBadge status={m.is_suppressed ? m.suppression_reason : m.status} />
+                                </div>
+                                <p className={`text-sm ${m.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{m.email}</p>
+                                <p className="text-xs text-gray-500">{m.company || '—'}</p>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
+                          {filteredListMembers.map((m) => (
+                            <div
+                              key={m.id}
+                              className={`rounded-xl border p-3 ${m.is_suppressed ? 'border-gray-200 bg-gray-50' : 'border-gray-200 bg-white'}`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={!m.is_suppressed && listSelectedIds.includes(m.id)}
+                                  onChange={() => toggleListRecipient(m.id)}
+                                  disabled={m.is_suppressed}
+                                  className="mt-1 rounded border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                                />
+                                <StatusBadge status={m.is_suppressed ? m.suppression_reason : m.status} />
+                              </div>
+                              <p className={`font-medium mt-2 ${m.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{m.name}</p>
+                              <p className={`text-sm ${m.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{m.email}</p>
+                              <p className="text-xs text-gray-500 mt-1">{m.company || '—'}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
+
         </div>
 
-        <div className="space-y-6">
-          <div className="card">
-            <h2 className="text-lg font-semibold">Statistics</h2>
-            <div className="space-y-3 mt-4 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500">Emails Sent</span>
-                <span className="font-medium text-gray-900">{campaign.emails_sent}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500">Last Updated</span>
-                <span className="font-medium text-gray-900">{formatDateTime(campaign.created_at)}</span>
+        {activeTab === 'overview' && (
+          <div className="space-y-6">
+            <div className="card">
+              <h2 className="text-lg font-semibold">Statistics</h2>
+              <div className="space-y-3 mt-4 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Emails Sent</span>
+                  <span className="font-medium text-gray-900">{campaign.emails_sent}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Last Updated</span>
+                  <span className="font-medium text-gray-900">{formatDateTime(campaign.created_at)}</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="card">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <FiMail size={18} /> Next Steps
-            </h2>
-            <ul className="mt-4 space-y-2 text-sm text-gray-600">
-              <li>• Review the campaign details in the Overview tab.</li>
-              <li>• Confirm the email content in the Template tab.</li>
-              <li>• Select prospects and preview & send from the Prospects tab.</li>
-            </ul>
+            <div className="card">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <FiMail size={18} /> Next Steps
+              </h2>
+              <ul className="mt-4 space-y-2 text-sm text-gray-600">
+                <li>• Review the campaign details in the Overview tab.</li>
+                <li>• Confirm the email content in the Template tab.</li>
+                <li>• Select prospects and preview & send from the Prospects tab.</li>
+              </ul>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <Modal isOpen={previewOpen} onClose={() => setPreviewOpen(false)} title="Preview & Send" size="lg">
-        {template && previewContext && (
+        {effectiveTemplate && previewContext && (
           <div className="space-y-4">
+            {isListMode && (
+              <p className="text-xs text-gray-500">
+                Template: <span className="font-medium text-gray-700">{effectiveTemplate.name || 'Untitled'}</span> (this list's default)
+              </p>
+            )}
             {selectedRecipients.length > 1 && (
               <div>
                 <label className="label">Preview as</label>
@@ -752,17 +1391,71 @@ export default function CampaignDetailPage() {
               </div>
             )}
             <EmailPreview
-              subject={renderTemplate(template.subject, previewContext)}
+              subject={renderTemplate(effectiveTemplate.subject, previewContext)}
               recipientName={previewContext.Name}
-              body={renderTemplate(template.body, previewContext)}
-              closing={template.closing}
-              cta={template.cta}
+              body={renderTemplate(effectiveTemplate.body, previewContext)}
+              closing={effectiveTemplate.closing}
+              cta={effectiveTemplate.cta}
             />
+            {!isListMode && templates.length > 1 && (
+              <p className="text-xs text-gray-400">
+                Showing the primary template — prospects tagged to a different template will receive that one instead.
+              </p>
+            )}
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
-              Sending to {selectedIds.length} prospect{selectedIds.length !== 1 ? 's' : ''}
+              Sending to {activeSelectedIds.length} prospect{activeSelectedIds.length !== 1 ? 's' : ''}
+            </div>
+            <div>
+              <label className="label">When</label>
+              <div className="flex items-center gap-4 mb-2">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    checked={!scheduleAt}
+                    onChange={() => setScheduleAt('')}
+                  />
+                  Send now
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    checked={!!scheduleAt}
+                    onChange={() => setScheduleAt((prev) => prev || defaultScheduleValue())}
+                  />
+                  Schedule for later
+                </label>
+              </div>
+              {scheduleAt && (
+                <input
+                  type="datetime-local"
+                  className="input-field"
+                  value={scheduleAt}
+                  min={defaultScheduleValue()}
+                  onChange={(e) => setScheduleAt(e.target.value)}
+                />
+              )}
+              <label className="flex items-start gap-2 text-sm text-gray-700 mt-3">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={useRecipientTz}
+                  onChange={(e) => setUseRecipientTz(e.target.checked)}
+                />
+                <span>
+                  Only send within each prospect's local business hours (9am–6pm)
+                  <span className="block text-xs text-gray-400">
+                    A send due at 3am their time waits for their next local 9am instead — useful for scheduling
+                    ahead of a specific region's market open without staying up for it.
+                  </span>
+                </span>
+              </label>
             </div>
             <div className="flex justify-end gap-3">
-              <button className="btn-secondary" onClick={() => setPreviewOpen(false)} disabled={sending}>
+              <button
+                className="btn-secondary"
+                onClick={() => { setPreviewOpen(false); setScheduleAt(''); }}
+                disabled={sending}
+              >
                 Cancel
               </button>
               <button className="btn-primary flex items-center gap-2" onClick={handleSend} disabled={sending}>
@@ -770,7 +1463,7 @@ export default function CampaignDetailPage() {
                   <LoadingSpinner size="sm" />
                 ) : (
                   <>
-                    <FiSend size={16} /> Send Campaign
+                    <FiSend size={16} /> {scheduleAt ? 'Schedule Send' : 'Send Campaign'}
                   </>
                 )}
               </button>
@@ -787,6 +1480,194 @@ export default function CampaignDetailPage() {
         message="Remove this follow-up stage? Prospects already scheduled for it will no longer receive it."
         confirmText="Remove"
       />
+
+      <Modal
+        isOpen={templateModalOpen}
+        onClose={() => { setTemplateModalOpen(false); setEditingTemplateId(null); }}
+        title={editingTemplateId ? 'Edit Template' : 'Add New Template'}
+        size="lg"
+      >
+        <div className="space-y-6">
+          <div>
+            <label className="label">Template Name</label>
+            <input
+              className="input-field"
+              value={newTemplateName}
+              onChange={(e) => setNewTemplateName(e.target.value)}
+              placeholder={`Template ${templates.length + 1}`}
+              autoFocus
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <select
+              className="input-field w-auto text-sm"
+              value=""
+              onChange={(e) => e.target.value && handleSelectMailer(e.target.value)}
+            >
+              <option value="">From Saved Mailer...</option>
+              {mailers.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => setSaveMailerModalOpen(true)}
+              disabled={!emailContent.subject.trim() || !emailContent.body.trim()}
+              className="btn-secondary text-sm flex items-center gap-1"
+            >
+              <FiSave size={14} /> Save as Mailer
+            </button>
+          </div>
+
+          <TemplateEditor
+            templateType={templateType}
+            onTemplateTypeChange={handleTemplateTypeChange}
+            emailContent={emailContent}
+            onEmailContentChange={setEmailContent}
+            placeholderTemplates={placeholderTemplates}
+            selectedTemplate={selectedPlaceholderTemplate}
+            onSelectPlaceholderTemplate={handleSelectPlaceholderTemplate}
+            placeholderValues={placeholderValues}
+            onPlaceholderValueChange={(key, value) => setPlaceholderValues((p) => ({ ...p, [key]: value }))}
+            aiPrompt={aiPrompt}
+            onAiPromptChange={setAiPrompt}
+            onGenerateAI={handleGenerateAI}
+            aiLoading={aiLoading}
+            previewContext={templatePreviewContext}
+          />
+
+          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
+            <button onClick={() => setTemplateModalOpen(false)} className="btn-secondary" disabled={savingTemplate}>
+              Cancel
+            </button>
+            <button onClick={handleSaveTemplate} disabled={savingTemplate} className="btn-primary flex items-center gap-2">
+              {savingTemplate ? <LoadingSpinner size="sm" /> : <FiPlus size={16} />} {editingTemplateId ? 'Save Changes' : 'Save Template'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={saveMailerModalOpen} onClose={() => setSaveMailerModalOpen(false)} title="Save as Mailer" size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Save this template to the reusable Mailer library so it can be found and loaded into future campaigns.
+          </p>
+          <div>
+            <label className="label">Mailer Name *</label>
+            <input
+              className="input-field"
+              value={newMailerName}
+              onChange={(e) => setNewMailerName(e.target.value)}
+              placeholder="e.g. Cold Outreach - Tech Decision Makers"
+              autoFocus
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setSaveMailerModalOpen(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleConfirmSaveMailer} disabled={savingMailer} className="btn-primary flex items-center gap-2">
+              {savingMailer ? <LoadingSpinner size="sm" /> : <><FiBookOpen size={16} /> Save Mailer</>}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        isOpen={!!deletingTemplateId}
+        onClose={() => setDeletingTemplateId(null)}
+        onConfirm={handleDeleteTemplate}
+        title="Remove Template"
+        message="Remove this template? Prospects currently tagged to it will fall back to the campaign's primary template."
+        confirmText="Remove"
+      />
+
+      <ConfirmDialog
+        isOpen={!!unknownFields}
+        onClose={() => setUnknownFields(null)}
+        onConfirm={handleProceedWithUnknownFields}
+        variant="primary"
+        title="Unrecognized Field"
+        message={
+          unknownFields
+            ? `This template uses ${unknownFields.map((f) => `{{${f}}}`).join(', ')} — not one of the standard prospect fields. You can go back and fix it, or proceed anyway: it'll render blank until prospect data exists for it, and won't be flagged again.`
+            : ''
+        }
+        confirmText="Proceed Anyway"
+        cancelText="Go Back & Edit"
+      />
+
+      <Modal isOpen={addProspectModalOpen} onClose={() => setAddProspectModalOpen(false)} title="Add Prospect Manually" size="md">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Adding to list: <span className="font-medium text-gray-700">{addRecipientGroupName || '—'}</span>
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Name *</label>
+              <input
+                className="input-field"
+                value={recipientForm.name}
+                onChange={(e) => setRecipientForm((p) => ({ ...p, name: e.target.value }))}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="label">Email *</label>
+              <input
+                type="email"
+                className="input-field"
+                value={recipientForm.email}
+                onChange={(e) => setRecipientForm((p) => ({ ...p, email: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Company</label>
+              <input
+                className="input-field"
+                value={recipientForm.company}
+                onChange={(e) => setRecipientForm((p) => ({ ...p, company: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Designation</label>
+              <input
+                className="input-field"
+                value={recipientForm.designation}
+                onChange={(e) => setRecipientForm((p) => ({ ...p, designation: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Industry</label>
+              <input
+                className="input-field"
+                value={recipientForm.industry}
+                onChange={(e) => setRecipientForm((p) => ({ ...p, industry: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Tag to template</label>
+              <select
+                className="input-field"
+                value={recipientTemplateId}
+                onChange={(e) => setRecipientTemplateId(e.target.value)}
+                disabled={templates.length === 0}
+              >
+                <option value="">{templates.length === 0 ? 'No templates yet' : 'Primary template'}</option>
+                {templates.map((t, i) => (
+                  <option key={t.id} value={t.id}>{t.name || `Template ${i + 1}`}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setAddProspectModalOpen(false)} className="btn-secondary" disabled={savingRecipient}>
+              Cancel
+            </button>
+            <button onClick={handleAddRecipient} disabled={savingRecipient} className="btn-primary flex items-center gap-2">
+              {savingRecipient ? <LoadingSpinner size="sm" /> : <FiUserPlus size={16} />} Add Prospect
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
