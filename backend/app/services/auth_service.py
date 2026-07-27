@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import User
+from app.services.core_users import is_allowed_login
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -83,15 +84,23 @@ class AuthService:
         token = self._create_jwt(user)
         return {"access_token": token, "user": user}
 
-    def dev_login(self, db: Session, email: str = "demo@company.com", name: str = "Demo User") -> dict:
-        """Development login when Azure AD is not configured."""
+    def dev_login(self, db: Session, email: str | None = None, name: str | None = None) -> dict:
+        """Development login when Azure AD is not configured.
+
+        `name` is only included in the profile when actually supplied — an
+        existing (already-provisioned) user's real name must never be
+        clobbered by a generic default just because whoever's logging in
+        only typed their email.
+        """
+        email = email or "demo@company.com"
         profile = {
             "id": f"dev-{email}",
-            "displayName": name,
             "mail": email,
             "userPrincipalName": email,
             "department": "Sales",
         }
+        if name:
+            profile["displayName"] = name
         user = self._upsert_user(db, profile)
         token = self._create_jwt(user)
         return {"access_token": token, "user": user}
@@ -117,6 +126,12 @@ class AuthService:
     def _upsert_user(self, db: Session, profile: dict) -> User:
         email = profile.get("mail") or profile.get("userPrincipalName", "")
         oid = profile.get("id", "")
+
+        # Single choke point for both Azure AD (handle_callback) and
+        # dev_login — only the hardcoded core team can authenticate through
+        # either path until real Azure AD group-based access replaces this.
+        if not is_allowed_login(email):
+            raise ValueError(f"{email or '(no email)'} is not authorized to access this application")
 
         user = db.query(User).filter(User.email == email).first()
         if not user:

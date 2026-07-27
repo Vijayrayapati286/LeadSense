@@ -1,40 +1,45 @@
 """Seed database with sample data for development."""
 
 from datetime import datetime, timedelta
+import json
+import logging
 import random
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import Campaign, EmailLog, Recipient, Template, User
 from app.services.auth_service import AuthService
+from app.services.core_users import CORE_USERS
 
-# Named team members provisioned with a set password for email+password login
-# (POST /auth/login) — distinct from the unauthenticated dev-login fallback.
-# Passwords are fixed here (not randomly generated per boot) so they stay
-# reproducible across DB resets; only the bcrypt hash is ever persisted.
-CORE_USERS = [
-    ("Veerendra Chowhan", "veerendra.chowhan@feuji.com", "Xh9bKDNz2w#"),
-    ("Srikanth Reddy", "srikanth.k@feuji.com", "ussi0pKoDa%"),
-    ("Preeti Gupta", "preeti.gupta@feuji.com", "vuU7RYNesA!"),
-    ("Ramya Pinnika", "ramya.pinnika@feuji.com", "ePUh0uGsT2%"),
-    ("Ramya Swathi", "ramya.pasupuleti@feuji.com", "Ofc4mHbQUu$"),
-    ("Roshan Shenisetty", "roshan.shenishetty@feuji.com", "yZFQ0d7rUz%"),
-    ("Srinivas Reddy", "sreenivas.jetningu@feuji.com", "99SvEkJTwp$"),
-]
+logger = logging.getLogger(__name__)
 
 
 def provision_core_users(db: Session) -> None:
-    """Get-or-create each named team member and (re)set their password hash —
-    idempotent, safe to run on every startup, independent of the dummy demo
-    data seed below."""
-    for name, email, password in CORE_USERS:
+    """Get-or-create each named team member and (re)set their password hash
+    from CORE_USER_PASSWORDS — idempotent, safe to run on every startup,
+    independent of the dummy demo data seed below. A user whose email has no
+    entry in that env var still gets created (so the allowlist gate and app
+    identity work), just without a usable password until it's configured."""
+    try:
+        passwords = json.loads(get_settings().core_user_passwords_json or "{}")
+    except (TypeError, ValueError):
+        logger.warning("CORE_USER_PASSWORDS is not valid JSON — no passwords provisioned this run")
+        passwords = {}
+
+    for name, email in CORE_USERS:
         user = db.query(User).filter(User.email == email).first()
         if not user:
             user = User(name=name, email=email, department="Sales")
             db.add(user)
         else:
             user.name = name
-        user.password_hash = AuthService.hash_password(password)
+
+        password = passwords.get(email)
+        if password:
+            user.password_hash = AuthService.hash_password(password)
+        elif not user.password_hash:
+            logger.warning("No password configured for %s — password login unavailable until CORE_USER_PASSWORDS is set", email)
     db.commit()
 
 

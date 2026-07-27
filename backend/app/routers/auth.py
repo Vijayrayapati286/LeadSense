@@ -59,7 +59,10 @@ def dev_login(data: DevLoginRequest | None = None, db: Session = Depends(get_db)
     if data and data.name:
         kwargs["name"] = data.name
 
-    result = auth_service.dev_login(db, **kwargs)
+    try:
+        result = auth_service.dev_login(db, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     return AuthCallbackResponse(
         access_token=result["access_token"],
         user=UserResponse.model_validate(result["user"]),

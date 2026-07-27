@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # soft bounces for the same address, it gets suppressed too.
     soft_bounce_threshold: int = 3
 
+    # JSON object mapping each core_users.CORE_USERS email to its password,
+    # e.g. {"name@feuji.com": "..."}. Kept out of source (core_users.py has
+    # no passwords) since that file is committed to a shared repo.
+    core_user_passwords_json: str = "{}"
+
     @property
     def azure_authority(self) -> str:
         return f"https://login.microsoftonline.com/{self.azure_tenant_id}"

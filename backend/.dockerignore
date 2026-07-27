@@ -1,0 +1,13 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+.env
+.env.*
+!.env.example
+.git/
+.pytest_cache/
+requirements-nopg.txt
+*.md

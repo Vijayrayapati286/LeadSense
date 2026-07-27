@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bulkmailer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-bulk_email_db}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bulkmailer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    # App secrets/config (AWS, Groq, JWT secret, Azure AD, ...) come from
+    # backend/.env, same file used for non-Docker local dev — never baked
+    # into the image (see backend/.dockerignore).
+    env_file:
+      - ./backend/.env
+    environment:
+      # Overrides backend/.env's own DATABASE_URL: inside this network the
+      # Postgres container is reachable at the service name "db", not
+      # localhost. In production point this at RDS instead and drop the
+      # "db" service entirely.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bulkmailer}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-bulk_email_db}
+      USE_SQLITE_FALLBACK: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  db_data:
