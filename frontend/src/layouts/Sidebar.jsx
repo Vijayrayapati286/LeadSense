@@ -43,7 +43,7 @@ export default function Sidebar() {
         </div>
         {!collapsed && (
           <div className="overflow-hidden">
-            <h1 className="font-bold text-sm leading-tight">CampaignFlow</h1>
+            <h1 className="font-bold text-sm leading-tight">LeadSense</h1>
             <p className="text-xs text-gray-400">Campaign Manager</p>
           </div>
         )}

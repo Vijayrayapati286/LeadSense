@@ -21,12 +21,19 @@ class SESService:
             try:
                 import boto3
 
-                self._client = boto3.client(
-                    "ses",
-                    region_name=self.settings.aws_region,
-                    aws_access_key_id=self.settings.aws_access_key_id,
-                    aws_secret_access_key=self.settings.aws_secret_access_key,
-                )
+                # Only pass static keys when explicitly configured (local dev,
+                # where there's no instance role to fall back on). Leaving
+                # them out otherwise lets boto3's default credential chain
+                # resolve credentials itself — on EC2/ECS that means the
+                # attached IAM role (e.g. ses-email-service-role) via the
+                # instance metadata service, with no long-lived keys to leak
+                # or rotate.
+                kwargs = {"region_name": self.settings.aws_region}
+                if self.settings.aws_access_key_id and self.settings.aws_secret_access_key:
+                    kwargs["aws_access_key_id"] = self.settings.aws_access_key_id
+                    kwargs["aws_secret_access_key"] = self.settings.aws_secret_access_key
+
+                self._client = boto3.client("ses", **kwargs)
             except Exception as exc:
                 logger.warning("Failed to initialize SES client, using mock: %s", exc)
         return self._client

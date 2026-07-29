@@ -487,6 +487,7 @@ class CampaignListSummaryResponse(BaseModel):
     total: int
     sent_count: int
     template_id: int | None = None
+    scheduled_at: datetime | None = None
 
 
 class CampaignListMemberResponse(BaseModel):
@@ -504,6 +505,16 @@ class CampaignListMemberResponse(BaseModel):
 
 class RetagListRequest(BaseModel):
     template_id: int | None = None
+
+
+class ListScheduleRequest(BaseModel):
+    scheduled_at: datetime
+
+
+class ListScheduleResponse(BaseModel):
+    scheduled: int
+    skipped_suppressed: int
+    scheduled_at: datetime
 
 
 # ── Campaign Sequence Stages ───────────────────────────────────────────────────
@@ -580,6 +591,8 @@ class EmailLogResponse(BaseModel):
     recipient_name: str | None = None
     recipient_email: str | None = None
     campaign_name: str | None = None
+    sender_name: str | None = None
+    sender_email: str | None = None
 
 
 class EmailLogListResponse(BaseModel):

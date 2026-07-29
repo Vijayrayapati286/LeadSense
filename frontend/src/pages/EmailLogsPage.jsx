@@ -79,6 +79,7 @@ export default function EmailLogsPage() {
                   <tr className="text-left text-gray-500">
                     <th className="px-6 py-3 font-medium">Prospect</th>
                     <th className="px-6 py-3 font-medium">Campaign</th>
+                    <th className="px-6 py-3 font-medium">Sent By</th>
                     <th className="px-6 py-3 font-medium">Date</th>
                     <th className="px-6 py-3 font-medium">Status</th>
                     <th className="px-6 py-3 font-medium">Error Message</th>
@@ -92,6 +93,10 @@ export default function EmailLogsPage() {
                         <p className="text-xs text-gray-500">{log.recipient_email}</p>
                       </td>
                       <td className="px-6 py-4 text-gray-600">{log.campaign_name || `Campaign #${log.campaign_id}`}</td>
+                      <td className="px-6 py-4 text-gray-600">
+                        {log.sender_name || <span className="text-gray-400">—</span>}
+                        {log.sender_email && <p className="text-xs text-gray-400">{log.sender_email}</p>}
+                      </td>
                       <td className="px-6 py-4 text-gray-600 whitespace-nowrap">{formatDateTime(log.sent_at)}</td>
                       <td className="px-6 py-4"><StatusBadge status={log.status} /></td>
                       <td className="px-6 py-4 text-gray-500 text-xs max-w-xs truncate">{log.error_message || '—'}</td>
@@ -99,7 +104,7 @@ export default function EmailLogsPage() {
                   ))}
                   {logs.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center text-gray-400">No email logs found</td>
+                      <td colSpan={6} className="px-6 py-12 text-center text-gray-400">No email logs found</td>
                     </tr>
                   )}
                 </tbody>

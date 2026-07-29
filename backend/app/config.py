@@ -1,6 +1,7 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +15,7 @@ class Settings(BaseSettings):
     app_name: str = "Bulk Email Campaign Manager"
     debug: bool = True
     secret_key: str = "dev-secret-key-change-in-production"
-    frontend_url: str = "http://localhost:5173"
+    frontend_url: str = "http://localhost:5180"
     backend_url: str = "http://localhost:8000"
 
     database_url: str = "postgresql://postgres:postgres@localhost:5432/bulk_email_db"
@@ -42,7 +43,7 @@ class Settings(BaseSettings):
     # JSON object mapping each core_users.CORE_USERS email to its password,
     # e.g. {"name@feuji.com": "..."}. Kept out of source (core_users.py has
     # no passwords) since that file is committed to a shared repo.
-    core_user_passwords_json: str = "{}"
+    core_user_passwords_json: str = Field("{}", validation_alias="CORE_USER_PASSWORDS")
 
     @property
     def azure_authority(self) -> str:

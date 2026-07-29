@@ -38,11 +38,14 @@ def list_logs(
     for log in logs:
         recipient = db.query(Recipient).filter(Recipient.id == log.recipient_id).first()
         campaign = db.query(Campaign).filter(Campaign.id == log.campaign_id).first()
+        sender = db.query(User).filter(User.id == log.sender_user_id).first() if log.sender_user_id else None
 
         item = EmailLogResponse.model_validate(log)
         item.recipient_name = recipient.name if recipient else None
         item.recipient_email = recipient.email if recipient else None
         item.campaign_name = campaign.campaign_name if campaign else None
+        item.sender_name = sender.name if sender else None
+        item.sender_email = sender.email if sender else None
 
         if search:
             term = search.lower()

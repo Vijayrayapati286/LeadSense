@@ -18,6 +18,7 @@ import {
   FiList,
   FiGrid,
   FiLayers,
+  FiCalendar,
 } from 'react-icons/fi';
 import {
   campaignService,
@@ -58,6 +59,15 @@ const EMPTY_RECIPIENT_FORM = { name: '', email: '', company: '', designation: ''
 // value/min, and a sensible default the moment "Schedule for later" is picked.
 function defaultScheduleValue() {
   const d = new Date(Date.now() + 5 * 60 * 1000);
+  d.setSeconds(0, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Same <input type="datetime-local"> formatting as defaultScheduleValue, for
+// an arbitrary Date (e.g. "3 days from now") rather than a fixed 5-minute offset.
+function toDateTimeLocalValue(date) {
+  const d = new Date(date);
   d.setSeconds(0, 0);
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -525,6 +535,9 @@ export default function CampaignDetailPage() {
   const [listDisplayMode, setListDisplayMode] = useState('table'); // 'table' | 'catalog'
   const [listTemplateId, setListTemplateId] = useState('');
   const [retaggingList, setRetaggingList] = useState(false);
+  const [scheduleModalList, setScheduleModalList] = useState(null);
+  const [scheduleListValue, setScheduleListValue] = useState('');
+  const [schedulingList, setSchedulingList] = useState(false);
 
   const loadLists = useCallback(async () => {
     setListsLoading(true);
@@ -568,6 +581,38 @@ export default function CampaignDetailPage() {
     setOpenListName('');
     setListMembers([]);
     setListSelectedIds([]);
+  };
+
+  const openScheduleList = (e, list) => {
+    e.stopPropagation();
+    setScheduleModalList(list);
+    setScheduleListValue(toDateTimeLocalValue(new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)));
+  };
+
+  const closeScheduleList = () => {
+    setScheduleModalList(null);
+    setScheduleListValue('');
+  };
+
+  const handleScheduleList = async () => {
+    if (!scheduleModalList || !scheduleListValue) return;
+    setSchedulingList(true);
+    try {
+      const { data } = await campaignService.scheduleList(
+        id,
+        scheduleModalList.group_id,
+        new Date(scheduleListValue).toISOString()
+      );
+      let message = `Scheduled ${data.scheduled} email(s) in "${scheduleModalList.name}" for ${new Date(scheduleListValue).toLocaleString()}.`;
+      if (data.skipped_suppressed > 0) message += ` (${data.skipped_suppressed} skipped — blacklisted)`;
+      toast.success(message);
+      closeScheduleList();
+      loadLists();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to schedule list');
+    } finally {
+      setSchedulingList(false);
+    }
   };
 
   const handleChangeListTemplate = async (newTemplateId) => {
@@ -1183,18 +1228,33 @@ export default function CampaignDetailPage() {
                         {lists.map((l) => {
                           const tpl = templates.find((t) => t.id === l.template_id);
                           return (
-                            <button
+                            <div
                               key={l.group_id}
                               onClick={() => handleOpenList(l)}
-                              className="text-left rounded-xl border border-gray-200 bg-white p-4 hover:border-primary-300 hover:shadow-sm transition-all"
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleOpenList(l); }}
+                              className="relative text-left cursor-pointer rounded-xl border border-gray-200 bg-white p-4 hover:border-primary-300 hover:shadow-sm transition-all"
                             >
-                              <p className="font-semibold text-gray-900">{l.name}</p>
+                              <button
+                                onClick={(e) => openScheduleList(e, l)}
+                                title="Schedule this list"
+                                className="absolute top-3 right-3 p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                              >
+                                <FiCalendar size={16} />
+                              </button>
+                              <p className="font-semibold text-gray-900 pr-7">{l.name}</p>
                               <p className="text-sm text-gray-500 mt-1">{l.total} prospect{l.total !== 1 ? 's' : ''}</p>
                               <p className="text-xs text-gray-500 mt-1">Sent {l.sent_count} / {l.total}</p>
                               <p className="text-xs text-gray-500 mt-2">
                                 Template: <span className="font-medium text-gray-700">{tpl ? (tpl.name || 'Untitled') : 'No template'}</span>
                               </p>
-                            </button>
+                              {l.scheduled_at && (
+                                <p className="text-xs text-primary-600 mt-2 flex items-center gap-1">
+                                  <FiCalendar size={12} /> Scheduled for {new Date(l.scheduled_at).toLocaleString()}
+                                </p>
+                              )}
+                            </div>
                           );
                         })}
                       </div>
@@ -1664,6 +1724,57 @@ export default function CampaignDetailPage() {
             </button>
             <button onClick={handleAddRecipient} disabled={savingRecipient} className="btn-primary flex items-center gap-2">
               {savingRecipient ? <LoadingSpinner size="sm" /> : <FiUserPlus size={16} />} Add Prospect
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!scheduleModalList}
+        onClose={closeScheduleList}
+        title={`Schedule "${scheduleModalList?.name ?? ''}"`}
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Every unsent prospect in this list will be queued and sent automatically starting at the time below,
+            staggered to protect deliverability.
+          </p>
+          <div className="flex gap-2">
+            {[
+              { label: 'Tomorrow', days: 1 },
+              { label: 'In 3 days', days: 3 },
+              { label: 'In 1 week', days: 7 },
+            ].map(({ label, days }) => (
+              <button
+                key={days}
+                onClick={() => setScheduleListValue(toDateTimeLocalValue(new Date(Date.now() + days * 24 * 60 * 60 * 1000)))}
+                className="btn-secondary text-xs px-2 py-1"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div>
+            <label className="label">Send at</label>
+            <input
+              type="datetime-local"
+              className="input-field"
+              value={scheduleListValue}
+              min={defaultScheduleValue()}
+              onChange={(e) => setScheduleListValue(e.target.value)}
+            />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button onClick={closeScheduleList} className="btn-secondary" disabled={schedulingList}>
+              Cancel
+            </button>
+            <button
+              onClick={handleScheduleList}
+              disabled={schedulingList || !scheduleListValue}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50"
+            >
+              {schedulingList ? <LoadingSpinner size="sm" /> : <FiCalendar size={16} />} Schedule
             </button>
           </div>
         </div>

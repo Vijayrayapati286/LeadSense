@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 
 from app.database.connection import SessionLocal
-from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template
+from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template, User
 from app.services.ses_service import SESService
 from app.utils.helpers import build_recipient_context, render_template, utc_now
 
@@ -46,6 +46,13 @@ def next_business_hour_utc(tz_name: str, now_utc: datetime) -> datetime | None:
     return next_9am_local.astimezone(timezone.utc)
 
 _scheduler: AsyncIOScheduler | None = None
+
+
+def _resolve_sender(cr: CampaignRecipient) -> User | None:
+    """Whoever triggered this recipient's current send (Send/Schedule) is the
+    From/Reply-To identity — falls back to the campaign's creator only for
+    rows queued before sender_user_id existed."""
+    return cr.sender_user or cr.campaign.owner_user
 
 
 def compute_next_send_at(stage: CampaignSequenceStage):
@@ -96,7 +103,7 @@ def process_due_followups() -> None:
             if stage.closing:
                 body = f"{body}\n\n{render_template(stage.closing, context)}"
 
-            owner = cr.campaign.owner_user
+            owner = _resolve_sender(cr)
             result = ses_service.send_email(
                 to_email=recipient.email,
                 subject=subject,
@@ -112,6 +119,7 @@ def process_due_followups() -> None:
                     recipient_id=recipient.id,
                     status=result["status"],
                     error_message=result.get("error"),
+                    sender_user_id=owner.id if owner else None,
                 )
             )
 
@@ -190,7 +198,7 @@ def process_queued_initial_sends() -> None:
             if template.closing:
                 body = f"{body}\n\n{render_template(template.closing, context)}"
 
-            owner = cr.campaign.owner_user
+            owner = _resolve_sender(cr)
             result = ses_service.send_email(
                 to_email=recipient.email,
                 subject=subject,
@@ -206,6 +214,7 @@ def process_queued_initial_sends() -> None:
                     recipient_id=recipient.id,
                     status=result["status"],
                     error_message=result.get("error"),
+                    sender_user_id=owner.id if owner else None,
                 )
             )
 

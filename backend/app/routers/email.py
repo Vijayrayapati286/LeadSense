@@ -132,6 +132,7 @@ def send_emails(
                 recipient_id=recipients_all[0].id if recipients_all else None,
                 status=result["details"][0]["status"],
                 error_message=result["details"][0].get("error"),
+                sender_user_id=current_user.id,
             ))
             campaign.emails_sent += result["sent"]
             if result["sent"] > 0:
@@ -181,6 +182,7 @@ def send_emails(
 
         cr.status = "queued"
         cr.next_send_at = base_time + timedelta(seconds=index * interval_seconds)
+        cr.sender_user_id = current_user.id
         queued += 1
 
     campaign.status = "active"

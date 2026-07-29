@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
-from app.models import CampaignRecipient, Recipient, User
+from app.models import Campaign, CampaignRecipient, Recipient, User
 from app.schemas.schemas import (
     CampaignListMemberResponse,
     CampaignListSummaryResponse,
@@ -17,6 +17,8 @@ from app.schemas.schemas import (
     CampaignSequenceStageResponse,
     CampaignSequenceStageUpdate,
     CampaignUpdate,
+    ListScheduleRequest,
+    ListScheduleResponse,
     MessageResponse,
     RetagListRequest,
     TemplateCreate,
@@ -24,6 +26,7 @@ from app.schemas.schemas import (
     TemplateUpdate,
 )
 from app.services.campaign_service import CampaignService
+from app.utils.helpers import utc_now
 
 router = APIRouter(tags=["Campaigns"])
 campaign_service = CampaignService()
@@ -273,3 +276,27 @@ def retag_campaign_list(
 ):
     updated = campaign_service.retag_list(db, campaign_id, group_id, data.template_id)
     return MessageResponse(message=f"Re-tagged {updated} prospect(s)")
+
+
+@router.post("/campaign/{campaign_id}/lists/{group_id}/schedule", response_model=ListScheduleResponse)
+def schedule_campaign_list(
+    campaign_id: int,
+    group_id: int,
+    data: ListScheduleRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    scheduled_at = data.scheduled_at
+    if scheduled_at.tzinfo is None:
+        raise HTTPException(status_code=400, detail="scheduled_at must include a timezone")
+    if scheduled_at <= utc_now():
+        raise HTTPException(status_code=400, detail="scheduled_at must be in the future")
+
+    result = campaign_service.schedule_list(db, campaign_id, group_id, scheduled_at, current_user.id)
+    if result["scheduled"] == 0 and result["skipped_suppressed"] == 0:
+        raise HTTPException(status_code=404, detail="List not found or has no unsent prospects")
+    return ListScheduleResponse(**result)

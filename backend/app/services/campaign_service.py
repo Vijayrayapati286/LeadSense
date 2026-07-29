@@ -1,10 +1,16 @@
 """Campaign CRUD business logic."""
 
+from datetime import timedelta
+
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models import Campaign, CampaignRecipient, CampaignSequenceStage, Recipient, RecipientGroup, Template
 from app.schemas.schemas import CampaignCreate, CampaignSequenceStageCreate, CampaignUpdate
+from app.services.app_settings_service import AppSettingsService
+
+
+app_settings_service = AppSettingsService()
 
 
 class CampaignService:
@@ -185,14 +191,60 @@ class CampaignService:
                 .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.group_id == group_id)
                 .first()
             )
+            # Earliest pending send time among this list's queued rows — what
+            # the calendar icon shows as "Scheduled for ..." on the card.
+            earliest_queued = (
+                db.query(func.min(CampaignRecipient.next_send_at))
+                .filter(
+                    CampaignRecipient.campaign_id == campaign_id,
+                    CampaignRecipient.group_id == group_id,
+                    CampaignRecipient.status == "queued",
+                    CampaignRecipient.next_send_at.isnot(None),
+                )
+                .scalar()
+            )
             results.append({
                 "group_id": group_id,
                 "name": name,
                 "total": total,
                 "sent_count": sent_count or 0,
                 "template_id": sample.template_id if sample else None,
+                "scheduled_at": earliest_queued,
             })
         return results
+
+    def schedule_list(self, db: Session, campaign_id: int, group_id: int, scheduled_at, sender_user_id: int) -> dict:
+        """Queue every not-yet-sent prospect in this list to go out starting
+        at scheduled_at, staggered by the configured send interval — reuses
+        the same CampaignRecipient.next_send_at queue the regular Send flow
+        writes to, so process_queued_initial_sends (scheduler_service.py)
+        picks these up and sends them automatically with no extra job."""
+        rows = (
+            db.query(CampaignRecipient, Recipient)
+            .join(Recipient, Recipient.id == CampaignRecipient.recipient_id)
+            .filter(
+                CampaignRecipient.campaign_id == campaign_id,
+                CampaignRecipient.group_id == group_id,
+                CampaignRecipient.status != "sent",
+            )
+            .all()
+        )
+
+        skipped_suppressed = len([cr for cr, r in rows if r.is_suppressed])
+        schedulable = [cr for cr, r in rows if not r.is_suppressed]
+
+        interval_seconds = app_settings_service.get(db).send_interval_seconds
+        for index, cr in enumerate(schedulable):
+            cr.status = "queued"
+            cr.next_send_at = scheduled_at + timedelta(seconds=index * interval_seconds)
+            cr.sender_user_id = sender_user_id
+        db.commit()
+
+        return {
+            "scheduled": len(schedulable),
+            "skipped_suppressed": skipped_suppressed,
+            "scheduled_at": scheduled_at,
+        }
 
     def get_list_members(
         self, db: Session, campaign_id: int, group_id: int

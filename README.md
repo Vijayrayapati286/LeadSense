@@ -48,7 +48,21 @@ Bulk_Email_Project/
 
 - Python 3.11+
 - Node.js 18+
-- (Optional) PostgreSQL 15+
+- Docker (for local Postgres — see below)
+
+### Local Postgres (recommended over the SQLite fallback)
+
+```bash
+copy .env.example .env       # Windows, only needed the first time (Postgres creds)
+docker compose up db         # starts only the "db" service, leaves it running
+```
+
+Backend and frontend still run natively (`uvicorn --reload`, `npm run dev`) — full
+`docker compose up` (all three services) is for validating the container build, not
+day-to-day iteration; Docker Desktop's bind-mount hot-reload is slow on Windows.
+`backend/.env`'s `DATABASE_URL` already points at `localhost:5432`, so once the `db`
+container is up the backend connects to real Postgres automatically (falls back to
+SQLite only if Postgres is unreachable).
 
 ### Backend Setup
 
@@ -87,7 +101,7 @@ npm install
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173`.
+The app will be available at `http://localhost:5180`.
 
 ### Login
 
@@ -142,10 +156,26 @@ Set mock flags to `false` and provide real credentials to enable live integratio
 
 ## Database Migrations
 
+The app itself creates the full current schema on startup (`init_db()` →
+`Base.metadata.create_all()`), so a **fresh** database needs stamping, not
+upgrading:
+
 ```bash
 cd backend
+uvicorn app.main:app --port 8000   # first run: creates all tables, then Ctrl+C
+alembic stamp head                 # tells Alembic this DB is already at head
+```
+
+Only after that does the normal flow apply for actual schema changes going
+forward:
+
+```bash
+alembic revision --autogenerate -m "..."
 alembic upgrade head
 ```
+
+Running `alembic upgrade head` against a brand-new empty database fails —
+the migration files are incremental diffs assuming tables already exist.
 
 ## License
 

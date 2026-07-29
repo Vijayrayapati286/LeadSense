@@ -27,6 +27,7 @@ export const campaignService = {
   getLists: (id) => api.get(`/campaign/${id}/lists`),
   getListMembers: (id, groupId) => api.get(`/campaign/${id}/lists/${groupId}/recipients`),
   retagList: (id, groupId, templateId) => api.put(`/campaign/${id}/lists/${groupId}/template`, { template_id: templateId }),
+  scheduleList: (id, groupId, scheduledAt) => api.post(`/campaign/${id}/lists/${groupId}/schedule`, { scheduled_at: scheduledAt }),
 };
 
 export const sequenceService = {

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiMail, FiShield, FiLock } from 'react-icons/fi';
+import { FiMail, FiLock } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import { authService } from '../services/services';
@@ -8,8 +8,6 @@ import LoadingSpinner from '../components/ui/LoadingSpinner';
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
-  const [devName, setDevName] = useState('');
-  const [devEmail, setDevEmail] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
@@ -49,7 +47,7 @@ export default function LoginPage() {
   const handleDevLogin = async () => {
     setLoading(true);
     try {
-      await devLogin(devEmail.trim() || undefined, devName.trim() || undefined);
+      await devLogin();
       toast.success('Logged in successfully');
       navigate('/dashboard');
     } catch {
@@ -67,7 +65,7 @@ export default function LoginPage() {
           <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center mb-8">
             <FiMail size={32} />
           </div>
-          <h1 className="text-4xl font-bold mb-4">CampaignFlow</h1>
+          <h1 className="text-4xl font-bold mb-4">LeadSense</h1>
           <p className="text-primary-200 text-lg leading-relaxed">
             Streamline your sales outreach with powerful bulk email campaigns,
             AI-generated templates, and comprehensive analytics.
@@ -163,45 +161,6 @@ export default function LoginPage() {
               )}
             </button>
 
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-200" />
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-3 bg-white text-gray-500">or</span>
-              </div>
-            </div>
-
-            <div className="flex gap-2 mb-3">
-              <input
-                type="text"
-                placeholder="Name (optional)"
-                value={devName}
-                onChange={(e) => setDevName(e.target.value)}
-                className="input-field text-sm"
-              />
-              <input
-                type="email"
-                placeholder="Email (optional)"
-                value={devEmail}
-                onChange={(e) => setDevEmail(e.target.value)}
-                className="input-field text-sm"
-              />
-            </div>
-
-            <button
-              onClick={handleDevLogin}
-              disabled={loading}
-              className="w-full btn-secondary flex items-center justify-center gap-2"
-            >
-              <FiShield size={18} />
-              Dev Login (Demo)
-            </button>
-
-            <p className="text-xs text-gray-400 text-center mt-4">
-              Dev login uses mock authentication when Azure AD is not configured.
-              Set a name/email above to simulate a specific team member's sender identity.
-            </p>
           </div>
         </div>
       </div>

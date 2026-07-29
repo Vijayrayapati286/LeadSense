@@ -295,11 +295,18 @@ class CampaignRecipient(Base):
     replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     bounced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Whoever queued this recipient's current send (via Send or the list
+    # scheduler) — NOT the campaign's creator. Drives From/Reply-To at send
+    # time so replies reach the rep who actually triggered it, since campaigns
+    # and their lists are shared/edited across the team. Carries forward
+    # through follow-up stages (same row, not reset per stage).
+    sender_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="campaign_recipients")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="campaign_links")
     template: Mapped["Template | None"] = relationship("Template")
     group: Mapped["RecipientGroup | None"] = relationship("RecipientGroup")
+    sender_user: Mapped["User | None"] = relationship("User", foreign_keys=[sender_user_id])
 
 
 class CampaignSequenceStage(Base):
@@ -344,6 +351,11 @@ class EmailLog(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # sent, failed, pending
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Permanent record of who was used as From/Reply-To for this specific
+    # send — copied from CampaignRecipient.sender_user_id at send time, so it
+    # stays accurate even if that row's sender later changes for its next stage.
+    sender_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="email_logs")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="email_logs")
+    sender_user: Mapped["User | None"] = relationship("User", foreign_keys=[sender_user_id])

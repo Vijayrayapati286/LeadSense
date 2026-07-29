@@ -70,14 +70,23 @@ recorded in this repo.
 
 ## Deployment
 
-- **Local**: `docker-compose.yml` at repo root — `db` (Postgres),
-  `backend` (FastAPI/uvicorn), `frontend` (nginx serving the Vite build,
-  reverse-proxying `/api/` to the backend — this is what lets an L4 load
-  balancer with no path routing of its own sit in front of one origin).
-  Copy `.env.example` → `.env` (compose-level Postgres creds) and
-  `backend/.env.example` → `backend/.env` (app secrets/config) to run it.
-  Verified working end-to-end (build + boot + real request through the
-  full chain) as of this write-up.
+- **Local (day-to-day dev)**: `docker compose up db` for Postgres only,
+  backend/frontend run natively (`uvicorn --reload`, `npm run dev`) —
+  Docker Desktop's bind-mount hot-reload is slow on Windows, so running the
+  full stack in containers for every save isn't worth it. `db` is exposed
+  on `localhost:5432` for this reason (see `docker-compose.yml`).
+  `backend/.env`'s `DATABASE_URL` already targets `localhost`, and
+  `connection.py` auto-falls-back to SQLite if Postgres isn't reachable.
+- **Local (full-stack verification)**: `docker compose up` (all three
+  services) — `db` (Postgres), `backend` (FastAPI/uvicorn), `frontend`
+  (nginx serving the Vite build, reverse-proxying `/api/` to the backend —
+  this is what lets an L4 load balancer with no path routing of its own sit
+  in front of one origin). Copy `.env.example` → `.env` (compose-level
+  Postgres creds) and `backend/.env.example` → `backend/.env` (app
+  secrets/config) to run it. This is the same shape the k8s pods will run
+  in, so it's the right check before shipping a container change — not the
+  loop to use on every save. Verified working end-to-end (build + boot +
+  real request through the full chain) as of this write-up.
 - **AWS target**: cost-optimized Kubernetes-based stack — NLB (TCP
   passthrough) → ingress-nginx (does the path routing NLB can't) →
   pods; cert-manager + Let's Encrypt instead of ACM; GoDaddy DNS instead
