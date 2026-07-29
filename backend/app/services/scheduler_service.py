@@ -70,8 +70,9 @@ def compute_next_send_at(stage: CampaignSequenceStage):
 def process_due_followups() -> None:
     db: Session = SessionLocal()
     try:
-        due = (
-            db.query(CampaignRecipient)
+        due_ids = [
+            row.id
+            for row in db.query(CampaignRecipient.id)
             .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
             .filter(
                 CampaignRecipient.next_send_at.isnot(None),
@@ -80,9 +81,29 @@ def process_due_followups() -> None:
                 Recipient.is_suppressed == False,  # noqa: E712
             )
             .all()
-        )
+        ]
 
-        for cr in due:
+        sent_count = 0
+        for cr_id in due_ids:
+            # Re-fetch with a row lock, skipping rows another process already
+            # claimed (SKIP LOCKED) — if this backend ever runs as more than
+            # one replica, each has its own in-process poller hitting the
+            # same table; without this, two replicas can both see the same
+            # "due" row and both send it. Re-checking the terminal-status
+            # filter here too, in case a reply/bounce landed between the scan
+            # above and this lock.
+            cr = (
+                db.query(CampaignRecipient)
+                .filter(
+                    CampaignRecipient.id == cr_id,
+                    CampaignRecipient.status.notin_(TERMINAL_STATUSES),
+                )
+                .with_for_update(skip_locked=True)
+                .first()
+            )
+            if cr is None:
+                continue
+
             next_stage_order = cr.current_stage + 1
             stage = (
                 db.query(CampaignSequenceStage)
@@ -94,6 +115,7 @@ def process_due_followups() -> None:
             )
             if not stage:
                 cr.next_send_at = None
+                db.commit()
                 continue
 
             recipient = cr.recipient
@@ -139,9 +161,12 @@ def process_due_followups() -> None:
             else:
                 cr.next_send_at = None
 
-        db.commit()
-        if due:
-            logger.info("Processed %d due follow-up(s)", len(due))
+            db.commit()
+            if result["status"] == "sent":
+                sent_count += 1
+
+        if sent_count:
+            logger.info("Processed %d due follow-up(s)", sent_count)
     except Exception:
         logger.exception("Error processing due follow-ups")
         db.rollback()
@@ -155,8 +180,9 @@ def process_queued_initial_sends() -> None:
     due. Mirrors process_due_followups' approach for later stages."""
     db: Session = SessionLocal()
     try:
-        due = (
-            db.query(CampaignRecipient)
+        due_ids = [
+            row.id
+            for row in db.query(CampaignRecipient.id)
             .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
             .filter(
                 CampaignRecipient.status == "queued",
@@ -165,15 +191,28 @@ def process_queued_initial_sends() -> None:
                 Recipient.is_suppressed == False,  # noqa: E712
             )
             .all()
-        )
+        ]
 
-        for cr in due:
+        sent_count = 0
+        for cr_id in due_ids:
+            # Row lock, skipping rows another process already claimed — see
+            # the matching comment in process_due_followups for why.
+            cr = (
+                db.query(CampaignRecipient)
+                .filter(CampaignRecipient.id == cr_id, CampaignRecipient.status == "queued")
+                .with_for_update(skip_locked=True)
+                .first()
+            )
+            if cr is None:
+                continue
+
             recipient = cr.recipient
 
             if cr.campaign.use_recipient_timezone and recipient.timezone:
                 reschedule = next_business_hour_utc(recipient.timezone, utc_now())
                 if reschedule is not None:
                     cr.next_send_at = reschedule
+                    db.commit()
                     continue  # stays "queued" — outside business hours, try again then
 
             template = None
@@ -191,6 +230,7 @@ def process_queued_initial_sends() -> None:
             if not template:
                 cr.status = "failed"
                 cr.next_send_at = None
+                db.commit()
                 continue
             context = build_recipient_context(recipient)
             subject = render_template(template.subject, context)
@@ -231,9 +271,12 @@ def process_queued_initial_sends() -> None:
             else:
                 cr.next_send_at = None
 
-        db.commit()
-        if due:
-            logger.info("Sent %d queued initial email(s)", len(due))
+            db.commit()
+            if result["status"] == "sent":
+                sent_count += 1
+
+        if sent_count:
+            logger.info("Sent %d queued initial email(s)", sent_count)
     except Exception:
         logger.exception("Error processing queued initial sends")
         db.rollback()
