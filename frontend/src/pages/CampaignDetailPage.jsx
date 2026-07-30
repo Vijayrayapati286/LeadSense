@@ -33,7 +33,7 @@ import {
 } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import { useContactSearch } from '../hooks/useContactSearch';
-import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
+import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml, stripHtml } from '../utils/helpers';
 import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -998,7 +998,7 @@ export default function CampaignDetailPage() {
                             <span className="text-xs px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 capitalize">{t.type}</span>
                           </div>
                           <p className="text-sm text-gray-700 mt-1.5">{t.subject}</p>
-                          <p className="text-xs text-gray-500 mt-1 line-clamp-2 whitespace-pre-wrap">{t.body}</p>
+                          <p className="text-xs text-gray-500 mt-1 line-clamp-2 whitespace-pre-wrap">{stripHtml(t.body, t.type)}</p>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
                           <button

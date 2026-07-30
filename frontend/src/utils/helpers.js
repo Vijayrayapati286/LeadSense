@@ -58,6 +58,16 @@ export function isTemplateBodyEmpty(body, type) {
   return !/<(img|table)\b/i.test(body);
 }
 
+/** Plain-text snippet from a template body, for compact list/card previews —
+ * manual templates store real HTML, which must never be interpolated as JSX
+ * text directly (shows literal tags) nor as full dangerouslySetInnerHTML in
+ * a clamped summary (unnecessary formatting/sanitization for a 2-line teaser). */
+export function stripHtml(body, type) {
+  if (!body) return '';
+  if (type !== 'manual') return body;
+  return body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+
 /** Manual templates saved before the rich text editor shipped stored plain
  * markdown-lite text (**bold**, "- " bullets). Upgrade that once into an
  * HTML doc on load so old templates still display/edit correctly, without a
