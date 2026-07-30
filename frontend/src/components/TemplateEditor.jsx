@@ -1,5 +1,6 @@
 import { FiZap, FiEdit3, FiFileText } from 'react-icons/fi';
 import LoadingSpinner from './ui/LoadingSpinner';
+import RichTextEditor from './RichTextEditor';
 import { renderTemplate, renderMarkdownLite } from '../utils/helpers';
 import { KNOWN_MERGE_FIELDS } from '../utils/mergeFields';
 
@@ -74,17 +75,13 @@ export default function TemplateEditor({
           </div>
           <div>
             <label className="label">Email Body</label>
-            <textarea className="input-field font-mono text-sm" rows={10} value={emailContent.body} onChange={(e) => updateContent('body', e.target.value)} placeholder="Write your email content here. Use {{Name}}, {{Company}} for personalization. Wrap text in **double asterisks** for bold, and start a line with '- ' for a bullet point." />
+            <RichTextEditor
+              value={emailContent.body}
+              onChange={(html) => updateContent('body', html)}
+              placeholder="Write your email content here. Use {{Name}}, {{Company}} for personalization."
+            />
             <p className="text-xs text-gray-400 mt-2">Available fields:</p>
             <MergeFieldHints />
-          </div>
-          <div>
-            <label className="label">Closing</label>
-            <input className="input-field" value={emailContent.closing} onChange={(e) => updateContent('closing', e.target.value)} />
-          </div>
-          <div>
-            <label className="label">CTA</label>
-            <input className="input-field" value={emailContent.cta} onChange={(e) => updateContent('cta', e.target.value)} />
           </div>
         </div>
       )}
@@ -156,14 +153,6 @@ export default function TemplateEditor({
               <div>
                 <label className="label">Body (editable)</label>
                 <textarea className="input-field" rows={8} value={emailContent.body} onChange={(e) => updateContent('body', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Closing</label>
-                <input className="input-field" value={emailContent.closing} onChange={(e) => updateContent('closing', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">CTA</label>
-                <input className="input-field" value={emailContent.cta} onChange={(e) => updateContent('cta', e.target.value)} />
               </div>
             </div>
           )}

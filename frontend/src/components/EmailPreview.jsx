@@ -1,6 +1,12 @@
+import DOMPurify from 'dompurify';
 import { renderMarkdownLite } from '../utils/helpers';
 
-export default function EmailPreview({ subject, recipientName, body, closing, cta }) {
+export default function EmailPreview({ subject, recipientName, body, closing, cta, type }) {
+  // Manual templates store real HTML from the rich text editor (already
+  // sanitized server-side on save) — render it as-is instead of running it
+  // through the markdown-lite path placeholder/AI templates still use.
+  const bodyHtml = type === 'manual' ? DOMPurify.sanitize(body || '') : renderMarkdownLite(body);
+
   return (
     <div className="max-w-2xl mx-auto">
       <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
@@ -30,7 +36,7 @@ export default function EmailPreview({ subject, recipientName, body, closing, ct
         <div className="p-6">
           <div
             className="prose prose-sm max-w-none text-gray-700 leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: renderMarkdownLite(body) }}
+            dangerouslySetInnerHTML={{ __html: bodyHtml }}
           />
           {closing && (
             <div

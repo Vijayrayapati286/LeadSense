@@ -47,6 +47,27 @@ export function renderMarkdownLite(text) {
     .join('');
 }
 
+/** True when a template body has no real content. Manual templates store
+ * HTML from the rich text editor — an empty doc serializes as "<p></p>",
+ * which a naive `.trim().length > 0` check wrongly treats as non-empty. */
+export function isTemplateBodyEmpty(body, type) {
+  if (!body) return true;
+  if (type !== 'manual') return body.trim().length === 0;
+  const stripped = body.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' ').trim();
+  if (stripped.length > 0) return false;
+  return !/<(img|table)\b/i.test(body);
+}
+
+/** Manual templates saved before the rich text editor shipped stored plain
+ * markdown-lite text (**bold**, "- " bullets). Upgrade that once into an
+ * HTML doc on load so old templates still display/edit correctly, without a
+ * DB migration. */
+export function ensureManualBodyIsHtml(body) {
+  if (!body) return body;
+  if (body.trim().startsWith('<')) return body;
+  return renderMarkdownLite(body);
+}
+
 /** Format date string for display */
 export function formatDate(dateStr) {
   if (!dateStr) return '—';
@@ -115,6 +136,29 @@ export function getStatusColor(status) {
     suppressed: 'bg-orange-100 text-orange-800',
   };
   return colors[status?.toLowerCase()] || 'bg-gray-100 text-gray-800';
+}
+
+/** The prospect-list upload endpoint returns a structured
+ * `{ error: "missing_columns", missing_columns: [...] }` detail when Name
+ * and/or Email ID can't be found in the file — this pulls that array out of
+ * an axios error, or returns null for any other kind of upload failure so
+ * the caller falls back to a plain toast. */
+export function getMissingUploadColumns(err) {
+  const detail = err?.response?.data?.detail;
+  if (detail && typeof detail === 'object' && detail.error === 'missing_columns') {
+    return detail.missing_columns || [];
+  }
+  return null;
+}
+
+/** Confirmation-dialog copy for a prospect-list upload that overlaps
+ * heavily with existing prospects — see getMissingUploadColumns above for
+ * the sibling "missing required column" case. */
+export function buildDuplicateUploadMessage(total, duplicateCount) {
+  return (
+    `We found that ${duplicateCount} of ${total} prospect(s) already exist in this prospect list. ` +
+    `Do you still want to import this file as a new prospect list?`
+  );
 }
 
 /** Debounce utility */

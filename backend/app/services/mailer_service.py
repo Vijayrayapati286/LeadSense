@@ -3,11 +3,12 @@
 from sqlalchemy.orm import Session
 
 from app.models import Mailer
+from app.utils.helpers import sanitize_html, sanitize_manual_body
 
 
 class MailerService:
     def create(self, db: Session, data: dict) -> Mailer:
-        mailer = Mailer(**data)
+        mailer = Mailer(**sanitize_manual_body(data))
         db.add(mailer)
         db.commit()
         db.refresh(mailer)
@@ -26,6 +27,9 @@ class MailerService:
         mailer = self.get_by_id(db, mailer_id)
         if not mailer:
             raise ValueError("Mailer not found")
+        effective_type = update_data.get("type", mailer.type)
+        if effective_type == "manual" and update_data.get("body"):
+            update_data["body"] = sanitize_html(update_data["body"])
         for field, value in update_data.items():
             setattr(mailer, field, value)
         db.commit()

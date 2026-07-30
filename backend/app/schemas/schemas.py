@@ -321,6 +321,11 @@ class UploadExcelResponse(BaseModel):
     updated: int = 0
     message: str
     group_name: str | None = None
+    # Set when the upload was paused for user confirmation instead of being
+    # imported — see the duplicate-detection step in POST /recipients/upload-excel.
+    requires_confirmation: bool = False
+    total: int | None = None
+    duplicate_count: int | None = None
 
 
 class ResponseTagRequest(BaseModel):
@@ -561,6 +566,7 @@ class SendEmailRequest(BaseModel):
     campaign_id: int
     subject: str
     body: str
+    type: str = "placeholder"
     recipient_ids: list[int] | None = None
 
 

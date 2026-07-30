@@ -4,7 +4,7 @@ import { FiArrowLeft, FiArrowRight, FiCheck, FiSave, FiBookOpen } from 'react-ic
 import { campaignService, templateService, mailerService, customFieldService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
-import { generateCampaignId, extractPlaceholders } from '../utils/helpers';
+import { generateCampaignId, extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
 import { buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import TemplateEditor from '../components/TemplateEditor';
@@ -72,10 +72,11 @@ export default function CreateCampaignPage() {
         setCampaignId(data.id);
         const templateRes = await campaignService.getTemplate(id).catch(() => null);
         if (templateRes?.data) {
-          setTemplateType(templateRes.data.type || 'manual');
+          const type = templateRes.data.type || 'manual';
+          setTemplateType(type);
           setEmailContent({
             subject: templateRes.data.subject || '',
-            body: templateRes.data.body || '',
+            body: type === 'manual' ? ensureManualBodyIsHtml(templateRes.data.body || '') : (templateRes.data.body || ''),
             closing: templateRes.data.closing || '',
             cta: templateRes.data.cta || '',
           });
@@ -146,7 +147,12 @@ export default function CreateCampaignPage() {
     const mailer = mailers.find((m) => String(m.id) === mailerId);
     if (!mailer) return;
     setTemplateType(mailer.type);
-    setEmailContent({ subject: mailer.subject, body: mailer.body, closing: mailer.closing || '', cta: mailer.cta || '' });
+    setEmailContent({
+      subject: mailer.subject,
+      body: mailer.type === 'manual' ? ensureManualBodyIsHtml(mailer.body) : mailer.body,
+      closing: mailer.closing || '',
+      cta: mailer.cta || '',
+    });
     toast.success(`Loaded mailer "${mailer.name}"`);
   };
 
@@ -155,7 +161,7 @@ export default function CreateCampaignPage() {
       toast.error('Enter a name for this mailer');
       return;
     }
-    if (!emailContent.subject.trim() || !emailContent.body.trim()) {
+    if (!emailContent.subject.trim() || isTemplateBodyEmpty(emailContent.body, templateType)) {
       toast.error('Subject and body are required to save a mailer');
       return;
     }
@@ -199,7 +205,7 @@ export default function CreateCampaignPage() {
     }
 
     const hasSubject = emailContent.subject.trim().length > 0;
-    const hasBody = emailContent.body.trim().length > 0;
+    const hasBody = !isTemplateBodyEmpty(emailContent.body, templateType);
     if (hasSubject !== hasBody) {
       toast.error('Complete both Subject and Body for the template, or leave both empty');
       setActiveTab('template');
@@ -234,7 +240,7 @@ export default function CreateCampaignPage() {
 
   const performSubmit = async () => {
     const hasSubject = emailContent.subject.trim().length > 0;
-    const hasBody = emailContent.body.trim().length > 0;
+    const hasBody = !isTemplateBodyEmpty(emailContent.body, templateType);
 
     setLoading(true);
     try {
@@ -353,7 +359,7 @@ export default function CreateCampaignPage() {
                 </select>
                 <button
                   onClick={() => setSaveMailerModalOpen(true)}
-                  disabled={!emailContent.subject.trim() || !emailContent.body.trim()}
+                  disabled={!emailContent.subject.trim() || isTemplateBodyEmpty(emailContent.body, templateType)}
                   className="btn-secondary text-sm flex items-center gap-1"
                 >
                   <FiSave size={14} /> Save as Mailer

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { FiPlus, FiEdit2, FiTrash2, FiBookOpen } from 'react-icons/fi';
 import { mailerService, templateService } from '../services/services';
 import { useToast } from '../hooks/useToast';
-import { extractPlaceholders } from '../utils/helpers';
+import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
 import { buildSamplePreviewContext } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import SearchInput from '../components/ui/SearchInput';
@@ -109,7 +109,7 @@ export default function TemplatesPage() {
     setTemplateType(mailer.type);
     setEmailContent({
       subject: mailer.subject,
-      body: mailer.body,
+      body: mailer.type === 'manual' ? ensureManualBodyIsHtml(mailer.body) : mailer.body,
       closing: mailer.closing || '',
       cta: mailer.cta || '',
     });
@@ -124,7 +124,7 @@ export default function TemplatesPage() {
       toast.error('Enter a name for this mailer');
       return;
     }
-    if (!emailContent.subject.trim() || !emailContent.body.trim()) {
+    if (!emailContent.subject.trim() || isTemplateBodyEmpty(emailContent.body, templateType)) {
       toast.error('Subject and body are required');
       return;
     }

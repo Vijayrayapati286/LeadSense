@@ -44,6 +44,65 @@
   }
 }
 
+/* Rich text editor (Manual template body) content area */
+.rich-text-content {
+  outline: none;
+}
+.rich-text-content p {
+  margin: 0 0 0.75em 0;
+}
+.rich-text-content ul,
+.rich-text-content ol {
+  padding-left: 1.5rem;
+  margin: 0 0 0.75em 0;
+}
+.rich-text-content ul {
+  list-style-type: disc;
+}
+.rich-text-content ol {
+  list-style-type: decimal;
+}
+.rich-text-content a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+.rich-text-content blockquote {
+  border-left: 3px solid #e5e7eb;
+  padding-left: 0.75rem;
+  color: #6b7280;
+  margin: 0 0 0.75em 0;
+}
+.rich-text-content hr {
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 1em 0;
+}
+.rich-text-content img {
+  max-width: 100%;
+}
+.rich-text-content table {
+  border-collapse: collapse;
+  margin: 0 0 0.75em 0;
+  width: 100%;
+}
+.rich-text-content th,
+.rich-text-content td {
+  border: 1px solid #d1d5db;
+  padding: 4px 8px;
+  min-width: 1em;
+}
+.rich-text-content th {
+  background: #f3f4f6;
+  font-weight: 600;
+}
+.rich-text-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #9ca3af;
+  pointer-events: none;
+  height: 0;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

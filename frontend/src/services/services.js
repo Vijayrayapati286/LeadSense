@@ -10,6 +10,7 @@ export const authService = {
 
 export const dashboardService = {
   getStats: () => api.get('/dashboard/stats'),
+  exportReport: () => api.get('/dashboard/export-report', { responseType: 'blob' }),
 };
 
 export const campaignService = {
@@ -38,12 +39,13 @@ export const sequenceService = {
 };
 
 export const recipientService = {
-  uploadExcel: (file, groupName, campaignId, templateId) => {
+  uploadExcel: (file, groupName, campaignId, templateId, confirm = false) => {
     const formData = new FormData();
     formData.append('file', file);
     if (groupName) formData.append('group_name', groupName);
     if (campaignId) formData.append('campaign_id', campaignId);
     if (templateId) formData.append('template_id', templateId);
+    if (confirm) formData.append('confirm', 'true');
     return api.post('/recipients/upload-excel', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
