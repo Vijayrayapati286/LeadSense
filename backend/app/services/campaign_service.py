@@ -5,9 +5,18 @@ from datetime import timedelta
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.models import Campaign, CampaignRecipient, CampaignSequenceStage, Recipient, RecipientGroup, Template
+from app.models import (
+    Campaign,
+    CampaignRecipient,
+    CampaignSequenceStage,
+    Recipient,
+    RecipientGroup,
+    RecipientGroupMember,
+    Template,
+)
 from app.schemas.schemas import CampaignCreate, CampaignSequenceStageCreate, CampaignUpdate
 from app.services.app_settings_service import AppSettingsService
+from app.utils.helpers import sanitize_html, sanitize_manual_body
 
 
 app_settings_service = AppSettingsService()
@@ -80,6 +89,12 @@ class CampaignService:
         template = db.query(Template).filter(Template.id == template_id).first()
         if not template:
             raise ValueError("Template not found")
+        # A partial update might touch `body` without `type` in the payload —
+        # fall back to the stored type so a body edit on an existing Manual
+        # template still gets sanitized.
+        effective_type = update_data.get("type", template.type)
+        if effective_type == "manual" and update_data.get("body"):
+            update_data["body"] = sanitize_html(update_data["body"])
         for field, value in update_data.items():
             setattr(template, field, value)
         db.commit()
@@ -114,6 +129,7 @@ class CampaignService:
         if not campaign:
             raise ValueError("Campaign not found")
 
+        template_data = sanitize_manual_body(template_data)
         template = Template(
             campaign_id=campaign_id,
             name=template_data.get("name") or f"Template {len(campaign.templates) + 1}",
@@ -143,10 +159,14 @@ class CampaignService:
         group_id: int | None = None,
     ) -> int:
         """Get-or-create the CampaignRecipient row for each recipient and set
-        its template_id (and group_id, when tagging happened as part of an
-        Upload Excel / Add Manually under a named list) — this is what makes
-        a prospect list send with a specific template rather than the
-        campaign's primary one, and what "By List" browsing groups on."""
+        its template_id — this is what makes a prospect list send with a
+        specific template rather than the campaign's primary one. `group_id`
+        is stamped too, but only as a last-tagged marker: it's a single value
+        per (campaign, recipient) and gets overwritten if this recipient is
+        later tagged under a different list, so "By List" browsing groups on
+        actual RecipientGroupMember membership instead (see
+        list_campaign_lists) — that stays correct even when the same
+        recipient belongs to several lists tagged to one campaign."""
         tagged = 0
         for recipient_id in recipient_ids:
             cr = (
@@ -165,19 +185,31 @@ class CampaignService:
         return tagged
 
     def list_campaign_lists(self, db: Session, campaign_id: int) -> list[dict]:
-        """Every list (RecipientGroup) this campaign's prospects were tagged
-        under, with a total, sent count, and representative template — the
-        "By List" browse mode's summary cards."""
+        """Every list (RecipientGroup) with at least one member tagged to
+        this campaign, with a total, sent count, and representative template
+        — the "By List" browse mode's summary cards.
+
+        Membership here is resolved via RecipientGroupMember (actual,
+        append-only group membership) rather than CampaignRecipient.group_id.
+        That column holds only the single most-recently-tagged list for a
+        given (campaign, recipient) pair — a recipient shared between two
+        uploaded lists would flip it to whichever list was uploaded last,
+        making the older list's card lose members or vanish entirely even
+        though the list itself still exists and wasn't touched."""
         rows = (
             db.query(
-                CampaignRecipient.group_id,
+                RecipientGroup.id.label("group_id"),
                 RecipientGroup.name,
                 func.count(CampaignRecipient.id).label("total"),
                 func.sum(case((CampaignRecipient.status == "sent", 1), else_=0)).label("sent_count"),
             )
-            .join(RecipientGroup, RecipientGroup.id == CampaignRecipient.group_id)
-            .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.group_id.isnot(None))
-            .group_by(CampaignRecipient.group_id, RecipientGroup.name)
+            .join(RecipientGroupMember, RecipientGroupMember.group_id == RecipientGroup.id)
+            .join(
+                CampaignRecipient,
+                (CampaignRecipient.recipient_id == RecipientGroupMember.recipient_id)
+                & (CampaignRecipient.campaign_id == campaign_id),
+            )
+            .group_by(RecipientGroup.id, RecipientGroup.name)
             .order_by(RecipientGroup.name)
             .all()
         )
@@ -188,16 +220,18 @@ class CampaignService:
             # row in a group on the same template_id, so any row's value works.
             sample = (
                 db.query(CampaignRecipient)
-                .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.group_id == group_id)
+                .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
+                .filter(CampaignRecipient.campaign_id == campaign_id, RecipientGroupMember.group_id == group_id)
                 .first()
             )
             # Earliest pending send time among this list's queued rows — what
             # the calendar icon shows as "Scheduled for ..." on the card.
             earliest_queued = (
                 db.query(func.min(CampaignRecipient.next_send_at))
+                .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
                 .filter(
                     CampaignRecipient.campaign_id == campaign_id,
-                    CampaignRecipient.group_id == group_id,
+                    RecipientGroupMember.group_id == group_id,
                     CampaignRecipient.status == "queued",
                     CampaignRecipient.next_send_at.isnot(None),
                 )
@@ -222,9 +256,10 @@ class CampaignService:
         rows = (
             db.query(CampaignRecipient, Recipient)
             .join(Recipient, Recipient.id == CampaignRecipient.recipient_id)
+            .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
             .filter(
                 CampaignRecipient.campaign_id == campaign_id,
-                CampaignRecipient.group_id == group_id,
+                RecipientGroupMember.group_id == group_id,
                 CampaignRecipient.status != "sent",
             )
             .all()
@@ -252,7 +287,8 @@ class CampaignService:
         return (
             db.query(CampaignRecipient, Recipient)
             .join(Recipient, Recipient.id == CampaignRecipient.recipient_id)
-            .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.group_id == group_id)
+            .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
+            .filter(CampaignRecipient.campaign_id == campaign_id, RecipientGroupMember.group_id == group_id)
             .order_by(Recipient.name)
             .all()
         )
@@ -260,7 +296,8 @@ class CampaignService:
     def retag_list(self, db: Session, campaign_id: int, group_id: int, template_id: int | None) -> int:
         rows = (
             db.query(CampaignRecipient)
-            .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.group_id == group_id)
+            .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
+            .filter(CampaignRecipient.campaign_id == campaign_id, RecipientGroupMember.group_id == group_id)
             .all()
         )
         for cr in rows:

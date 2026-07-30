@@ -126,6 +126,7 @@ def send_emails(
                 body_template=data.body,
                 from_name=current_user.name,
                 reply_to=current_user.email,
+                content_type=data.type,
             )
             db.add(EmailLog(
                 campaign_id=data.campaign_id,

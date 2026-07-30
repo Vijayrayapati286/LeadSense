@@ -12,8 +12,13 @@ import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import StatusBadge from '../components/ui/StatusBadge';
+import UploadErrorModal from '../components/ui/UploadErrorModal';
 import FilterBuilder, { RESPONSE_TAGS } from '../components/FilterBuilder';
-import { debounce } from '../utils/helpers';
+import { debounce, getMissingUploadColumns, buildDuplicateUploadMessage } from '../utils/helpers';
+
+// Extensions accepted by the prospect-list upload input — mirrors the
+// backend's SUPPORTED_EXTENSIONS in excel_service.py.
+const UPLOAD_ACCEPT = '.xlsx,.xlsm,.xls,.xlsb,.ods,.csv,.tsv,.txt';
 
 const RESPONSE_TAG_COLORS = {
   Cold: 'bg-blue-50 text-blue-700',
@@ -36,6 +41,8 @@ export default function RecipientsPage() {
   // Upload
   const [uploading, setUploading] = useState(false);
   const [uploadGroupName, setUploadGroupName] = useState('');
+  const [uploadMissingColumns, setUploadMissingColumns] = useState(null);
+  const [pendingDuplicateUpload, setPendingDuplicateUpload] = useState(null);
 
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [selectingAll, setSelectingAll] = useState(false);
@@ -83,7 +90,33 @@ export default function RecipientsPage() {
     }
   };
 
-  const handleUpload = async (e) => {
+  const performUpload = async (file, groupName, confirm = false) => {
+    setUploading(true);
+    try {
+      const { data } = await recipientService.uploadExcel(file, groupName, undefined, undefined, confirm);
+      if (data.requires_confirmation) {
+        setPendingDuplicateUpload({ file, groupName, total: data.total, duplicateCount: data.duplicate_count });
+        return;
+      }
+      toast.success(data.message);
+      setUploadGroupName('');
+      loadResults();
+      loadGroups();
+      refreshActiveDistinctOptions();
+    } catch (err) {
+      const missingColumns = getMissingUploadColumns(err);
+      if (missingColumns) {
+        setUploadMissingColumns(missingColumns);
+      } else {
+        const detail = err.response?.data?.detail;
+        toast.error((typeof detail === 'string' && detail) || 'Upload failed');
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!uploadGroupName.trim()) {
@@ -91,20 +124,14 @@ export default function RecipientsPage() {
       e.target.value = '';
       return;
     }
-    setUploading(true);
-    try {
-      const { data } = await recipientService.uploadExcel(file, uploadGroupName.trim());
-      toast.success(data.message);
-      setUploadGroupName('');
-      loadResults();
-      loadGroups();
-      refreshActiveDistinctOptions();
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Upload failed');
-    } finally {
-      setUploading(false);
-      e.target.value = '';
-    }
+    e.target.value = '';
+    performUpload(file, uploadGroupName.trim());
+  };
+
+  const handleConfirmDuplicateUpload = () => {
+    if (!pendingDuplicateUpload) return;
+    const { file, groupName } = pendingDuplicateUpload;
+    performUpload(file, groupName, true);
   };
 
   const handleExport = async () => {
@@ -271,7 +298,7 @@ export default function RecipientsPage() {
           <label className="btn-primary flex items-center gap-2 cursor-pointer">
             {uploading ? <LoadingSpinner size="sm" /> : <FiUpload size={18} />}
             Upload Excel
-            <input type="file" accept=".xlsx,.xls" onChange={handleUpload} className="hidden" />
+            <input type="file" accept={UPLOAD_ACCEPT} onChange={handleUpload} className="hidden" />
           </label>
           <button onClick={() => setManageModalOpen(true)} className="btn-secondary flex items-center gap-2" title="Manage groups & tags">
             <FiSettings size={16} />
@@ -580,6 +607,24 @@ export default function RecipientsPage() {
         title="Delete Tag"
         message={`Delete "${deletingTag?.name}"? This removes the tag from every prospect.`}
         confirmText="Delete"
+      />
+      <UploadErrorModal
+        isOpen={!!uploadMissingColumns}
+        onClose={() => setUploadMissingColumns(null)}
+        missingColumns={uploadMissingColumns || []}
+      />
+      <ConfirmDialog
+        isOpen={!!pendingDuplicateUpload}
+        onClose={() => setPendingDuplicateUpload(null)}
+        onConfirm={handleConfirmDuplicateUpload}
+        variant="primary"
+        title="Duplicate Prospects Detected"
+        message={
+          pendingDuplicateUpload
+            ? buildDuplicateUploadMessage(pendingDuplicateUpload.total, pendingDuplicateUpload.duplicateCount)
+            : ''
+        }
+        confirmText="Import Anyway"
       />
     </div>
   );

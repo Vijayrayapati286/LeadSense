@@ -4,6 +4,9 @@ import html
 import re
 from datetime import datetime, timezone
 
+import bleach
+from bleach.css_sanitizer import CSSSanitizer
+
 
 def extract_placeholders(text: str) -> list[str]:
     """Extract {{Placeholder}} tokens from template text."""
@@ -90,6 +93,99 @@ def markdown_to_plain(text: str) -> str:
     if not text:
         return ""
     return _BOLD_RE.sub(r"\1", text)
+
+
+# ── Manual template rich-text HTML (WYSIWYG editor) ─────────────────────────
+# The Manual template type stores real HTML from a TipTap rich text editor
+# instead of the markdown-lite subset above. This is the server-side trust
+# boundary for that HTML — the client (DOMPurify) sanitizes too, but only the
+# server-side pass is actually trusted, since a client can be bypassed.
+
+_RICH_TEXT_TAGS = [
+    "p", "br", "strong", "b", "em", "i", "u", "s", "span", "div", "ul", "ol", "li", "a",
+    "table", "thead", "tbody", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6",
+    "blockquote", "hr", "img", "sub", "sup",
+]
+_RICH_TEXT_ATTRS = {
+    "*": ["style"],
+    "a": ["href", "target", "rel"],
+    "img": ["src", "alt", "width", "height"],
+    "td": ["colspan", "rowspan"],
+    "th": ["colspan", "rowspan"],
+}
+# No "data" here deliberately — data: URIs are handled separately below via
+# an explicit image-mimetype allowlist rather than bleach's bare-scheme check,
+# since bleach can't distinguish data:image/png from data:text/html.
+_RICH_TEXT_PROTOCOLS = ["http", "https", "mailto"]
+_RICH_TEXT_CSS_SANITIZER = CSSSanitizer(
+    allowed_css_properties=[
+        "color", "background-color", "font-family", "font-size", "font-weight",
+        "font-style", "text-align", "text-decoration", "line-height",
+        "margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
+        "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
+        "border", "border-collapse", "width", "height",
+    ]
+)
+_DATA_IMAGE_SRC_RE = re.compile(r'src="(data:image/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+)"')
+
+
+def sanitize_html(rich_html: str) -> str:
+    """Sanitize a Manual template's rich-text body before it's persisted.
+    Strips script/style/event-handler content and unknown tags/protocols
+    while preserving normal WYSIWYG formatting (bold, colors, alignment,
+    lists, tables, links) and pasted base64 images specifically — bleach's
+    protocol allowlist only understands bare schemes, not image/* data URIs,
+    so those are stashed behind a placeholder before cleaning and restored
+    after, rather than trusting bleach's coarser data: handling."""
+    if not rich_html:
+        return rich_html
+
+    placeholders: dict[str, str] = {}
+
+    def _stash(match: re.Match) -> str:
+        token = f"__DATA_IMG_{len(placeholders)}__"
+        placeholders[token] = match.group(1)
+        return f'src="{token}"'
+
+    stashed = _DATA_IMAGE_SRC_RE.sub(_stash, rich_html)
+
+    cleaned = bleach.clean(
+        stashed,
+        tags=_RICH_TEXT_TAGS,
+        attributes=_RICH_TEXT_ATTRS,
+        protocols=_RICH_TEXT_PROTOCOLS,
+        css_sanitizer=_RICH_TEXT_CSS_SANITIZER,
+        strip=True,
+    )
+
+    for token, data_uri in placeholders.items():
+        cleaned = cleaned.replace(token, data_uri)
+
+    return cleaned
+
+
+def sanitize_manual_body(data: dict) -> dict:
+    """Sanitize `data["body"]` in place when the payload is a Manual
+    template — the single choke point shared by campaign_service's
+    save_template/update_template and MailerService's create/update, so
+    every save path for Manual content goes through the same trust
+    boundary regardless of caller."""
+    if data.get("type") == "manual" and data.get("body"):
+        data["body"] = sanitize_html(data["body"])
+    return data
+
+
+def render_email_body(body: str, content_type: str, context: dict[str, str]) -> tuple[str, str]:
+    """Return (html, plain_text) for a rendered, ready-to-send template body.
+
+    Manual bodies are already-sanitized HTML from the rich text editor and
+    are merge-field-substituted as-is; every other template type keeps the
+    existing markdown-lite rendering (markdown_to_html/markdown_to_plain)."""
+    rendered = render_template(body, context)
+    if content_type == "manual":
+        plain_text = bleach.clean(rendered, tags=[], attributes={}, strip=True)
+        return rendered, plain_text
+    return markdown_to_html(rendered), markdown_to_plain(rendered)
 
 
 def utc_now() -> datetime:

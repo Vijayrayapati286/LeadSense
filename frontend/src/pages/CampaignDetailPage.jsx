@@ -19,10 +19,12 @@ import {
   FiGrid,
   FiLayers,
   FiCalendar,
+  FiRefreshCw,
 } from 'react-icons/fi';
 import {
   campaignService,
   recipientService,
+  recipientGroupService,
   sequenceService,
   templateService,
   mailerService,
@@ -31,7 +33,7 @@ import {
 } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import { useContactSearch } from '../hooks/useContactSearch';
-import { extractPlaceholders } from '../utils/helpers';
+import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
 import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -39,10 +41,17 @@ import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import UploadErrorModal from '../components/ui/UploadErrorModal';
 import EmailPreview from '../components/EmailPreview';
 import FilterBuilder from '../components/FilterBuilder';
 import TemplateEditor from '../components/TemplateEditor';
-import { formatDate, formatDateTime, renderTemplate, debounce } from '../utils/helpers';
+import {
+  formatDate, formatDateTime, renderTemplate, debounce, getMissingUploadColumns, buildDuplicateUploadMessage,
+} from '../utils/helpers';
+
+// Extensions accepted by the prospect-list upload inputs — mirrors the
+// backend's SUPPORTED_EXTENSIONS in excel_service.py.
+const UPLOAD_ACCEPT = '.xlsx,.xlsm,.xls,.xlsb,.ods,.csv,.tsv,.txt';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -242,7 +251,7 @@ export default function CampaignDetailPage() {
     setTemplateType(template.type);
     setEmailContent({
       subject: template.subject || '',
-      body: template.body || '',
+      body: template.type === 'manual' ? ensureManualBodyIsHtml(template.body || '') : (template.body || ''),
       closing: template.closing || '',
       cta: template.cta || '',
     });
@@ -299,7 +308,12 @@ export default function CampaignDetailPage() {
     const mailer = mailers.find((m) => String(m.id) === mailerId);
     if (!mailer) return;
     setTemplateType(mailer.type);
-    setEmailContent({ subject: mailer.subject, body: mailer.body, closing: mailer.closing || '', cta: mailer.cta || '' });
+    setEmailContent({
+      subject: mailer.subject,
+      body: mailer.type === 'manual' ? ensureManualBodyIsHtml(mailer.body) : mailer.body,
+      closing: mailer.closing || '',
+      cta: mailer.cta || '',
+    });
     toast.success(`Loaded mailer "${mailer.name}"`);
   };
 
@@ -308,7 +322,7 @@ export default function CampaignDetailPage() {
       toast.error('Enter a name for this mailer');
       return;
     }
-    if (!emailContent.subject.trim() || !emailContent.body.trim()) {
+    if (!emailContent.subject.trim() || isTemplateBodyEmpty(emailContent.body, templateType)) {
       toast.error('Subject and body are required to save a mailer');
       return;
     }
@@ -365,7 +379,7 @@ export default function CampaignDetailPage() {
   };
 
   const handleSaveTemplate = () => {
-    if (!emailContent.subject.trim() || !emailContent.body.trim()) {
+    if (!emailContent.subject.trim() || isTemplateBodyEmpty(emailContent.body, templateType)) {
       toast.error('Subject and body are required');
       return;
     }
@@ -417,6 +431,10 @@ export default function CampaignDetailPage() {
   const [addRecipientGroupName, setAddRecipientGroupName] = useState('');
   const [savingRecipient, setSavingRecipient] = useState(false);
   const [uploadingToList, setUploadingToList] = useState(false);
+  const [uploadMissingColumns, setUploadMissingColumns] = useState(null);
+  const [pendingProspectsUpload, setPendingProspectsUpload] = useState(null);
+  const [pendingListUpload, setPendingListUpload] = useState(null);
+  const [refreshingProspects, setRefreshingProspects] = useState(false);
 
   const handleListNameChange = (value) => {
     setUploadGroupName(value);
@@ -436,25 +454,59 @@ export default function CampaignDetailPage() {
     if (!requireListName()) e.preventDefault();
   };
 
-  const handleUploadProspects = async (e) => {
+  const performUploadProspects = async (file, groupName, confirm = false) => {
+    setUploadingProspects(true);
+    try {
+      const { data } = await recipientService.uploadExcel(file, groupName, id, uploadTemplateId || null, confirm);
+      if (data.requires_confirmation) {
+        setPendingProspectsUpload({ file, groupName, total: data.total, duplicateCount: data.duplicate_count });
+        return;
+      }
+      toast.success(data.message);
+      setUploadGroupName('');
+      loadResults();
+      if (browseMode === 'lists') loadLists();
+    } catch (err) {
+      const missingColumns = getMissingUploadColumns(err);
+      if (missingColumns) {
+        setUploadMissingColumns(missingColumns);
+      } else {
+        const detail = err.response?.data?.detail;
+        toast.error((typeof detail === 'string' && detail) || 'Upload failed');
+      }
+    } finally {
+      setUploadingProspects(false);
+    }
+  };
+
+  const handleUploadProspects = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!requireListName()) {
       e.target.value = '';
       return;
     }
-    setUploadingProspects(true);
+    e.target.value = '';
+    performUploadProspects(file, uploadGroupName.trim());
+  };
+
+  const handleConfirmProspectsUpload = () => {
+    if (!pendingProspectsUpload) return;
+    const { file, groupName } = pendingProspectsUpload;
+    performUploadProspects(file, groupName, true);
+  };
+
+  const handleRefreshProspects = async () => {
+    setRefreshingProspects(true);
     try {
-      const { data } = await recipientService.uploadExcel(file, uploadGroupName.trim(), id, uploadTemplateId || null);
-      toast.success(data.message);
-      setUploadGroupName('');
-      loadResults();
-      if (browseMode === 'lists') loadLists();
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Upload failed');
+      if (browseMode === 'lists') {
+        if (openListId) await loadListMembers(openListId);
+        else await loadLists();
+      } else {
+        await loadResults();
+      }
     } finally {
-      setUploadingProspects(false);
-      e.target.value = '';
+      setRefreshingProspects(false);
     }
   };
 
@@ -476,21 +528,40 @@ export default function CampaignDetailPage() {
     setAddProspectModalOpen(true);
   };
 
-  const handleUploadToList = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const performUploadToList = async (file, confirm = false) => {
     setUploadingToList(true);
     try {
-      const { data } = await recipientService.uploadExcel(file, openListName, id, listTemplateId || null);
+      const { data } = await recipientService.uploadExcel(file, openListName, id, listTemplateId || null, confirm);
+      if (data.requires_confirmation) {
+        setPendingListUpload({ file, total: data.total, duplicateCount: data.duplicate_count });
+        return;
+      }
       toast.success(data.message);
       loadListMembers(openListId);
       loadLists();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Upload failed');
+      const missingColumns = getMissingUploadColumns(err);
+      if (missingColumns) {
+        setUploadMissingColumns(missingColumns);
+      } else {
+        const detail = err.response?.data?.detail;
+        toast.error((typeof detail === 'string' && detail) || 'Upload failed');
+      }
     } finally {
       setUploadingToList(false);
-      e.target.value = '';
     }
+  };
+
+  const handleUploadToList = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    performUploadToList(file);
+  };
+
+  const handleConfirmListUpload = () => {
+    if (!pendingListUpload) return;
+    performUploadToList(pendingListUpload.file, true);
   };
 
   const handleAddRecipient = async () => {
@@ -581,6 +652,21 @@ export default function CampaignDetailPage() {
     setOpenListName('');
     setListMembers([]);
     setListSelectedIds([]);
+  };
+
+  const [deletingList, setDeletingList] = useState(null);
+
+  const handleDeleteList = async () => {
+    if (!deletingList) return;
+    const { group_id, name } = deletingList;
+    try {
+      await recipientGroupService.delete(group_id);
+      toast.success(`Deleted list "${name}"`);
+      if (openListId === group_id) handleBackToLists();
+      loadLists();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to delete list');
+    }
   };
 
   const openScheduleList = (e, list) => {
@@ -722,6 +808,7 @@ export default function CampaignDetailPage() {
         campaign_id: campaign.id,
         subject: effectiveTemplate.subject,
         body: effectiveTemplate.body + (effectiveTemplate.closing ? `\n\n${effectiveTemplate.closing}` : ''),
+        type: effectiveTemplate.type,
         recipient_ids: activeSelectedIds,
       });
       if (data.immediate_sent > 0) {
@@ -1105,13 +1192,25 @@ export default function CampaignDetailPage() {
                     <label onClick={handleUploadClick} className="btn-primary h-[42px] flex items-center gap-2 cursor-pointer flex-shrink-0">
                       {uploadingProspects ? <LoadingSpinner size="sm" /> : <FiUpload size={16} />}
                       Upload Excel
-                      <input type="file" accept=".xlsx,.xls" onChange={handleUploadProspects} className="hidden" />
+                      <input type="file" accept={UPLOAD_ACCEPT} onChange={handleUploadProspects} className="hidden" />
                     </label>
                   </div>
                   <div>
                     <span className="label invisible block">Add</span>
                     <button onClick={handleOpenAddProspect} className="btn-primary h-[42px] flex items-center gap-2 flex-shrink-0">
-                      <FiUserPlus size={16} /> Add Manually
+                      <FiUserPlus size={16} /> Prospect List Manually
+                    </button>
+                  </div>
+                  <div>
+                    <span className="label invisible block">Refresh</span>
+                    <button
+                      onClick={handleRefreshProspects}
+                      disabled={refreshingProspects}
+                      className="btn-secondary h-[42px] flex items-center gap-2 flex-shrink-0"
+                      title="Reload the latest prospects/lists without refreshing the page"
+                    >
+                      {refreshingProspects ? <LoadingSpinner size="sm" /> : <FiRefreshCw size={16} />}
+                      Refresh
                     </button>
                   </div>
                 </div>
@@ -1239,11 +1338,18 @@ export default function CampaignDetailPage() {
                               <button
                                 onClick={(e) => openScheduleList(e, l)}
                                 title="Schedule this list"
-                                className="absolute top-3 right-3 p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                                className="absolute top-3 right-9 p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
                               >
                                 <FiCalendar size={16} />
                               </button>
-                              <p className="font-semibold text-gray-900 pr-7">{l.name}</p>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDeletingList({ group_id: l.group_id, name: l.name }); }}
+                                title="Delete this list"
+                                className="absolute top-3 right-3 p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                              >
+                                <FiTrash2 size={16} />
+                              </button>
+                              <p className="font-semibold text-gray-900 pr-14">{l.name}</p>
                               <p className="text-sm text-gray-500 mt-1">{l.total} prospect{l.total !== 1 ? 's' : ''}</p>
                               <p className="text-xs text-gray-500 mt-1">Sent {l.sent_count} / {l.total}</p>
                               <p className="text-xs text-gray-500 mt-2">
@@ -1265,21 +1371,29 @@ export default function CampaignDetailPage() {
                         <button onClick={handleBackToLists} className="btn-secondary text-sm flex items-center gap-2">
                           <FiArrowLeft size={14} /> Back to Lists
                         </button>
-                        <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-1">
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={() => setListDisplayMode('table')}
-                            className={`p-1.5 rounded ${listDisplayMode === 'table' ? 'bg-gray-100 text-gray-900' : 'text-gray-400'}`}
-                            title="List view"
+                            onClick={() => setDeletingList({ group_id: openListId, name: openListName })}
+                            className="btn-secondary text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
                           >
-                            <FiList size={16} />
+                            <FiTrash2 size={14} /> Delete List
                           </button>
-                          <button
-                            onClick={() => setListDisplayMode('catalog')}
-                            className={`p-1.5 rounded ${listDisplayMode === 'catalog' ? 'bg-gray-100 text-gray-900' : 'text-gray-400'}`}
-                            title="Catalog view"
-                          >
-                            <FiGrid size={16} />
-                          </button>
+                          <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-1">
+                            <button
+                              onClick={() => setListDisplayMode('table')}
+                              className={`p-1.5 rounded ${listDisplayMode === 'table' ? 'bg-gray-100 text-gray-900' : 'text-gray-400'}`}
+                              title="List view"
+                            >
+                              <FiList size={16} />
+                            </button>
+                            <button
+                              onClick={() => setListDisplayMode('catalog')}
+                              className={`p-1.5 rounded ${listDisplayMode === 'catalog' ? 'bg-gray-100 text-gray-900' : 'text-gray-400'}`}
+                              title="Catalog view"
+                            >
+                              <FiGrid size={16} />
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -1290,7 +1404,7 @@ export default function CampaignDetailPage() {
                         <label className="btn-primary text-sm flex items-center gap-2 cursor-pointer">
                           {uploadingToList ? <LoadingSpinner size="sm" /> : <FiUpload size={14} />}
                           Upload Excel
-                          <input type="file" accept=".xlsx,.xls" onChange={handleUploadToList} className="hidden" />
+                          <input type="file" accept={UPLOAD_ACCEPT} onChange={handleUploadToList} className="hidden" />
                         </label>
                         <button onClick={handleOpenAddToList} className="btn-primary text-sm flex items-center gap-2">
                           <FiUserPlus size={14} /> Add Manually
@@ -1456,6 +1570,7 @@ export default function CampaignDetailPage() {
               body={renderTemplate(effectiveTemplate.body, previewContext)}
               closing={effectiveTemplate.closing}
               cta={effectiveTemplate.cta}
+              type={effectiveTemplate.type}
             />
             {!isListMode && templates.length > 1 && (
               <p className="text-xs text-gray-400">
@@ -1572,7 +1687,7 @@ export default function CampaignDetailPage() {
             </select>
             <button
               onClick={() => setSaveMailerModalOpen(true)}
-              disabled={!emailContent.subject.trim() || !emailContent.body.trim()}
+              disabled={!emailContent.subject.trim() || isTemplateBodyEmpty(emailContent.body, templateType)}
               className="btn-secondary text-sm flex items-center gap-1"
             >
               <FiSave size={14} /> Save as Mailer
@@ -1779,6 +1894,46 @@ export default function CampaignDetailPage() {
           </div>
         </div>
       </Modal>
+
+      <UploadErrorModal
+        isOpen={!!uploadMissingColumns}
+        onClose={() => setUploadMissingColumns(null)}
+        missingColumns={uploadMissingColumns || []}
+      />
+      <ConfirmDialog
+        isOpen={!!pendingProspectsUpload}
+        onClose={() => setPendingProspectsUpload(null)}
+        onConfirm={handleConfirmProspectsUpload}
+        variant="primary"
+        title="Duplicate Prospects Detected"
+        message={
+          pendingProspectsUpload
+            ? buildDuplicateUploadMessage(pendingProspectsUpload.total, pendingProspectsUpload.duplicateCount)
+            : ''
+        }
+        confirmText="Import Anyway"
+      />
+      <ConfirmDialog
+        isOpen={!!pendingListUpload}
+        onClose={() => setPendingListUpload(null)}
+        onConfirm={handleConfirmListUpload}
+        variant="primary"
+        title="Duplicate Prospects Detected"
+        message={
+          pendingListUpload
+            ? buildDuplicateUploadMessage(pendingListUpload.total, pendingListUpload.duplicateCount)
+            : ''
+        }
+        confirmText="Import Anyway"
+      />
+      <ConfirmDialog
+        isOpen={!!deletingList}
+        onClose={() => setDeletingList(null)}
+        onConfirm={handleDeleteList}
+        title="Delete Prospect List"
+        message={`Delete "${deletingList?.name}"? Prospects stay in the system — this only removes the list.`}
+        confirmText="Delete"
+      />
     </div>
   );
 }

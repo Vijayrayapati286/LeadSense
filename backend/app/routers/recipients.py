@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
-from app.models import Recipient, SavedSearch, User
+from app.models import CustomField, Recipient, SavedSearch, User
 from app.schemas.schemas import (
     MessageResponse,
     RecipientCreate,
@@ -25,7 +26,7 @@ from app.schemas.schemas import (
 )
 from app.services.app_settings_service import AppSettingsService
 from app.services.campaign_service import CampaignService
-from app.services.excel_service import ExcelService
+from app.services.excel_service import ExcelService, MissingColumnsError, SUPPORTED_EXTENSIONS
 from app.services.recipient_group_service import RecipientGroupService
 from app.services.recipient_query_service import (
     DISTINCT_VALUE_FIELDS,
@@ -94,17 +95,43 @@ async def upload_excel(
     group_name: str = Form(...),
     campaign_id: int | None = Form(None),
     template_id: int | None = Form(None),
+    confirm: bool = Form(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are supported")
+    filename = file.filename or ""
+    if Path(filename).suffix.lower() not in SUPPORTED_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Supported formats: {supported}")
     if not group_name.strip():
         raise HTTPException(status_code=422, detail="A list name is required")
 
     content = await file.read()
     try:
-        imported, updated, recipient_ids = excel_service.import_recipients(db, content)
+        field_ids_by_name = {f.name: f.id for f in db.query(CustomField).all()}
+        parsed = excel_service.parse_excel(content, filename, custom_field_names=set(field_ids_by_name))
+
+        # A prospect row is shared across lists (re-uploading an existing
+        # email upserts the same Recipient rather than forking it), so a
+        # heavily-overlapping upload would otherwise silently merge into
+        # existing prospects. Pause here — unless the user already confirmed
+        # — so they can choose to still import the full file as a new list.
+        if not confirm:
+            total, duplicate_count = excel_service.preview_duplicates(db, parsed)
+            if duplicate_count > 0:
+                return UploadExcelResponse(
+                    imported=0,
+                    updated=0,
+                    message=(
+                        f"{duplicate_count} of {total} prospect(s) already exist in this prospect list."
+                    ),
+                    group_name=group_name.strip(),
+                    requires_confirmation=True,
+                    total=total,
+                    duplicate_count=duplicate_count,
+                )
+
+        imported, updated, recipient_ids = excel_service.import_parsed(db, parsed, field_ids_by_name)
 
         group = group_service.get_or_create(db, group_name.strip())
         group_service.add_members(db, group.id, recipient_ids)
@@ -118,6 +145,17 @@ async def upload_excel(
         message += f" into list '{group_name.strip()}'"
 
         return UploadExcelResponse(imported=imported, updated=updated, message=message, group_name=group_name.strip())
+    except MissingColumnsError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "missing_columns",
+                "missing_columns": exc.missing,
+                "message": (
+                    f"{str(exc)}. Please upload a file containing both mandatory columns."
+                ),
+            },
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

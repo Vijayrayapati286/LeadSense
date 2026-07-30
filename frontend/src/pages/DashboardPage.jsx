@@ -7,6 +7,7 @@ import {
   FiActivity,
   FiZap,
   FiTrendingDown,
+  FiDownload,
 } from 'react-icons/fi';
 import {
   BarChart,
@@ -32,6 +33,7 @@ const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
 export default function DashboardPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -49,6 +51,23 @@ export default function DashboardPage() {
     }
   };
 
+  const handleExportReport = async () => {
+    setExporting(true);
+    try {
+      const response = await dashboardService.exportReport();
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'leadsense_report.xlsx';
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to export report');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -63,9 +82,19 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 mt-1">Overview of your email campaign performance</p>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-gray-500 mt-1">Overview of your email campaign performance</p>
+        </div>
+        <button
+          onClick={handleExportReport}
+          disabled={exporting}
+          className="btn-primary flex items-center gap-2 disabled:opacity-50"
+        >
+          {exporting ? <LoadingSpinner size="sm" /> : <FiDownload size={16} />}
+          Export Report
+        </button>
       </div>
 
       {/* Stat Cards */}

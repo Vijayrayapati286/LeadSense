@@ -5,6 +5,7 @@ due, and sends the next CampaignSequenceStage via the existing SES service —
 no new infrastructure (queue/worker), it just runs inside the FastAPI process.
 """
 
+import html
 import logging
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import SessionLocal
 from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template, User
 from app.services.ses_service import SESService
-from app.utils.helpers import build_recipient_context, render_template, utc_now
+from app.utils.helpers import build_recipient_context, render_email_body, render_template, utc_now
 
 logger = logging.getLogger(__name__)
 ses_service = SESService()
@@ -194,16 +195,22 @@ def process_queued_initial_sends() -> None:
                 continue
             context = build_recipient_context(recipient)
             subject = render_template(template.subject, context)
-            body = render_template(template.body, context)
+            body_html, body_text = render_email_body(template.body, template.type, context)
             if template.closing:
-                body = f"{body}\n\n{render_template(template.closing, context)}"
+                # Legacy templates only — the Manual editor no longer exposes
+                # a separate Closing field, so new Manual templates never set
+                # this. Escaped so a literal "<" a user once typed here can't
+                # be mistaken for markup once appended after real HTML.
+                closing = render_template(template.closing, context)
+                body_html = f"{body_html}<br><br>{html.escape(closing)}"
+                body_text = f"{body_text}\n\n{closing}"
 
             owner = _resolve_sender(cr)
             result = ses_service.send_email(
                 to_email=recipient.email,
                 subject=subject,
-                body_html=body.replace("\n", "<br>"),
-                body_text=body,
+                body_html=body_html,
+                body_text=body_text,
                 from_name=owner.name if owner else None,
                 reply_to=owner.email if owner else None,
             )
