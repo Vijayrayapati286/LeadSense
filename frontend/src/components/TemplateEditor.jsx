@@ -1,8 +1,10 @@
+import { useEffect } from 'react';
 import { FiZap, FiEdit3, FiFileText } from 'react-icons/fi';
 import LoadingSpinner from './ui/LoadingSpinner';
 import RichTextEditor from './RichTextEditor';
-import { renderTemplate, renderMarkdownLite } from '../utils/helpers';
+import { renderTemplate, renderMarkdownLite, isTemplateBodyEmpty } from '../utils/helpers';
 import { KNOWN_MERGE_FIELDS } from '../utils/mergeFields';
+import { buildDefaultSignature } from '../utils/emailSignature';
 
 /** Compact reference list of every supported {{Field}} merge tag, so users
  * don't have to guess which prospect fields a template can pull in. */
@@ -48,6 +50,19 @@ export default function TemplateEditor({
   previewContext,
 }) {
   const updateContent = (field, value) => onEmailContentChange((p) => ({ ...p, [field]: value }));
+
+  // The Feuji footer is mandatory on every Manual Compose email — pre-fill
+  // it the moment Manual is opened with an empty body (fresh compose),
+  // rather than requiring it to be pasted in by hand each time. Only fires
+  // when the body is actually empty, so it never clobbers an existing
+  // draft/saved template, and only re-fires on a type switch (not on every
+  // keystroke) so deliberately clearing it doesn't cause it to reappear.
+  useEffect(() => {
+    if (templateType === 'manual' && isTemplateBodyEmpty(emailContent.body, 'manual')) {
+      onEmailContentChange((p) => ({ ...p, body: buildDefaultSignature() }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateType]);
 
   return (
     <div className="space-y-6">
