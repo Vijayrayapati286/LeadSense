@@ -9,8 +9,12 @@ export const authService = {
 };
 
 export const dashboardService = {
-  getStats: () => api.get('/dashboard/stats'),
-  exportReport: () => api.get('/dashboard/export-report', { responseType: 'blob' }),
+  getStats: (params) => api.get('/dashboard/stats', { params }),
+  exportReport: (params) => api.get('/dashboard/export-report', { params, responseType: 'blob' }),
+};
+
+export const userService = {
+  getAll: () => api.get('/users'),
 };
 
 export const campaignService = {

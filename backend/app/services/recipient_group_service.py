@@ -3,7 +3,7 @@
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import Recipient, RecipientGroup, RecipientGroupMember
+from app.models import CampaignRecipient, CampaignRecipientList, Recipient, RecipientGroup, RecipientGroupMember
 
 
 class RecipientGroupService:
@@ -63,6 +63,19 @@ class RecipientGroupService:
         group = self.get_by_id(db, group_id)
         if not group:
             raise ValueError("Group not found")
+
+        # CampaignRecipientList.group_id and CampaignRecipient.group_id both
+        # reference this group with no ON DELETE action, so under Postgres
+        # (unlike SQLite's default FK enforcement, which is off) deleting the
+        # group straight away hits a foreign-key violation and 500s. Clear
+        # those references first: it only drops this now-gone list's
+        # membership/attribution from every campaign's "By List" grouping,
+        # not the CampaignRecipient row itself, so send history/status is
+        # untouched.
+        db.query(CampaignRecipientList).filter(CampaignRecipientList.group_id == group_id).delete()
+        db.query(CampaignRecipient).filter(CampaignRecipient.group_id == group_id).update(
+            {CampaignRecipient.group_id: None}
+        )
         db.delete(group)
         db.commit()
 

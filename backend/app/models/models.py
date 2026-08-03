@@ -52,6 +52,9 @@ class Campaign(Base):
     campaign_recipients: Mapped[list["CampaignRecipient"]] = relationship(
         "CampaignRecipient", back_populates="campaign", cascade="all, delete-orphan"
     )
+    campaign_recipient_lists: Mapped[list["CampaignRecipientList"]] = relationship(
+        "CampaignRecipientList", back_populates="campaign", cascade="all, delete-orphan"
+    )
     sequence_stages: Mapped[list["CampaignSequenceStage"]] = relationship(
         "CampaignSequenceStage", back_populates="campaign", cascade="all, delete-orphan",
         order_by="CampaignSequenceStage.stage_order",
@@ -307,6 +310,32 @@ class CampaignRecipient(Base):
     template: Mapped["Template | None"] = relationship("Template")
     group: Mapped["RecipientGroup | None"] = relationship("RecipientGroup")
     sender_user: Mapped["User | None"] = relationship("User", foreign_keys=[sender_user_id])
+
+
+class CampaignRecipientList(Base):
+    """Which list(s) a recipient is tagged under, within a given campaign —
+    deliberately separate from CampaignRecipient (the single per-campaign,
+    per-recipient send-tracking row). A recipient can be a member of several
+    lists in the same campaign at once; membership here is purely additive
+    (see tag_recipients in campaign_service.py) so uploading/adding them to
+    a new list never removes them from an existing one. Actual send state
+    (status/template/next_send_at) still lives on the one CampaignRecipient
+    row, since a recipient only ever receives one email per campaign."""
+
+    __tablename__ = "campaign_recipient_lists"
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "recipient_id", "group_id", name="uq_campaign_recipient_list"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    campaign_id: Mapped[int] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=False)
+    recipient_id: Mapped[int] = mapped_column(Integer, ForeignKey("recipients.id"), nullable=False)
+    group_id: Mapped[int] = mapped_column(Integer, ForeignKey("recipient_groups.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="campaign_recipient_lists")
+    recipient: Mapped["Recipient"] = relationship("Recipient")
+    group: Mapped["RecipientGroup"] = relationship("RecipientGroup")
 
 
 class CampaignSequenceStage(Base):

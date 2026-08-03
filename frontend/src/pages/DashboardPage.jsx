@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   FiMail,
   FiSend,
@@ -21,7 +21,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { dashboardService } from '../services/services';
+import { dashboardService, userService, campaignService } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import StatCard from '../components/ui/StatCard';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -30,31 +30,54 @@ import { formatDate } from '../utils/helpers';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
 
+const EMPTY_FILTERS = { userId: '', campaignId: '', dateFrom: '', dateTo: '' };
+
 export default function DashboardPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const toast = useToast();
 
   useEffect(() => {
-    loadDashboard();
+    userService.getAll().then(({ data }) => setUsers(data)).catch(() => {});
+    campaignService.getAll().then(({ data }) => setCampaigns(data)).catch(() => {});
   }, []);
 
-  const loadDashboard = async () => {
+  const buildParams = () => ({
+    user_id: filters.userId || undefined,
+    campaign_id: filters.campaignId || undefined,
+    date_from: filters.dateFrom || undefined,
+    date_to: filters.dateTo || undefined,
+  });
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
     try {
-      const { data: stats } = await dashboardService.getStats();
+      const { data: stats } = await dashboardService.getStats(buildParams());
       setData(stats);
     } catch {
       toast.error('Failed to load dashboard data');
     } finally {
       setLoading(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, toast]);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  const updateFilter = (field, value) => setFilters((prev) => ({ ...prev, [field]: value }));
+  const clearFilters = () => setFilters(EMPTY_FILTERS);
+  const hasActiveFilters = Object.values(filters).some(Boolean);
 
   const handleExportReport = async () => {
     setExporting(true);
     try {
-      const response = await dashboardService.exportReport();
+      const response = await dashboardService.exportReport(buildParams());
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
@@ -68,15 +91,13 @@ export default function DashboardPage() {
     }
   };
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="flex items-center justify-center h-64">
         <LoadingSpinner size="lg" />
       </div>
     );
   }
-
-  if (!data) return null;
 
   const { stats, emails_per_day, campaign_status, recent_activity, recent_campaigns } = data;
 
@@ -95,6 +116,62 @@ export default function DashboardPage() {
           {exporting ? <LoadingSpinner size="sm" /> : <FiDownload size={16} />}
           Export Report
         </button>
+      </div>
+
+      {/* Filters */}
+      <div className="card">
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="label">User/Login</label>
+            <select
+              className="input-field w-auto"
+              value={filters.userId}
+              onChange={(e) => updateFilter('userId', e.target.value)}
+            >
+              <option value="">All Users</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>{u.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Campaign</label>
+            <select
+              className="input-field w-auto"
+              value={filters.campaignId}
+              onChange={(e) => updateFilter('campaignId', e.target.value)}
+            >
+              <option value="">All Campaigns</option>
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id}>{c.campaign_name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">From</label>
+            <input
+              type="date"
+              className="input-field w-auto"
+              value={filters.dateFrom}
+              max={filters.dateTo || undefined}
+              onChange={(e) => updateFilter('dateFrom', e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">To</label>
+            <input
+              type="date"
+              className="input-field w-auto"
+              value={filters.dateTo}
+              min={filters.dateFrom || undefined}
+              onChange={(e) => updateFilter('dateTo', e.target.value)}
+            />
+          </div>
+          {hasActiveFilters && (
+            <button onClick={clearFilters} className="btn-secondary text-sm">Clear Filters</button>
+          )}
+          {loading && <LoadingSpinner size="sm" />}
+        </div>
       </div>
 
       {/* Stat Cards */}

@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
     aws_ses_sender_email: str = "noreply@example.com"
+    # Domain used for the personalized From address (local part swapped for
+    # the sending rep's, e.g. vijay.rayapati@mail.feuji.com) — see
+    # SESService._build_source. Deliberately a distinct, dedicated
+    # SES-verified domain rather than the org's real mail domain (from
+    # aws_ses_sender_email), so bulk sends don't affect that domain's sender
+    # reputation/DMARC alignment. Falls back to aws_ses_sender_email's own
+    # domain when unset.
+    aws_ses_sending_domain: str = ""
     use_mock_ses: bool = True
     test_email_override: str = "d.nikhileswar.reddy@gmail.com"
 

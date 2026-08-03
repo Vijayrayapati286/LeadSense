@@ -242,13 +242,24 @@ export default function CreateCampaignPage() {
     const hasSubject = emailContent.subject.trim().length > 0;
     const hasBody = !isTemplateBodyEmpty(emailContent.body, templateType);
 
+    // Campaign creation and the template save are two separate requests —
+    // if the template save fails (e.g. a large embedded image), the
+    // campaign from step one is already persisted. `newCampaignId` tracks
+    // that locally (not via the `campaignId` state setter below, which
+    // wouldn't be visible until a re-render) so a retry within this same
+    // visit — or a subsequent submit click — updates/attaches the template
+    // to that same campaign instead of trying to create a second one.
+    let newCampaignId = campaignId;
+
     setLoading(true);
     try {
-      const { data } = isEditMode
-        ? await campaignService.update(campaignId, form)
-        : await campaignService.create(form);
-      const newCampaignId = data.id;
-      setCampaignId(newCampaignId);
+      if (!newCampaignId) {
+        const { data } = await campaignService.create(form);
+        newCampaignId = data.id;
+        setCampaignId(newCampaignId);
+      } else if (isEditMode) {
+        await campaignService.update(newCampaignId, form);
+      }
 
       if (hasSubject && hasBody) {
         await campaignService.saveTemplate(newCampaignId, {
@@ -264,7 +275,13 @@ export default function CreateCampaignPage() {
       toast.success(isEditMode ? 'Campaign updated' : 'Campaign created');
       navigate(`/campaigns/${newCampaignId}`);
     } catch (err) {
-      toast.error(err.response?.data?.detail || (isEditMode ? 'Failed to update campaign' : 'Failed to create campaign'));
+      const detail = err.response?.data?.detail;
+      const message = typeof detail === 'string' && detail
+        ? detail
+        : newCampaignId
+          ? 'Campaign saved, but the template failed to save. Fix the issue and submit again — it will reuse the same campaign.'
+          : (isEditMode ? 'Failed to update campaign' : 'Failed to create campaign');
+      toast.error(message);
     } finally {
       setLoading(false);
     }

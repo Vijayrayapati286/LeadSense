@@ -24,6 +24,7 @@ from app.routers import (
     recipients,
     tags,
     templates,
+    users,
     webhooks,
 )
 
@@ -87,6 +88,7 @@ app.include_router(blacklist.router, prefix=API_PREFIX)
 app.include_router(webhooks.router, prefix=API_PREFIX)
 app.include_router(app_settings.router, prefix=API_PREFIX)
 app.include_router(custom_fields.router, prefix=API_PREFIX)
+app.include_router(users.router, prefix=API_PREFIX)
 
 
 @app.get("/")

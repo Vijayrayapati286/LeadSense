@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 from app.models import (
     Campaign,
     CampaignRecipient,
+    CampaignRecipientList,
     CampaignSequenceStage,
     Recipient,
     RecipientGroup,
-    RecipientGroupMember,
     Template,
 )
 from app.schemas.schemas import CampaignCreate, CampaignSequenceStageCreate, CampaignUpdate
@@ -159,14 +159,22 @@ class CampaignService:
         group_id: int | None = None,
     ) -> int:
         """Get-or-create the CampaignRecipient row for each recipient and set
-        its template_id — this is what makes a prospect list send with a
-        specific template rather than the campaign's primary one. `group_id`
-        is stamped too, but only as a last-tagged marker: it's a single value
-        per (campaign, recipient) and gets overwritten if this recipient is
-        later tagged under a different list, so "By List" browsing groups on
-        actual RecipientGroupMember membership instead (see
-        list_campaign_lists) — that stays correct even when the same
-        recipient belongs to several lists tagged to one campaign."""
+        its template_id — this is what makes a prospect send with a specific
+        template rather than the campaign's primary one.
+
+        List membership ("By List" browsing) is tracked separately, in
+        CampaignRecipientList, and is purely additive: tagging a recipient
+        into a list here never removes them from a list they're already in
+        for this campaign, so a recipient can legitimately belong to several
+        lists in the same campaign at once. It's scoped strictly to this
+        campaign's own rows (not raw RecipientGroupMember membership) so a
+        recipient who happens to be a member of an unrelated list elsewhere
+        — e.g. via a reused list name or an already-listed email added
+        individually — doesn't leak that other list into this campaign's
+        "By List" view. The recipient's actual send state (status/template)
+        still lives on the one CampaignRecipient row below, since a
+        recipient only ever receives one email per campaign regardless of
+        how many lists they're tagged under."""
         tagged = 0
         for recipient_id in recipient_ids:
             cr = (
@@ -179,59 +187,74 @@ class CampaignService:
                 db.add(cr)
             cr.template_id = template_id
             if group_id is not None:
-                cr.group_id = group_id
+                exists = (
+                    db.query(CampaignRecipientList)
+                    .filter(
+                        CampaignRecipientList.campaign_id == campaign_id,
+                        CampaignRecipientList.recipient_id == recipient_id,
+                        CampaignRecipientList.group_id == group_id,
+                    )
+                    .first()
+                )
+                if not exists:
+                    db.add(CampaignRecipientList(campaign_id=campaign_id, recipient_id=recipient_id, group_id=group_id))
             tagged += 1
         db.commit()
         return tagged
 
-    def list_campaign_lists(self, db: Session, campaign_id: int) -> list[dict]:
-        """Every list (RecipientGroup) with at least one member tagged to
-        this campaign, with a total, sent count, and representative template
-        — the "By List" browse mode's summary cards.
+    def _list_member_recipient_ids(self, db: Session, campaign_id: int, group_id: int):
+        """Recipient ids tagged into `group_id` for `campaign_id`, per the
+        additive CampaignRecipientList membership table — usable directly as
+        an `.in_()` subquery."""
+        return db.query(CampaignRecipientList.recipient_id).filter(
+            CampaignRecipientList.campaign_id == campaign_id,
+            CampaignRecipientList.group_id == group_id,
+        )
 
-        Membership here is resolved via RecipientGroupMember (actual,
-        append-only group membership) rather than CampaignRecipient.group_id.
-        That column holds only the single most-recently-tagged list for a
-        given (campaign, recipient) pair — a recipient shared between two
-        uploaded lists would flip it to whichever list was uploaded last,
-        making the older list's card lose members or vanish entirely even
-        though the list itself still exists and wasn't touched."""
+    def list_campaign_lists(self, db: Session, campaign_id: int) -> list[dict]:
+        """Every list (RecipientGroup) this campaign's prospects were tagged
+        under, with a total, sent count, and representative template — the
+        "By List" browse mode's summary cards. Membership comes from
+        CampaignRecipientList (see tag_recipients' docstring: additive per
+        campaign, so a recipient can show under more than one list here),
+        while send state (status/template) is read off the recipient's one
+        CampaignRecipient row for this campaign."""
         rows = (
             db.query(
-                RecipientGroup.id.label("group_id"),
+                CampaignRecipientList.group_id,
                 RecipientGroup.name,
-                func.count(CampaignRecipient.id).label("total"),
+                func.count(func.distinct(CampaignRecipientList.recipient_id)).label("total"),
                 func.sum(case((CampaignRecipient.status == "sent", 1), else_=0)).label("sent_count"),
             )
-            .join(RecipientGroupMember, RecipientGroupMember.group_id == RecipientGroup.id)
+            .join(RecipientGroup, RecipientGroup.id == CampaignRecipientList.group_id)
             .join(
                 CampaignRecipient,
-                (CampaignRecipient.recipient_id == RecipientGroupMember.recipient_id)
-                & (CampaignRecipient.campaign_id == campaign_id),
+                (CampaignRecipient.campaign_id == CampaignRecipientList.campaign_id)
+                & (CampaignRecipient.recipient_id == CampaignRecipientList.recipient_id),
             )
-            .group_by(RecipientGroup.id, RecipientGroup.name)
+            .filter(CampaignRecipientList.campaign_id == campaign_id)
+            .group_by(CampaignRecipientList.group_id, RecipientGroup.name)
             .order_by(RecipientGroup.name)
             .all()
         )
 
         results = []
         for group_id, name, total, sent_count in rows:
+            member_ids = self._list_member_recipient_ids(db, campaign_id, group_id)
             # A representative template for the list — retag_list keeps every
-            # row in a group on the same template_id, so any row's value works.
+            # member's row on the same template_id, so any one's value works.
             sample = (
                 db.query(CampaignRecipient)
-                .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
-                .filter(CampaignRecipient.campaign_id == campaign_id, RecipientGroupMember.group_id == group_id)
+                .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.recipient_id.in_(member_ids))
                 .first()
             )
             # Earliest pending send time among this list's queued rows — what
             # the calendar icon shows as "Scheduled for ..." on the card.
             earliest_queued = (
                 db.query(func.min(CampaignRecipient.next_send_at))
-                .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
                 .filter(
                     CampaignRecipient.campaign_id == campaign_id,
-                    RecipientGroupMember.group_id == group_id,
+                    CampaignRecipient.recipient_id.in_(member_ids),
                     CampaignRecipient.status == "queued",
                     CampaignRecipient.next_send_at.isnot(None),
                 )
@@ -253,13 +276,13 @@ class CampaignService:
         the same CampaignRecipient.next_send_at queue the regular Send flow
         writes to, so process_queued_initial_sends (scheduler_service.py)
         picks these up and sends them automatically with no extra job."""
+        member_ids = self._list_member_recipient_ids(db, campaign_id, group_id)
         rows = (
             db.query(CampaignRecipient, Recipient)
             .join(Recipient, Recipient.id == CampaignRecipient.recipient_id)
-            .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
             .filter(
                 CampaignRecipient.campaign_id == campaign_id,
-                RecipientGroupMember.group_id == group_id,
+                CampaignRecipient.recipient_id.in_(member_ids),
                 CampaignRecipient.status != "sent",
             )
             .all()
@@ -284,20 +307,20 @@ class CampaignService:
     def get_list_members(
         self, db: Session, campaign_id: int, group_id: int
     ) -> list[tuple[CampaignRecipient, Recipient]]:
+        member_ids = self._list_member_recipient_ids(db, campaign_id, group_id)
         return (
             db.query(CampaignRecipient, Recipient)
             .join(Recipient, Recipient.id == CampaignRecipient.recipient_id)
-            .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
-            .filter(CampaignRecipient.campaign_id == campaign_id, RecipientGroupMember.group_id == group_id)
+            .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.recipient_id.in_(member_ids))
             .order_by(Recipient.name)
             .all()
         )
 
     def retag_list(self, db: Session, campaign_id: int, group_id: int, template_id: int | None) -> int:
+        member_ids = self._list_member_recipient_ids(db, campaign_id, group_id)
         rows = (
             db.query(CampaignRecipient)
-            .join(RecipientGroupMember, RecipientGroupMember.recipient_id == CampaignRecipient.recipient_id)
-            .filter(CampaignRecipient.campaign_id == campaign_id, RecipientGroupMember.group_id == group_id)
+            .filter(CampaignRecipient.campaign_id == campaign_id, CampaignRecipient.recipient_id.in_(member_ids))
             .all()
         )
         for cr in rows:
