@@ -21,17 +21,22 @@ class SESService:
             try:
                 import boto3
 
-                # Only pass static keys when explicitly configured (local dev,
-                # where there's no instance role to fall back on). Leaving
-                # them out otherwise lets boto3's default credential chain
-                # resolve credentials itself — on EC2/ECS that means the
-                # attached IAM role (e.g. ses-email-service-role) via the
-                # instance metadata service, with no long-lived keys to leak
-                # or rotate.
-                kwargs = {"region_name": self.settings.aws_region}
-                if self.settings.aws_access_key_id and self.settings.aws_secret_access_key:
-                    kwargs["aws_access_key_id"] = self.settings.aws_access_key_id
-                    kwargs["aws_secret_access_key"] = self.settings.aws_secret_access_key
+                region = self.settings.ses_region or self.settings.aws_region
+                # SES-specific credentials take priority — needed when the
+                # sending identity (e.g. mail.feuji.com) is verified in a
+                # different AWS account than the compute's IAM role, which
+                # has no access to another account's SES identities no
+                # matter its permissions. Fall back to the generic AWS keys,
+                # then to the instance's IAM role via boto3's default
+                # credential chain, for same-account setups (local dev, or
+                # a role that legitimately owns the sending identity).
+                access_key = self.settings.ses_aws_access_key_id or self.settings.aws_access_key_id
+                secret_key = self.settings.ses_aws_secret_access_key or self.settings.aws_secret_access_key
+
+                kwargs = {"region_name": region}
+                if access_key and secret_key:
+                    kwargs["aws_access_key_id"] = access_key
+                    kwargs["aws_secret_access_key"] = secret_key
 
                 self._client = boto3.client("ses", **kwargs)
             except Exception as exc:

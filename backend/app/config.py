@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     use_mock_ses: bool = True
     test_email_override: str = "d.nikhileswar.reddy@gmail.com"
 
+    # SES-specific credentials, for when the sending identity (e.g.
+    # mail.feuji.com) is verified in a different AWS account than the one
+    # the compute's IAM role belongs to — the role has no access to another
+    # account's SES identities regardless of its permissions. Falls back to
+    # AWS_ACCESS_KEY_ID/SECRET (then the instance role) when left blank, so
+    # same-account setups are unaffected.
+    ses_aws_access_key_id: str = ""
+    ses_aws_secret_access_key: str = ""
+    ses_region: str = ""
+
     groq_api_key: str = ""
     use_mock_groq: bool = True
 
