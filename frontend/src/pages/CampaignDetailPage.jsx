@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import DOMPurify from 'dompurify';
 import {
   FiArrowLeft,
   FiEdit2,
@@ -33,7 +34,7 @@ import {
 } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import { useContactSearch } from '../hooks/useContactSearch';
-import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml, stripHtml } from '../utils/helpers';
+import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
 import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -989,7 +990,7 @@ export default function CampaignDetailPage() {
                   {templates.map((t, i) => (
                     <div key={t.id} className="rounded-xl border border-gray-200 p-4">
                       <div className="flex items-start justify-between gap-3">
-                        <div>
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <p className="text-sm font-semibold text-gray-900">{t.name || `Template ${i + 1}`}</p>
                             {i === 0 && (
@@ -997,21 +998,30 @@ export default function CampaignDetailPage() {
                             )}
                             <span className="text-xs px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 capitalize">{t.type}</span>
                           </div>
-                          <p className="text-sm text-gray-700 mt-1.5">{t.subject}</p>
-                          <p className="text-xs text-gray-500 mt-1 line-clamp-2 whitespace-pre-wrap">{stripHtml(t.body, t.type)}</p>
+                          <p className="truncate text-sm text-gray-700 mt-1.5">{t.subject}</p>
+                          {t.type === 'manual' ? (
+                            <div
+                              className="prose prose-sm mt-1 line-clamp-2 max-w-none overflow-hidden text-xs text-gray-500"
+                              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.body || '') }}
+                            />
+                          ) : (
+                            <p className="line-clamp-2 whitespace-pre-wrap text-xs text-gray-500 mt-1">{t.body}</p>
+                          )}
                         </div>
-                        <div className="flex items-center gap-1 flex-shrink-0">
+                        <div className="flex shrink-0 items-center gap-1">
                           <button
                             onClick={() => handleOpenEditTemplate(t)}
-                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700"
+                            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                             title="Edit template"
+                            aria-label={`Edit ${t.name || `Template ${i + 1}`}`}
                           >
                             <FiEdit2 size={15} />
                           </button>
                           <button
                             onClick={() => setDeletingTemplateId(t.id)}
-                            className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600"
+                            className="p-1.5 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600"
                             title="Delete template"
+                            aria-label={`Delete ${t.name || `Template ${i + 1}`}`}
                           >
                             <FiTrash2 size={15} />
                           </button>
@@ -1182,8 +1192,11 @@ export default function CampaignDetailPage() {
                       disabled={templates.length === 0}
                     >
                       <option value="">{templates.length === 0 ? 'No templates yet' : 'Primary template'}</option>
-                      {templates.map((t, i) => (
-                        <option key={t.id} value={t.id}>{t.name || `Template ${i + 1}`}</option>
+                      {/* templates[0] IS the primary template — already covered by the
+                          option above, so only list the additional ones here to avoid
+                          showing the same template twice under two different labels. */}
+                      {templates.slice(1).map((t, i) => (
+                        <option key={t.id} value={t.id}>{t.name || `Template ${i + 2}`}</option>
                       ))}
                     </select>
                   </div>
@@ -1421,8 +1434,8 @@ export default function CampaignDetailPage() {
                             disabled={retaggingList || templates.length === 0}
                           >
                             <option value="">{templates.length === 0 ? 'No templates yet' : 'Primary template'}</option>
-                            {templates.map((t, i) => (
-                              <option key={t.id} value={t.id}>{t.name || `Template ${i + 1}`}</option>
+                            {templates.slice(1).map((t, i) => (
+                              <option key={t.id} value={t.id}>{t.name || `Template ${i + 2}`}</option>
                             ))}
                           </select>
                         </div>
@@ -1827,8 +1840,8 @@ export default function CampaignDetailPage() {
                 disabled={templates.length === 0}
               >
                 <option value="">{templates.length === 0 ? 'No templates yet' : 'Primary template'}</option>
-                {templates.map((t, i) => (
-                  <option key={t.id} value={t.id}>{t.name || `Template ${i + 1}`}</option>
+                {templates.slice(1).map((t, i) => (
+                  <option key={t.id} value={t.id}>{t.name || `Template ${i + 2}`}</option>
                 ))}
               </select>
             </div>

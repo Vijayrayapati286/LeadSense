@@ -109,12 +109,18 @@ const UNRESOLVABLE_IMG_SRC_RE = /(<img\b[^>]*\bsrc=")(?!https?:|data:image\/)[^"
  * Also substitutes real pixels in for any unresolvable <img src> (Outlook's
  * `cid:...`, or a `file:///...` path) when Windows also put the actual
  * bitmap on the clipboard as a separate file — Chrome exposes that via
- * `clipboardData.items`. Falls through to default paste handling (returns
- * false) only when there's no HTML at all (plain text paste). */
+ * `clipboardData.items`.
+ *
+ * A screenshot tool's "Copy" (Snipping Tool, Win+Shift+S, etc.) puts *only*
+ * image bytes on the clipboard — no text/html at all — which is a distinct
+ * case from a plain-text paste even though both lack HTML: there's nothing
+ * for ProseMirror's default paste conversion to build a slice from, so
+ * without handling it explicitly here the image is silently dropped and
+ * nothing is inserted, with no error shown. Falls through to default paste
+ * handling (returns false) only when there's neither HTML nor an image file
+ * — i.e. an actual plain-text paste. */
 function handlePasteContent(editorRef, event) {
   const html = event.clipboardData?.getData('text/html');
-  if (!html) return false;
-
   const items = event.clipboardData?.items;
   const imageFiles = items
     ? Array.from(items)
@@ -123,7 +129,19 @@ function handlePasteContent(editorRef, event) {
         .filter(Boolean)
     : [];
 
+  if (!html && imageFiles.length === 0) return false;
+
   event.preventDefault();
+
+  if (!html) {
+    Promise.all(imageFiles.map(readFileAsDataUrl)).then((dataUrls) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const imgHtml = dataUrls.map((url) => `<img src="${url}">`).join('');
+      editor.chain().focus().insertContent(purify(imgHtml)).run();
+    });
+    return true;
+  }
 
   const insert = (dataUrls) => {
     const editor = editorRef.current;
@@ -145,7 +163,23 @@ function handlePasteContent(editorRef, event) {
   return true;
 }
 
-const FONT_FAMILIES = ['Arial', 'Georgia', 'Impact', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Courier New'];
+const FONT_FAMILIES = [
+  'Arial',
+  'Calibri',
+  'Cambria',
+  'Courier New',
+  'Garamond',
+  'Georgia',
+  'Helvetica',
+  'Impact',
+  'Lucida Sans',
+  'Palatino',
+  'Segoe UI',
+  'Tahoma',
+  'Times New Roman',
+  'Trebuchet MS',
+  'Verdana',
+];
 const FONT_SIZES = ['10px', '12px', '14px', '16px', '18px', '20px', '24px', '28px', '32px'];
 
 function ToolbarButton({ onClick, active, disabled, title, children }) {
@@ -381,14 +415,19 @@ export default function RichTextEditor({ value, onChange, placeholder }) {
   }, [editor]);
 
   // Reload editor content when the parent swaps in a different template's
-  // body (switching templates/mailers) — but not on every keystroke, since
-  // onUpdate above already keeps `value` equal to the live doc.
+  // body (switching templates/mailers, or the Manual-compose default
+  // signature landing the moment it's auto-filled) — but not on every
+  // keystroke, since onUpdate above already keeps `value` equal to the live
+  // doc. Parking the cursor at the very start each time means the compose
+  // window is immediately ready to type into, rather than requiring a click
+  // above whatever content just got loaded in (e.g. the default signature).
   useEffect(() => {
     if (!editor) return;
     const current = editor.getHTML();
     const next = value || '';
     if (next !== current) {
       editor.commands.setContent(next, false);
+      editor.commands.focus('start');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, editor]);
