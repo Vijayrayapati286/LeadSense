@@ -11,19 +11,7 @@ seed_service.provision_core_users and backend/.env.example) and are never
 in source control.
 """
 
-CORE_USERS = [
-    ("Veerendra Chowhan", "veerendra.chowhan@feuji.com"),
-    ("Srikanth Reddy", "srikanth.k@feuji.com"),
-    ("Preeti Gupta", "preeti.gupta@feuji.com"),
-    ("Ramya Pinnika", "ramya.pinnika@feuji.com"),
-    ("Ramya Swathi", "ramya.pasupuleti@feuji.com"),
-    ("Roshan Shenisetty", "roshan.shenishetty@feuji.com"),
-    ("Srinivas Reddy", "sreenivas.jetningu@feuji.com"),
-    ("Vijay Rayapati", "vijay.rayapati@feuji.com"),
-    # Shared/generic credential — not a named person. Hand this one out
-    # manually to anyone who needs access but isn't on the named list above.
-    ("Demo User", "demo@feuji.com"),
-]
+CORE_USERS = [("Veerendra Chowhan", "veerendra.chowhan@feuji.com"), ("Srikanth Reddy", "srikanth.k@feuji.com"), ("Preeti Gupta", "preeti.gupta@feuji.com"), ("Ramya Pinnika", "ramya.pinnika@feuji.com"), ("Ramya Swathi", "ramya.pasupuleti@feuji.com"), ("Roshan Shenisetty", "roshan.shenishetty@feuji.com"), ("Sreenivas Reddy", "sreenivas.jetningu@feuji.com"), ("Vijay Rayapati", "vijay.rayapati@feuji.com"), ("Demo User", "demo@feuji.com"), ("Jennifer Wilson", "jennifer.wilson@feuji.com")]
 
 ALLOWED_LOGIN_EMAILS = {email.lower() for _, email in CORE_USERS}
 
