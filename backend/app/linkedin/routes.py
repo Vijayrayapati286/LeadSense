@@ -1,0 +1,214 @@
+"""LinkedIn Profile Extractor API routes.
+
+Isolated from Sales Navigator. Cookies never leave the server.
+Uses Playwright first, then Apify fallback (engine=auto).
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Literal
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
+
+from app.linkedin.excel_service import LinkedInExcelService
+from app.linkedin.hybrid import HybridLinkedInProfileExtractor
+from app.linkedin.apify_extractor import LinkedInApifyProfileExtractor
+from app.linkedin.jobs import job_store
+from app.linkedin.rate_limit import profile_extract_limiter
+from app.linkedin.schemas import (
+    JobCreateResponse,
+    JobStatusResponse,
+    LinkedInExtractData,
+    LinkedInExtractRequest,
+    LinkedInExtractResponse,
+    ProfileExtractRequest,
+    ProfileExtractResponse,
+)
+from app.linkedin.validator import validate_profile_url
+from app.middleware.auth import get_current_user
+from app.models import User
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/linkedin", tags=["LinkedIn Profile Extractor"])
+
+extractor = HybridLinkedInProfileExtractor()
+apify_extractor = LinkedInApifyProfileExtractor()
+excel_service = LinkedInExcelService()
+
+EngineParam = Literal["auto", "playwright", "apify"]
+
+
+@router.post("/extract", response_model=LinkedInExtractResponse)
+def linkedin_extract(
+    body: LinkedInExtractRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Apify LinkedIn profile scrape → clean frontend JSON."""
+    user_id = getattr(current_user, "id", None)
+    rate_key = f"user:{user_id or 'anon'}"
+    allowed, rate_msg = profile_extract_limiter.check(rate_key)
+    if not allowed:
+        return LinkedInExtractResponse(success=False, message=rate_msg, data=None)
+
+    try:
+        url = validate_profile_url(body.url)
+    except ValueError as exc:
+        return LinkedInExtractResponse(success=False, message=str(exc), data=None)
+
+    logger.info(
+        "LinkedIn /extract requested user_id=%s path=%s",
+        user_id,
+        url,
+    )
+
+    try:
+        result = apify_extractor.extract_rich(url)
+        if not result.get("success"):
+            return LinkedInExtractResponse(
+                success=False,
+                message=result.get("message") or "No profile data returned",
+                data=None,
+            )
+        return LinkedInExtractResponse(
+            success=True,
+            data=LinkedInExtractData(**(result.get("data") or {})),
+            message=None,
+        )
+    except Exception as exc:
+        logger.exception("linkedin/extract failed")
+        return LinkedInExtractResponse(success=False, message=str(exc), data=None)
+
+
+def _run_extraction(url: str, engine: EngineParam = "auto") -> ProfileExtractResponse:
+    result = extractor.extract(url, engine=engine)
+    if not result.ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.message)
+
+    _, _filename, relative = excel_service.build_workbook(result.as_dict())
+    source = result.source if result.source in {"playwright", "apify"} else None
+    return ProfileExtractResponse(
+        full_name=result.full_name,
+        company=result.company,
+        job_title=result.job_title,
+        about=result.about,
+        excel_file=relative,
+        source=source,
+    )
+
+
+def _background_extract(job_id: str, url: str, engine: EngineParam = "auto") -> None:
+    job_store.update(job_id, status="running")
+    try:
+        result = extractor.extract(url, engine=engine)
+        if not result.ok:
+            job_store.update(job_id, status="failed", error=result.message)
+            return
+        _, _filename, relative = excel_service.build_workbook(result.as_dict())
+        payload = {
+            "full_name": result.full_name,
+            "company": result.company,
+            "job_title": result.job_title,
+            "about": result.about,
+            "excel_file": relative,
+            "source": result.source if result.source in {"playwright", "apify"} else None,
+        }
+        job_store.update(job_id, status="done", result=payload)
+    except Exception as exc:
+        logger.exception("Background LinkedIn extract failed job_id=%s", job_id)
+        job_store.update(job_id, status="failed", error=str(exc))
+
+
+@router.post(
+    "/extract-profile",
+    response_model=ProfileExtractResponse | JobCreateResponse,
+)
+def extract_profile(
+    body: ProfileExtractRequest,
+    background_tasks: BackgroundTasks,
+    async_mode: bool = Query(False, alias="async"),
+    engine: EngineParam = Query(
+        "auto",
+        description="auto = Playwright then Apify fallback; or force one engine",
+    ),
+    current_user: User = Depends(get_current_user),
+):
+    """Extract Full Name, Company, Designation, About from a LinkedIn /in/ URL."""
+    user_id = getattr(current_user, "id", None)
+    rate_key = f"user:{user_id or 'anon'}"
+    allowed, rate_msg = profile_extract_limiter.check(rate_key)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=rate_msg)
+
+    try:
+        url = validate_profile_url(body.url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    logger.info(
+        "LinkedIn profile extract requested user_id=%s async=%s engine=%s path=%s",
+        user_id,
+        async_mode,
+        engine,
+        url,
+    )
+
+    if async_mode:
+        job = job_store.create(user_id=user_id, url=url)
+        background_tasks.add_task(_background_extract, job.job_id, url, engine)
+        return JobCreateResponse(job_id=job.job_id, status="pending")
+
+    return _run_extraction(url, engine=engine)
+
+
+@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    user_id = getattr(current_user, "id", None)
+    if job.user_id is not None and user_id is not None and job.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    result = None
+    if job.result:
+        result = ProfileExtractResponse(**job.result)
+
+    return JobStatusResponse(
+        job_id=job.job_id,
+        status=job.status,
+        result=result,
+        error=job.error,
+    )
+
+
+@router.get("/download/{filename}")
+def download_excel(
+    filename: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Download a previously generated profile Excel (auth required)."""
+    path: Path | None = excel_service.resolve_safe_path(filename)
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+
+    logger.info(
+        "LinkedIn Excel download user_id=%s file=%s",
+        getattr(current_user, "id", None),
+        filename,
+    )
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )

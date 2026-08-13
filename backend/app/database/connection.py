@@ -61,6 +61,7 @@ def get_db() -> Generator:
 def init_db() -> None:
     """Create all tables, seed dummy data if empty, and provision named users."""
     from app.models import Campaign, EmailLog, Recipient, Template, User
+    from app.profile_extractor import models as _profile_extractor_models  # noqa: F401
     from app.services.seed_service import provision_core_users, seed_dummy_data
 
     Base.metadata.create_all(bind=engine)

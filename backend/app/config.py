@@ -63,6 +63,17 @@ class Settings(BaseSettings):
     # no passwords) since that file is committed to a shared repo.
     core_user_passwords_json: str = Field("{}", validation_alias="CORE_USER_PASSWORDS")
 
+    # LinkedIn Sales Navigator extraction (Apify + Playwright session check)
+    apify_token: str = ""
+    apify_actor_id: str = ""
+    # Optional actor for /in/ profile scrape (LinkedIn Profile Extractor fallback).
+    # When empty, profile Apify fallback uses apify_actor_id.
+    apify_profile_actor_id: str = ""
+    linkedin_li_at: str = ""
+    # Optional full cookie-array JSON from a "Copy Cookies" browser extension.
+    # When set, preferred over building a single li_at cookie for Apify.
+    linkedin_cookies_json: str = ""
+
     @property
     def azure_authority(self) -> str:
         return f"https://login.microsoftonline.com/{self.azure_tenant_id}"

@@ -12,6 +12,8 @@ import {
   FiChevronRight,
   FiSend,
   FiShield,
+  FiSearch,
+  FiUser,
 } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 
@@ -22,12 +24,33 @@ const NAV_ITEMS = [
   { path: '/blacklist', label: 'Blacklist', icon: FiShield },
   { path: '/templates', label: 'Mailers', icon: FiFileText },
   { path: '/logs', label: 'Email Logs', icon: FiList },
+  { path: '/salesnav', label: 'Sales Navigator', icon: FiSearch, separatorBefore: true },
+  { path: '/linkedin-extractor', label: 'Profile Extractor', icon: FiUser },
   { path: '/settings', label: 'Settings', icon: FiSettings },
 ];
 
+function NavLinkItem({ path, label, icon: Icon, collapsed }) {
+  const location = useLocation();
+  const isActive = location.pathname.startsWith(path);
+
+  return (
+    <Link
+      to={path}
+      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group ${
+        isActive
+          ? 'bg-sidebar-active text-white shadow-lg shadow-primary-500/20'
+          : 'text-gray-300 hover:bg-sidebar-hover hover:text-white'
+      }`}
+      title={collapsed ? label : undefined}
+    >
+      <Icon size={20} className="flex-shrink-0" />
+      {!collapsed && <span className="text-sm font-medium">{label}</span>}
+    </Link>
+  );
+}
+
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
-  const location = useLocation();
   const { user, logout } = useAuth();
 
   return (
@@ -51,24 +74,12 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map(({ path, label, icon: Icon }) => {
-          const isActive = location.pathname.startsWith(path);
-          return (
-            <Link
-              key={path}
-              to={path}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group ${
-                isActive
-                  ? 'bg-sidebar-active text-white shadow-lg shadow-primary-500/20'
-                  : 'text-gray-300 hover:bg-sidebar-hover hover:text-white'
-              }`}
-              title={collapsed ? label : undefined}
-            >
-              <Icon size={20} className="flex-shrink-0" />
-              {!collapsed && <span className="text-sm font-medium">{label}</span>}
-            </Link>
-          );
-        })}
+        {NAV_ITEMS.map(({ path, label, icon, separatorBefore }) => (
+          <div key={path}>
+            {separatorBefore && <div className="my-3 border-t border-white/10" />}
+            <NavLinkItem path={path} label={label} icon={icon} collapsed={collapsed} />
+          </div>
+        ))}
       </nav>
 
       {/* User & Logout */}

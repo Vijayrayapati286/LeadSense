@@ -125,3 +125,39 @@ export const mailerService = {
   update: (id, data) => api.put(`/mailers/${id}`, data),
   delete: (id) => api.delete(`/mailers/${id}`),
 };
+
+export const salesNavService = {
+  extract: (searchUrl) =>
+    api.post(
+      '/salesnav/extract',
+      { search_url: searchUrl },
+      { responseType: 'blob', timeout: 600_000 },
+    ),
+  extractProfile: (profileUrl) =>
+    api.post(
+      '/salesnav/extract-profile',
+      { profile_url: profileUrl },
+      { responseType: 'blob', timeout: 120_000 },
+    ),
+};
+
+export const linkedinProfileService = {
+  extract: (url) =>
+    api.post('/linkedin/extract', { url }, { timeout: 180_000 }).then((r) => r.data),
+  extractProfile: (url) =>
+    api.post('/linkedin/extract-profile', { url }, { timeout: 120_000 }).then((r) => r.data),
+  getJob: (jobId) => api.get(`/linkedin/jobs/${jobId}`).then((r) => r.data),
+  downloadExcel: (filename) =>
+    api.get(`/linkedin/download/${encodeURIComponent(filename)}`, {
+      responseType: 'blob',
+    }),
+};
+
+/** Apify-only LeadSense Profile Extractor (jobs + cache + Excel). */
+export const profileExtractorService = {
+  extract: (url) =>
+    api.post('/v1/profile/extract', { url }, { timeout: 30_000 }).then((r) => r.data),
+  getJob: (jobId) => api.get(`/v1/profile/${jobId}`).then((r) => r.data),
+  download: (jobId) =>
+    api.get(`/v1/profile/${jobId}/download`, { responseType: 'blob', timeout: 60_000 }),
+};

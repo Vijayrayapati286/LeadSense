@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database.connection import init_db
+from app.linkedin import router as linkedin_router
+from app.profile_extractor import router as profile_extractor_router
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 from app.routers import (
     app_settings,
@@ -22,6 +24,7 @@ from app.routers import (
     mailers,
     recipient_groups,
     recipients,
+    salesnav,
     tags,
     templates,
     users,
@@ -89,6 +92,9 @@ app.include_router(webhooks.router, prefix=API_PREFIX)
 app.include_router(app_settings.router, prefix=API_PREFIX)
 app.include_router(custom_fields.router, prefix=API_PREFIX)
 app.include_router(users.router, prefix=API_PREFIX)
+app.include_router(salesnav.router, prefix=API_PREFIX)
+app.include_router(linkedin_router, prefix=API_PREFIX)
+app.include_router(profile_extractor_router, prefix=API_PREFIX)
 
 
 @app.get("/")

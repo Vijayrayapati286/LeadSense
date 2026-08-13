@@ -12,6 +12,8 @@ import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
 import SettingsPage from './pages/SettingsPage';
 import BlacklistPage from './pages/BlacklistPage';
+import SalesNavExtractPage from './pages/SalesNavExtractPage';
+import LinkedInProfileExtractorPage from './pages/LinkedInProfileExtractorPage';
 
 export default function App() {
   return (
@@ -32,6 +34,8 @@ export default function App() {
           <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/logs" element={<EmailLogsPage />} />
+          <Route path="/salesnav" element={<SalesNavExtractPage />} />
+          <Route path="/linkedin-extractor" element={<LinkedInProfileExtractorPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>
