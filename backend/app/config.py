@@ -76,13 +76,17 @@ class Settings(BaseSettings):
 
     # Bulk LinkedIn extract: concurrent Apify batch processing
     max_concurrent_apify_runs: int = Field(10, validation_alias="MAX_CONCURRENT_APIFY_RUNS")
+    max_concurrent_batches: int = Field(10, validation_alias="MAX_CONCURRENT_BATCHES")
     apify_batch_size: int = Field(10, validation_alias="APIFY_BATCH_SIZE")
+    processing_window: int = Field(100, validation_alias="PROCESSING_WINDOW")
     # Max extraction attempts per URL (attempt 1 + retries). Success stops immediately.
     apify_max_retries: int = Field(5, validation_alias="APIFY_MAX_RETRIES")
-    max_bulk_urls: int = Field(250, validation_alias="MAX_BULK_URLS")
+    max_bulk_urls: int = Field(5000, validation_alias="MAX_BULK_URLS")
     bulk_retry_base_delay_seconds: float = Field(5.0, validation_alias="BULK_RETRY_BASE_DELAY_SECONDS")
     bulk_retry_backoff_multiplier: float = Field(2.0, validation_alias="BULK_RETRY_BACKOFF_MULTIPLIER")
     bulk_stale_processing_seconds: int = Field(900, validation_alias="BULK_STALE_PROCESSING_SECONDS")
+    verify_match_threshold: int = Field(100, validation_alias="VERIFY_MATCH_THRESHOLD")
+    verify_review_threshold: int = Field(100, validation_alias="VERIFY_REVIEW_THRESHOLD")
     # Comma-separated substrings; matching errors skip further retries.
     bulk_non_retryable_errors: str = Field(
         "invalid url,malformed,permanently unavailable,profile not found,not a linkedin",

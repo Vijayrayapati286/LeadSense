@@ -253,3 +253,135 @@ def test_one_failed_batch_does_not_fail_whole_job(client, monkeypatch):
             return
         time.sleep(0.05)
     pytest.fail("job did not complete")
+
+
+def test_failed_urls_retry_individually_and_success_is_not_resent(client, monkeypatch):
+    from app.config import get_settings
+    from app.linkedin import routes as linkedin_routes
+    from app.linkedin.bulk_batch_runner import BulkBatchRunner
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "apify_batch_size", 10)
+    monkeypatch.setattr(settings, "max_concurrent_apify_runs", 1)
+    monkeypatch.setattr(settings, "max_concurrent_batches", 1)
+    monkeypatch.setattr(settings, "apify_max_retries", 5)
+    monkeypatch.setattr(settings, "bulk_retry_base_delay_seconds", 0)
+    monkeypatch.setattr(settings, "processing_window", 100)
+
+    calls = []
+    attempts = {"https://www.linkedin.com/in/flaky/": 0}
+
+    def mock_run_rich_batch(urls):
+        calls.append(list(urls))
+        out = {}
+        for url in urls:
+            if "flaky" in url:
+                attempts[url] = attempts.get(url, 0) + 1
+                if attempts[url] < 3:
+                    out[url] = _failed_result("empty")
+                    continue
+            if "dead" in url:
+                out[url] = _failed_result("empty")
+                continue
+            out[url] = _ok_result(url)
+        return RichBatchOutcome(results_by_url=out, actor_run_id="r")
+
+    runner = BulkBatchRunner(settings=settings)
+    runner.apify.run_rich_batch = mock_run_rich_batch
+    monkeypatch.setattr(linkedin_routes, "bulk_extract_service", type("S", (), {
+        "process_job": runner.process_job,
+    })())
+
+    import pandas as pd
+    urls = [
+        "https://www.linkedin.com/in/good/",
+        "https://www.linkedin.com/in/flaky/",
+        "https://www.linkedin.com/in/dead/",
+    ]
+    buffer = io.BytesIO()
+    pd.DataFrame({"LinkedIn URL": urls}).to_excel(buffer, index=False, engine="openpyxl")
+    resp = client.post(
+        "/api/linkedin/bulk-extract",
+        files={"file": ("p.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.sheet")},
+    )
+    job_id = resp.json()["job_id"]
+    deadline = time.time() + 20
+    done = None
+    while time.time() < deadline:
+        status = client.get(f"/api/linkedin/bulk-jobs/{job_id}").json()
+        if status["status"] == "done":
+            done = status
+            break
+        time.sleep(0.05)
+    assert done is not None
+    assert done["successful_profiles"] == 2
+    assert done["failed_profiles"] == 1
+    assert attempts["https://www.linkedin.com/in/flaky/"] == 3
+    good = "https://www.linkedin.com/in/good/"
+    appeared = [i for i, batch in enumerate(calls) if good in batch]
+    assert appeared == [0]
+
+
+def test_hundred_urls_all_present_in_excel(client, monkeypatch):
+    from app.config import get_settings
+    from app.linkedin import routes as linkedin_routes
+    from app.linkedin.bulk_batch_runner import BulkBatchRunner
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "apify_batch_size", 10)
+    monkeypatch.setattr(settings, "max_concurrent_batches", 10)
+    monkeypatch.setattr(settings, "max_concurrent_apify_runs", 10)
+    monkeypatch.setattr(settings, "apify_max_retries", 5)
+    monkeypatch.setattr(settings, "max_bulk_urls", 5000)
+    monkeypatch.setattr(settings, "bulk_retry_base_delay_seconds", 0)
+    monkeypatch.setattr(settings, "processing_window", 100)
+
+    def mock_run_rich_batch(urls):
+        out = {}
+        for url in urls:
+            if "fail5" in url:
+                out[url] = _failed_result("empty")
+            elif "empty" in url:
+                out[url] = {"status": "ok", "data": {}, "error": None}
+            else:
+                out[url] = _ok_result(url)
+        return RichBatchOutcome(results_by_url=out)
+
+    runner = BulkBatchRunner(settings=settings)
+    runner.apify.run_rich_batch = mock_run_rich_batch
+    monkeypatch.setattr(linkedin_routes, "bulk_extract_service", type("S", (), {
+        "process_job": runner.process_job,
+    })())
+
+    import pandas as pd
+    urls = []
+    for i in range(100):
+        if i < 8:
+            urls.append(f"https://www.linkedin.com/in/fail5-{i}/")
+        elif i < 16:
+            urls.append(f"https://www.linkedin.com/in/empty-{i}/")
+        else:
+            urls.append(f"https://www.linkedin.com/in/ok-{i}/")
+    buffer = io.BytesIO()
+    pd.DataFrame({"LinkedIn URL": urls}).to_excel(buffer, index=False, engine="openpyxl")
+    resp = client.post(
+        "/api/linkedin/bulk-extract",
+        files={"file": ("p.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.sheet")},
+    )
+    job_id = resp.json()["job_id"]
+    deadline = time.time() + 40
+    done = None
+    while time.time() < deadline:
+        status = client.get(f"/api/linkedin/bulk-jobs/{job_id}").json()
+        if status["status"] in {"done", "failed"}:
+            done = status
+            break
+        time.sleep(0.05)
+    assert done is not None
+    assert done["status"] == "done"
+    assert done["successful_profiles"] + done["failed_profiles"] == 100
+    download = client.get(f"/api/linkedin/bulk-jobs/{job_id}/download")
+    assert download.status_code == 200
+    import pandas as pd
+    result_df = pd.read_excel(io.BytesIO(download.content))
+    assert len(result_df) == 100

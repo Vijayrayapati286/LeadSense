@@ -32,6 +32,8 @@ URL_COLUMN_ALIASES = {
     "linkedinprofile",
     "linkedinprofilelink",
     "linkedinlink",
+    "personlinkedinurl",
+    "personlinkedin",
 }
 
 OUTPUT_COLUMNS = (
@@ -85,6 +87,19 @@ class BulkExcelService:
             for col in columns:
                 extra[col] = self._cell(series[col] if col in series.index else None)
             if not raw:
+                rows.append(
+                    {
+                        "row_index": int(idx) if str(idx).isdigit() or isinstance(idx, int) else pos,
+                        "source_row_number": pos + 1,
+                        "raw_url": "",
+                        "normalized_url": "",
+                        "is_valid": False,
+                        "is_duplicate": False,
+                        "error": "No LinkedIn profile URL on this row",
+                        "source_row_json": extra,
+                        "input_columns": columns,
+                    }
+                )
                 continue
             error = None
             is_valid = True
@@ -111,7 +126,7 @@ class BulkExcelService:
                 }
             )
 
-        if not rows:
+        if not any(r.get("normalized_url") or r.get("raw_url") for r in rows):
             raise BulkExcelError(
                 "No LinkedIn profile URLs found. Add a column like 'LinkedIn URL' "
                 "with links such as https://www.linkedin.com/in/username/"
@@ -217,73 +232,91 @@ class BulkExcelService:
         items: list[Any],
         input_columns: list[str],
     ) -> tuple[bytes, str, str]:
-        extracted = (
-            "Extracted Name",
-            "Extracted Company",
-            "Designation",
-            "About",
-            "Status",
-            "Attempts",
-            "Error",
-        )
-        url_aliases = {"linkedinurl", "linkedin", "profileurl", "url", "link", "linkedinprofileurl"}
-        original = [c for c in input_columns if c]
-        has_url_col = any(_normalize_header(c) in url_aliases for c in original)
-        if not has_url_col:
-            original = ["Original URL"] + original
+        from app.linkedin.verification import original_fields
 
-        columns = list(original) + [c for c in extracted if c not in original]
-        # If the sheet already had Name/Company, keep them and still add extracted fields.
+        columns = [
+            "Original Name",
+            "Original LinkedIn URL",
+            "Original Designation",
+            "Original Company",
+            "Original Location",
+            "Extracted Name",
+            "Extracted Designation",
+            "Extracted Company",
+            "Extracted Location",
+            "Extracted About",
+            "Extraction Status",
+            "Extraction Attempts",
+            "Name Match",
+            "Designation Match",
+            "Company Match",
+            "Location Match",
+            "Verification Score",
+            "Verification Status",
+            "Verification Reason",
+            "Error",
+        ]
+        extra_original = [
+            c
+            for c in (input_columns or [])
+            if c
+            and _normalize_header(c)
+            not in {
+                "name",
+                "fullname",
+                "linkedinurl",
+                "linkedin",
+                "profileurl",
+                "url",
+                "link",
+                "linkedinprofileurl",
+                "designation",
+                "jobtitle",
+                "title",
+                "company",
+                "location",
+            }
+        ]
+        columns = extra_original + columns
+
+        def _match_label(value: Any) -> str:
+            if value is True:
+                return "true"
+            if value is False:
+                return "false"
+            return ""
+
         out_rows: list[dict[str, Any]] = []
         for item in items:
             source = item.source_row_json if isinstance(getattr(item, "source_row_json", None), dict) else {}
+            originals = original_fields(source)
             row: dict[str, Any] = {}
-            for col in original:
-                if _normalize_header(col) in url_aliases or col == "Original URL":
-                    row[col] = getattr(item, "normalized_url", None) or getattr(item, "profile_url", None)
-                else:
-                    row[col] = source.get(col)
+            for col in extra_original:
+                row[col] = source.get(col)
+            row["Original Name"] = originals.get("name")
+            row["Original LinkedIn URL"] = getattr(item, "normalized_url", None) or getattr(
+                item, "profile_url", None
+            )
+            row["Original Designation"] = originals.get("designation")
+            row["Original Company"] = originals.get("company")
+            row["Original Location"] = originals.get("location")
             row["Extracted Name"] = getattr(item, "name", None)
+            row["Extracted Designation"] = getattr(item, "designation", None)
             row["Extracted Company"] = getattr(item, "company", None)
-            row["Designation"] = getattr(item, "designation", None)
-            row["About"] = getattr(item, "about", None)
-            row["Status"] = getattr(item, "status", "") or ""
-            row["Attempts"] = getattr(item, "attempt_count", 0) or 0
+            row["Extracted Location"] = getattr(item, "location", None)
+            row["Extracted About"] = getattr(item, "about", None)
+            row["Extraction Status"] = getattr(item, "status", "") or ""
+            row["Extraction Attempts"] = getattr(item, "attempt_count", 0) or 0
+            row["Name Match"] = _match_label(getattr(item, "name_match", None))
+            row["Designation Match"] = _match_label(getattr(item, "designation_match", None))
+            row["Company Match"] = _match_label(getattr(item, "company_match", None))
+            row["Location Match"] = _match_label(getattr(item, "location_match", None))
+            score = getattr(item, "verification_score", None)
+            row["Verification Score"] = "" if score is None else score
+            row["Verification Status"] = getattr(item, "verification_status", "") or ""
+            row["Verification Reason"] = getattr(item, "verification_reason", None)
             row["Error"] = getattr(item, "last_error", None)
-            if "Name" in columns and "Extracted Name" not in columns:
-                pass
             out_rows.append(row)
-
-        # Compact layout when the upload was URL-only.
-        if original == ["Original URL"] or (
-            len(original) == 1 and _normalize_header(original[0]) in url_aliases
-        ):
-            columns = [
-                original[0] if original else "Original URL",
-                "Name",
-                "Company",
-                "Designation",
-                "About",
-                "Status",
-                "Attempts",
-                "Error",
-            ]
-            compact: list[dict[str, Any]] = []
-            url_key = columns[0]
-            for item in items:
-                compact.append(
-                    {
-                        url_key: getattr(item, "normalized_url", None) or getattr(item, "profile_url", None),
-                        "Name": getattr(item, "name", None),
-                        "Company": getattr(item, "company", None),
-                        "Designation": getattr(item, "designation", None),
-                        "About": getattr(item, "about", None),
-                        "Status": getattr(item, "status", "") or "",
-                        "Attempts": getattr(item, "attempt_count", 0) or 0,
-                        "Error": getattr(item, "last_error", None),
-                    }
-                )
-            out_rows = compact
 
         result_df = pd.DataFrame(out_rows, columns=columns)
         buffer = io.BytesIO()
@@ -297,7 +330,7 @@ class BulkExcelService:
                 red_font = Font(color="9C0006")
                 for i, out in enumerate(out_rows):
                     excel_row = i + 2
-                    status = str(out.get("Status") or "").strip().upper()
+                    status = str(out.get("Extraction Status") or out.get("Status") or "").strip().upper()
                     if status and status != ITEM_SUCCESS and status != "OK":
                         for excel_col in range(1, len(columns) + 1):
                             cell = ws.cell(row=excel_row, column=excel_col)

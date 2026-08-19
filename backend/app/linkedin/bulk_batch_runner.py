@@ -21,6 +21,7 @@ from app.linkedin.bulk_jobs import (
     add_attempt,
     claim_batch,
     copy_canonical_results_to_duplicates,
+    count_processing_items,
     get_job_row,
     next_retry_wait_seconds,
     recover_stale_processing,
@@ -28,11 +29,16 @@ from app.linkedin.bulk_jobs import (
 )
 from app.linkedin.bulk_models import (
     ITEM_FINAL_FAILED,
+    ITEM_PENDING,
+    ITEM_PROCESSING,
+    ITEM_QUEUED,
     ITEM_RETRY_WAIT,
     ITEM_SUCCESS,
+    PHASE_EXTRACTING,
     BulkJobItemRow,
 )
 from app.linkedin.validator import is_retryable_error, is_valid_extraction
+from app.linkedin.verification import apply_verification
 
 logger = logging.getLogger(__name__)
 
@@ -142,12 +148,42 @@ class BulkBatchRunner:
                 logger.error("[JOB-%s] Job not found", job_id)
                 return
             job.status = "running"
+            job.phase = PHASE_EXTRACTING
+            job.excel_finalized = False
             job.updated_at = datetime.now(timezone.utc)
             recover_stale_processing(
                 db, job_id, self.settings.bulk_stale_processing_seconds, force=True
             )
             copy_canonical_results_to_duplicates(db, job_id)
             refresh_job_counters(db, job)
+            cfg_error = self._missing_apify_config()
+            if cfg_error:
+                logger.error("[JOB-%s] %s", job_id, cfg_error)
+                now = datetime.now(timezone.utc)
+                pending = (
+                    db.query(BulkJobItemRow)
+                    .filter(
+                        BulkJobItemRow.job_id == job_id,
+                        BulkJobItemRow.status.in_(
+                            (ITEM_PENDING, ITEM_QUEUED, ITEM_PROCESSING, ITEM_RETRY_WAIT)
+                        ),
+                    )
+                    .all()
+                )
+                for item in pending:
+                    item.status = ITEM_FINAL_FAILED
+                    item.last_error = cfg_error
+                    item.completed_at = now
+                refresh_job_counters(db, job)
+                job.status = "failed"
+                job.phase = "completed"
+                job.error = cfg_error
+                job.completed_at = now
+                self._write_excel(db, job)
+                job.excel_finalized = True
+                db.commit()
+                db.close()
+                return
             db.commit()
         except Exception:
             db.rollback()
@@ -156,7 +192,13 @@ class BulkBatchRunner:
             return
         db.close()
 
-        max_workers = max(int(self.settings.max_concurrent_apify_runs), 1)
+        max_workers = max(
+            int(
+                getattr(self.settings, "max_concurrent_batches", None)
+                or self.settings.max_concurrent_apify_runs
+            ),
+            1,
+        )
         try:
             with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix=f"bulk-{job_id[:8]}") as pool:
                 futures: set[Any] = set()
@@ -186,7 +228,7 @@ class BulkBatchRunner:
                     db = SessionLocal()
                     try:
                         recover_stale_processing(
-                            db, job_id, self.settings.bulk_stale_processing_seconds, force=True
+                            db, job_id, self.settings.bulk_stale_processing_seconds, force=False
                         )
                         copy_canonical_results_to_duplicates(db, job_id)
                         job = get_job_row(db, job_id)
@@ -224,7 +266,9 @@ class BulkBatchRunner:
                                     job.status = "failed"
                                     job.error = "Job stalled with unfinished URLs"
                                     job.completed_at = datetime.now(timezone.utc)
+                                    job.phase = "completed"
                                     self._write_excel(db, job)
+                                    job.excel_finalized = True
                                 db.commit()
                         finally:
                             db.close()
@@ -239,16 +283,43 @@ class BulkBatchRunner:
                     job.status = "failed"
                     job.error = str(exc)
                     job.completed_at = datetime.now(timezone.utc)
+                    job.phase = "completed"
                     self._write_excel(db, job)
+                    job.excel_finalized = True
                     db.commit()
             finally:
                 db.close()
+
+    def _missing_apify_config(self) -> str | None:
+        if not (self.settings.apify_token or "").strip():
+            return "APIFY_TOKEN is not configured. Set it in backend/.env and restart the backend."
+        actor = (
+            (self.settings.apify_profile_actor_id or "").strip()
+            or (self.settings.apify_actor_id or "").strip()
+        )
+        if not actor:
+            return (
+                "APIFY_PROFILE_ACTOR_ID (or APIFY_ACTOR_ID) is not configured. "
+                "Set it in backend/.env and restart the backend."
+            )
+        return None
 
     def _claim(self, job_id: str) -> list[int]:
         with _claim_lock:
             db = SessionLocal()
             try:
-                items = claim_batch(db, job_id, self.settings.apify_batch_size)
+                batch_size = max(int(self.settings.apify_batch_size), 1)
+                window = max(int(getattr(self.settings, "processing_window", 100)), 1)
+                processing = count_processing_items(db, job_id)
+                room = window - processing
+                if room <= 0:
+                    return []
+                items = claim_batch(
+                    db,
+                    job_id,
+                    min(batch_size, room),
+                    max_attempts=max(int(self.settings.apify_max_retries), 1),
+                )
                 ids = [int(item.id) for item in items]
                 db.commit()
                 return ids
@@ -417,6 +488,19 @@ class BulkBatchRunner:
             error=None,
             apify_run_id=apify_run_id,
         )
+        verification = apply_verification(
+            item,
+            match_threshold=int(getattr(self.settings, "verify_match_threshold", 100)),
+            review_threshold=int(getattr(self.settings, "verify_review_threshold", 75)),
+        )
+        logger.info(
+            "[JOB-%s] [URL-%s] [ATTEMPT-%s] Extraction SUCCESS Verification %s Score %s%%",
+            item.job_id,
+            item.id,
+            item.attempt_count,
+            verification.status,
+            verification.score,
+        )
 
     def _mark_failure(
         self,
@@ -448,6 +532,11 @@ class BulkBatchRunner:
             item.status = ITEM_FINAL_FAILED
             item.retry_after = None
             item.completed_at = finished
+            apply_verification(
+                item,
+                match_threshold=int(getattr(self.settings, "verify_match_threshold", 100)),
+                review_threshold=int(getattr(self.settings, "verify_review_threshold", 75)),
+            )
             return
         delay = retry_delay_seconds(item.attempt_count, self.settings)
         item.status = ITEM_RETRY_WAIT
@@ -472,6 +561,8 @@ class BulkBatchRunner:
         refresh_job_counters(db, job)
         self._write_excel(db, job)
         job.status = "done"
+        job.phase = "completed"
+        job.excel_finalized = True
         job.completed_at = datetime.now(timezone.utc)
         job.error = None
 

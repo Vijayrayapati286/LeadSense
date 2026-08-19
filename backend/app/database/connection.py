@@ -58,6 +58,86 @@ def get_db() -> Generator:
         db.close()
 
 
+def _column_names(conn, table: str) -> set[str]:
+    inspector_rows = conn.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = :table
+            """
+        ),
+        {"table": table},
+    )
+    names = {row[0] for row in inspector_rows}
+    if names:
+        return names
+    # SQLite
+    rows = conn.execute(text(f"PRAGMA table_info({table})"))
+    return {row[1] for row in rows}
+
+
+def _ensure_linkedin_bulk_schema() -> None:
+    """Add verification columns to existing bulk tables. create_all does not ALTER."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "linkedin_bulk_jobs" not in tables:
+        return
+
+    job_cols = {c["name"] for c in inspector.get_columns("linkedin_bulk_jobs")}
+    item_cols = (
+        {c["name"] for c in inspector.get_columns("linkedin_bulk_job_items")}
+        if "linkedin_bulk_job_items" in tables
+        else set()
+    )
+    dialect = engine.dialect.name
+    statements: list[str] = []
+
+    job_adds = {
+        "verified_count": "INTEGER DEFAULT 0",
+        "mismatch_count": "INTEGER DEFAULT 0",
+        "review_count": "INTEGER DEFAULT 0",
+        "phase": "VARCHAR(32) DEFAULT 'pending'",
+        "excel_finalized": "BOOLEAN DEFAULT FALSE" if dialect != "sqlite" else "INTEGER DEFAULT 0",
+    }
+    item_adds = {
+        "verification_status": "VARCHAR(32) DEFAULT 'NOT_VERIFIED'",
+        "verification_score": "INTEGER DEFAULT 0",
+        "name_match": "BOOLEAN" if dialect != "sqlite" else "INTEGER",
+        "designation_match": "BOOLEAN" if dialect != "sqlite" else "INTEGER",
+        "company_match": "BOOLEAN" if dialect != "sqlite" else "INTEGER",
+        "location_match": "BOOLEAN" if dialect != "sqlite" else "INTEGER",
+        "verification_reason": "TEXT",
+    }
+
+    for name, ddl in job_adds.items():
+        if name not in job_cols:
+            statements.append(f"ALTER TABLE linkedin_bulk_jobs ADD COLUMN {name} {ddl}")
+    for name, ddl in item_adds.items():
+        if name not in item_cols:
+            statements.append(f"ALTER TABLE linkedin_bulk_job_items ADD COLUMN {name} {ddl}")
+
+    if not statements:
+        return
+
+    with engine.begin() as conn:
+        for stmt in statements:
+            logger.info("Applying LinkedIn bulk schema patch: %s", stmt)
+            conn.execute(text(stmt))
+        if dialect != "sqlite":
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_bulk_items_job_verify
+                    ON linkedin_bulk_job_items (job_id, verification_status)
+                    """
+                )
+            )
+    logger.info("LinkedIn bulk schema patched (%s statements)", len(statements))
+
+
 def init_db() -> None:
     """Create all tables, seed dummy data if empty, and provision named users."""
     from app.models import Campaign, EmailLog, Recipient, Template, User
@@ -66,6 +146,7 @@ def init_db() -> None:
     from app.services.seed_service import provision_core_users, seed_dummy_data
 
     Base.metadata.create_all(bind=engine)
+    _ensure_linkedin_bulk_schema()
 
     db = SessionLocal()
     try:

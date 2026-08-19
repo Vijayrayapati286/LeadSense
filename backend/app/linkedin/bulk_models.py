@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -25,6 +25,11 @@ JOB_RUNNING = "running"
 JOB_DONE = "done"
 JOB_FAILED = "failed"
 
+PHASE_UPLOADING = "uploading"
+PHASE_EXTRACTING = "extracting"
+PHASE_COMPARING = "comparing"
+PHASE_COMPLETED = "completed"
+
 
 class BulkExtractJobRow(Base):
     __tablename__ = "linkedin_bulk_jobs"
@@ -38,6 +43,11 @@ class BulkExtractJobRow(Base):
     success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retrying_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    verified_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mismatch_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False, default=PHASE_UPLOADING)
+    excel_finalized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=JOB_PENDING, index=True)
     result_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -60,6 +70,7 @@ class BulkJobItemRow(Base):
         Index("ix_bulk_items_job_status", "job_id", "status"),
         Index("ix_bulk_items_retry_after", "status", "retry_after"),
         Index("ix_bulk_items_job_row", "job_id", "source_row_number", unique=True),
+        Index("ix_bulk_items_job_verify", "job_id", "verification_status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -89,6 +100,15 @@ class BulkJobItemRow(Base):
     extraction_response: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="NOT_VERIFIED"
+    )
+    verification_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    name_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    designation_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    company_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    location_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verification_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

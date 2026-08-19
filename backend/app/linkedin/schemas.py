@@ -64,12 +64,16 @@ class BulkJobCreateResponse(BaseModel):
 class BulkJobStatusResponse(BaseModel):
     job_id: str
     status: Literal["pending", "running", "done", "failed"]
+    phase: str = "uploading"
     total: int
     completed: int
     failed: int
     retrying: int = 0
     processed: int = 0
     success: int = 0
+    verified: int = 0
+    mismatched: int = 0
+    review: int = 0
     progress_percent: int = 0
     total_profiles: int
     processed_profiles: int
@@ -82,3 +86,26 @@ class BulkJobStatusResponse(BaseModel):
     excel_file: str | None = None
     download_ready: bool = False
     error: str | None = None
+
+
+class BulkJobResultItem(BaseModel):
+    item_id: int
+    source_row_number: int
+    url: str | None = None
+    extraction_status: str
+    attempt_count: int = 0
+    error: str | None = None
+    uploaded: dict = Field(default_factory=dict)
+    extracted: dict = Field(default_factory=dict)
+    name_match: bool | None = None
+    designation_match: bool | None = None
+    company_match: bool | None = None
+    location_match: bool | None = None
+    verification_status: str | None = None
+    verification_score: int = 0
+    verification_reason: str | None = None
+
+
+class BulkJobResultsResponse(BaseModel):
+    job_id: str
+    items: list[BulkJobResultItem]

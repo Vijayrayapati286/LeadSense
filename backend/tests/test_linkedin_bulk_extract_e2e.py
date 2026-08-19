@@ -94,6 +94,104 @@ def test_bulk_extract_lifecycle_and_download(client, monkeypatch):
     assert done["download_ready"] is True
 
 
+def test_bulk_extract_mismatch_is_not_extraction_failure(client, monkeypatch):
+    from app.linkedin import routes as linkedin_routes
+    from app.linkedin.apify_extractor import RichBatchOutcome
+    import pandas as pd
+
+    url = "https://www.linkedin.com/in/john/"
+
+    def mock_run_rich_batch(profile_urls):
+        return RichBatchOutcome(
+            results_by_url={
+                url: {
+                    "status": "ok",
+                    "data": {
+                        "name": "John Smith",
+                        "headline": "Engineer",
+                        "company": "Google",
+                        "job_title": "Software Engineer",
+                        "location": "Seattle",
+                        "summary": "About",
+                        "followers": 1,
+                        "connections": 1,
+                        "profile_url": url,
+                    },
+                    "error": None,
+                }
+            },
+            actor_run_id="mock-run",
+        )
+
+    monkeypatch.setattr(
+        linkedin_routes.bulk_extract_service._runner.apify,
+        "run_rich_batch",
+        mock_run_rich_batch,
+    )
+
+    buffer = io.BytesIO()
+    pd.DataFrame(
+        {
+            "Name": ["John Smith"],
+            "LinkedIn URL": [url],
+            "Designation": ["Software Engineer"],
+            "Company": ["Microsoft"],
+            "Location": ["Seattle"],
+        }
+    ).to_excel(buffer, index=False, engine="openpyxl")
+    resp = client.post(
+        "/api/linkedin/bulk-extract",
+        files={"file": ("p.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.sheet")},
+    )
+    job_id = resp.json()["job_id"]
+    done = _wait_bulk_job(client, job_id)
+    assert done["status"] == "done"
+    assert done["successful_profiles"] == 1
+    assert done["failed_profiles"] == 0
+    assert done["mismatched"] == 1
+    assert done["verified"] == 0
+    assert done["download_ready"] is True
+
+    results = client.get(f"/api/linkedin/bulk-jobs/{job_id}/results")
+    assert results.status_code == 200
+    item = results.json()["items"][0]
+    assert item["extraction_status"] == "SUCCESS"
+    assert item["verification_status"] == "MISMATCH"
+    assert item["company_match"] is False
+    assert item["name_match"] is True
+
+
+def test_download_ready_only_when_job_finalized():
+    from app.linkedin.bulk_jobs import BulkExtractJob
+    from app.linkedin.routes import _bulk_job_status_response
+
+    running = BulkExtractJob(
+        job_id="x",
+        user_id=1,
+        status="running",
+        total=10,
+        completed=3,
+        failed=0,
+        excel_file="outputs/bulk_x.xlsx",
+        excel_finalized=False,
+        phase="extracting",
+    )
+    assert _bulk_job_status_response(running).download_ready is False
+
+    done = BulkExtractJob(
+        job_id="x",
+        user_id=1,
+        status="done",
+        total=10,
+        completed=10,
+        failed=0,
+        excel_file="outputs/bulk_x.xlsx",
+        excel_finalized=True,
+        phase="completed",
+    )
+    assert _bulk_job_status_response(done).download_ready is True
+
+
 def test_bulk_extract_rejects_empty_file(client):
     resp = client.post(
         "/api/linkedin/bulk-extract",

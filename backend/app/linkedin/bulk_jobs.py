@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database.connection import DATABASE_URL, SessionLocal
+from app.config import get_settings
 from app.linkedin.bulk_models import (
     CLAIMABLE_ITEM_STATUSES,
     ITEM_FINAL_FAILED,
@@ -20,10 +21,20 @@ from app.linkedin.bulk_models import (
     ITEM_QUEUED,
     ITEM_RETRY_WAIT,
     ITEM_SUCCESS,
+    PHASE_COMPARING,
+    PHASE_COMPLETED,
+    PHASE_EXTRACTING,
+    PHASE_UPLOADING,
     TERMINAL_ITEM_STATUSES,
     BulkExtractJobRow,
     BulkJobItemRow,
     ExtractionAttemptRow,
+)
+from app.linkedin.verification import (
+    VERIFY_MISMATCH,
+    VERIFY_REVIEW,
+    VERIFY_VERIFIED,
+    apply_verification,
 )
 
 BulkJobStatus = Literal["pending", "running", "done", "failed"]
@@ -40,6 +51,11 @@ class BulkExtractJob:
     completed: int = 0
     failed: int = 0
     retrying: int = 0
+    verified: int = 0
+    mismatched: int = 0
+    review: int = 0
+    phase: str = "uploading"
+    excel_finalized: bool = False
     total_batches: int = 0
     completed_batches: int = 0
     excel_file: str | None = None
@@ -58,6 +74,20 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
+def derive_phase(job: BulkExtractJobRow) -> str:
+    if job.status in {"done", "failed"}:
+        return PHASE_COMPLETED
+    if job.status == "pending":
+        return PHASE_UPLOADING
+    processed = (job.processed_count or 0)
+    total = job.total_urls or 0
+    if processed >= total and total > 0:
+        return PHASE_COMPARING
+    if (job.success_count or 0) > 0:
+        return PHASE_EXTRACTING
+    return PHASE_EXTRACTING
+
+
 def job_row_to_snapshot(job: BulkExtractJobRow) -> BulkExtractJob:
     processed = (job.success_count or 0) + (job.failed_count or 0)
     return BulkExtractJob(
@@ -68,6 +98,11 @@ def job_row_to_snapshot(job: BulkExtractJobRow) -> BulkExtractJob:
         completed=job.success_count or 0,
         failed=job.failed_count or 0,
         retrying=job.retrying_count or 0,
+        verified=job.verified_count or 0,
+        mismatched=job.mismatch_count or 0,
+        review=job.review_count or 0,
+        phase=job.phase or derive_phase(job),
+        excel_finalized=bool(job.excel_finalized),
         total_batches=0,
         completed_batches=0,
         excel_file=job.result_file_path,
@@ -103,14 +138,45 @@ def refresh_job_counters(db: Session, job: BulkExtractJobRow) -> BulkExtractJobR
         .scalar()
         or 0
     )
+    verified = (
+        db.query(func.count(BulkJobItemRow.id))
+        .filter(
+            BulkJobItemRow.job_id == job.id,
+            BulkJobItemRow.verification_status == VERIFY_VERIFIED,
+        )
+        .scalar()
+        or 0
+    )
+    mismatched = (
+        db.query(func.count(BulkJobItemRow.id))
+        .filter(
+            BulkJobItemRow.job_id == job.id,
+            BulkJobItemRow.verification_status == VERIFY_MISMATCH,
+        )
+        .scalar()
+        or 0
+    )
+    review = (
+        db.query(func.count(BulkJobItemRow.id))
+        .filter(
+            BulkJobItemRow.job_id == job.id,
+            BulkJobItemRow.verification_status == VERIFY_REVIEW,
+        )
+        .scalar()
+        or 0
+    )
     total = (
         db.query(func.count(BulkJobItemRow.id)).filter(BulkJobItemRow.job_id == job.id).scalar() or 0
     )
     job.success_count = int(success)
     job.failed_count = int(failed)
     job.retrying_count = int(retrying)
+    job.verified_count = int(verified)
+    job.mismatch_count = int(mismatched)
+    job.review_count = int(review)
     job.processed_count = int(success) + int(failed)
     job.total_urls = int(total)
+    job.phase = derive_phase(job)
     job.updated_at = datetime.now(timezone.utc)
     return job
 
@@ -131,6 +197,8 @@ def create_job_with_items(
             input_columns=input_columns,
             total_urls=len(url_rows),
             status="pending",
+            phase=PHASE_UPLOADING,
+            excel_finalized=False,
         )
         db.add(job)
         try:
@@ -144,6 +212,8 @@ def create_job_with_items(
                 input_columns=input_columns,
                 total_urls=len(url_rows),
                 status="pending",
+                phase=PHASE_UPLOADING,
+                excel_finalized=False,
             )
             db.add(job)
             db.flush()
@@ -272,20 +342,29 @@ def copy_canonical_results_to_duplicates(db: Session, job_id: str) -> int:
         item.connections = canon.connections
         item.extraction_response = canon.extraction_response
         item.last_error = canon.last_error
-        item.attempt_count = 0
+        item.attempt_count = int(canon.attempt_count or 0)
         item.completed_at = now
+        apply_verification(
+            item,
+            match_threshold=int(getattr(get_settings(), "verify_match_threshold", 100)),
+            review_threshold=int(getattr(get_settings(), "verify_review_threshold", 75)),
+        )
         copied += 1
     return copied
 
 
-def claim_batch(db: Session, job_id: str, batch_size: int) -> list[BulkJobItemRow]:
-    """Claim up to batch_size extractable URLs. Never claims SUCCESS or duplicates."""
+def claim_batch(
+    db: Session, job_id: str, batch_size: int, *, max_attempts: int | None = None
+) -> list[BulkJobItemRow]:
+    """Claim up to batch_size extractable URLs. Never claims SUCCESS, duplicates, or spent attempts."""
     now = datetime.now(timezone.utc)
+    cap = max(int(max_attempts if max_attempts is not None else get_settings().apify_max_retries), 1)
     q = (
         db.query(BulkJobItemRow)
         .filter(
             BulkJobItemRow.job_id == job_id,
             BulkJobItemRow.dedupe_of_id.is_(None),
+            BulkJobItemRow.attempt_count < cap,
             or_(
                 BulkJobItemRow.status.in_(CLAIMABLE_ITEM_STATUSES),
                 and_(
@@ -347,6 +426,67 @@ def add_attempt(
     )
     db.add(row)
     return row
+
+
+def count_processing_items(db: Session, job_id: str) -> int:
+    return (
+        db.query(func.count(BulkJobItemRow.id))
+        .filter(BulkJobItemRow.job_id == job_id, BulkJobItemRow.status == ITEM_PROCESSING)
+        .scalar()
+        or 0
+    )
+
+
+def list_recent_comparison_items(job_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(BulkJobItemRow)
+            .filter(
+                BulkJobItemRow.job_id == job_id,
+                BulkJobItemRow.status == ITEM_SUCCESS,
+            )
+            .order_by(BulkJobItemRow.completed_at.desc(), BulkJobItemRow.id.desc())
+            .limit(max(int(limit), 1))
+            .all()
+        )
+        return [item_to_result_dict(row) for row in rows]
+    finally:
+        db.close()
+
+
+def item_to_result_dict(item: BulkJobItemRow) -> dict[str, Any]:
+    from app.linkedin.verification import original_fields
+
+    originals = original_fields(item.source_row_json if isinstance(item.source_row_json, dict) else {})
+    return {
+        "item_id": item.id,
+        "source_row_number": item.source_row_number,
+        "url": item.normalized_url or item.profile_url,
+        "extraction_status": item.status,
+        "attempt_count": item.attempt_count or 0,
+        "error": item.last_error,
+        "uploaded": {
+            "name": originals.get("name"),
+            "designation": originals.get("designation"),
+            "company": originals.get("company"),
+            "location": originals.get("location"),
+        },
+        "extracted": {
+            "name": item.name,
+            "designation": item.designation,
+            "company": item.company,
+            "location": item.location,
+            "about": item.about,
+        },
+        "name_match": item.name_match,
+        "designation_match": item.designation_match,
+        "company_match": item.company_match,
+        "location_match": item.location_match,
+        "verification_status": item.verification_status,
+        "verification_score": item.verification_score or 0,
+        "verification_reason": item.verification_reason,
+    }
 
 
 class BulkJobStore:

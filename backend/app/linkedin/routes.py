@@ -14,7 +14,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Qu
 from fastapi.responses import FileResponse
 
 from app.linkedin.bulk_excel_service import BulkExcelError, BulkExcelService
-from app.linkedin.bulk_jobs import BulkExtractJob, bulk_job_store, create_job_with_items
+from app.linkedin.bulk_jobs import (
+    BulkExtractJob,
+    bulk_job_store,
+    create_job_with_items,
+    list_recent_comparison_items,
+)
 from app.linkedin.bulk_service import BulkExtractService
 from app.linkedin.excel_service import LinkedInExcelService
 from app.linkedin.hybrid import HybridLinkedInProfileExtractor
@@ -23,6 +28,7 @@ from app.linkedin.jobs import job_store
 from app.linkedin.rate_limit import bulk_extract_limiter, profile_extract_limiter
 from app.linkedin.schemas import (
     BulkJobCreateResponse,
+    BulkJobResultsResponse,
     BulkJobStatusResponse,
     JobCreateResponse,
     JobStatusResponse,
@@ -52,15 +58,25 @@ EngineParam = Literal["auto", "playwright", "apify"]
 def _bulk_job_status_response(job: BulkExtractJob) -> BulkJobStatusResponse:
         processed = job.completed + job.failed
         percent = int(round((processed / job.total) * 100)) if job.total else 0
+        download_ready = bool(
+            job.status in {"done", "failed"}
+            and job.excel_finalized
+            and job.excel_file
+            and processed > 0
+        )
         return BulkJobStatusResponse(
             job_id=job.job_id,
             status=job.status,
+            phase=job.phase,
             total=job.total,
             completed=job.completed,
             failed=job.failed,
             retrying=job.retrying,
             processed=processed,
             success=job.completed,
+            verified=job.verified,
+            mismatched=job.mismatched,
+            review=job.review,
             progress_percent=percent,
             total_profiles=job.total,
             processed_profiles=processed,
@@ -71,7 +87,7 @@ def _bulk_job_status_response(job: BulkExtractJob) -> BulkJobStatusResponse:
             started_at=job.started_at,
             completed_at=job.completed_at,
             excel_file=job.excel_file,
-            download_ready=bool(job.excel_file and processed > 0),
+            download_ready=download_ready,
             error=job.error,
         )
 
@@ -310,6 +326,23 @@ def get_bulk_job_status(
     return _bulk_job_status_response(job)
 
 
+
+@router.get("/bulk-jobs/{job_id}/results", response_model=BulkJobResultsResponse)
+def get_bulk_job_results(
+    job_id: str,
+    limit: int = Query(25, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+):
+    job = bulk_job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    user_id = getattr(current_user, "id", None)
+    if job.user_id is not None and user_id is not None and job.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    items = list_recent_comparison_items(job_id, limit=limit)
+    return BulkJobResultsResponse(job_id=job_id, items=items)
+
+
 @router.get("/bulk-jobs/{job_id}/download")
 def download_bulk_job_excel(
     job_id: str,
@@ -324,10 +357,10 @@ def download_bulk_job_excel(
     if job.user_id is not None and user_id is not None and job.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    if not job.excel_file or (job.completed + job.failed) <= 0:
+    if not job.excel_finalized or not job.excel_file or (job.completed + job.failed) <= 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No extracted data available yet",
+            detail="Result Excel is not ready yet",
         )
 
     filename = job.excel_file.split("/")[-1]

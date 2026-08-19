@@ -112,6 +112,8 @@ def is_retryable_error(message: str | None, *, non_retryable_csv: str = "") -> b
         return False
     if "invalid url" in text or "must be a linkedin" in text or "malformed" in text:
         return False
+    if "not configured" in text or "apify_token" in text:
+        return False
     if any(m in text for m in _RETRYABLE_MARKERS):
         return True
     return True

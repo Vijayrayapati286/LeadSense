@@ -170,6 +170,8 @@ export const linkedinProfileService = {
       responseType: 'blob',
       timeout: 120_000,
     }),
+  getBulkJobResults: (jobId, limit = 25) =>
+    api.get(`/linkedin/bulk-jobs/${jobId}/results`, { params: { limit } }).then((r) => r.data),
 };
 
 /** Apify-only LeadSense Profile Extractor (jobs + cache + Excel). */
