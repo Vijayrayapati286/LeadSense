@@ -10,15 +10,20 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 
+from app.linkedin.bulk_excel_service import BulkExcelError, BulkExcelService
+from app.linkedin.bulk_jobs import BulkExtractJob, bulk_job_store, create_job_with_items
+from app.linkedin.bulk_service import BulkExtractService
 from app.linkedin.excel_service import LinkedInExcelService
 from app.linkedin.hybrid import HybridLinkedInProfileExtractor
 from app.linkedin.apify_extractor import LinkedInApifyProfileExtractor
 from app.linkedin.jobs import job_store
-from app.linkedin.rate_limit import profile_extract_limiter
+from app.linkedin.rate_limit import bulk_extract_limiter, profile_extract_limiter
 from app.linkedin.schemas import (
+    BulkJobCreateResponse,
+    BulkJobStatusResponse,
     JobCreateResponse,
     JobStatusResponse,
     LinkedInExtractData,
@@ -38,8 +43,37 @@ router = APIRouter(prefix="/linkedin", tags=["LinkedIn Profile Extractor"])
 extractor = HybridLinkedInProfileExtractor()
 apify_extractor = LinkedInApifyProfileExtractor()
 excel_service = LinkedInExcelService()
+bulk_excel_service = BulkExcelService()
+bulk_extract_service = BulkExtractService()
 
 EngineParam = Literal["auto", "playwright", "apify"]
+
+
+def _bulk_job_status_response(job: BulkExtractJob) -> BulkJobStatusResponse:
+        processed = job.completed + job.failed
+        percent = int(round((processed / job.total) * 100)) if job.total else 0
+        return BulkJobStatusResponse(
+            job_id=job.job_id,
+            status=job.status,
+            total=job.total,
+            completed=job.completed,
+            failed=job.failed,
+            retrying=job.retrying,
+            processed=processed,
+            success=job.completed,
+            progress_percent=percent,
+            total_profiles=job.total,
+            processed_profiles=processed,
+            successful_profiles=job.completed,
+            failed_profiles=job.failed,
+            total_batches=job.total_batches,
+            completed_batches=job.completed_batches,
+            started_at=job.started_at,
+            completed_at=job.completed_at,
+            excel_file=job.excel_file,
+            download_ready=bool(job.excel_file and processed > 0),
+            error=job.error,
+        )
 
 
 @router.post("/extract", response_model=LinkedInExtractResponse)
@@ -204,6 +238,129 @@ def download_excel(
 
     logger.info(
         "LinkedIn Excel download user_id=%s file=%s",
+        getattr(current_user, "id", None),
+        filename,
+    )
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
+
+
+def _background_bulk_extract(job_id: str, file_content: bytes | None = None, filename: str | None = None) -> None:
+    bulk_extract_service.process_job(job_id, file_content=file_content, filename=filename)
+
+
+@router.post("/bulk-extract", response_model=BulkJobCreateResponse)
+async def bulk_extract(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload Excel/CSV with LinkedIn URLs; extract profiles in background → filled Excel."""
+    user_id = getattr(current_user, "id", None)
+    rate_key = f"bulk:user:{user_id or 'anon'}"
+    allowed, rate_msg = bulk_extract_limiter.check(rate_key)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=rate_msg)
+
+    filename = file.filename or ""
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+
+    try:
+        df = bulk_excel_service.read_upload(content, filename)
+        url_rows = bulk_excel_service.extract_url_rows(df)
+        input_columns = bulk_excel_service.input_columns(df)
+    except BulkExcelError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    job = create_job_with_items(
+        user_id=user_id,
+        original_file_name=filename,
+        input_columns=input_columns,
+        url_rows=url_rows,
+    )
+    background_tasks.add_task(_background_bulk_extract, job.id)
+
+    logger.info(
+        "Bulk LinkedIn extract queued job_id=%s user_id=%s urls=%s",
+        job.id,
+        user_id,
+        len(url_rows),
+    )
+    return BulkJobCreateResponse(job_id=job.id, total=len(url_rows))
+
+
+@router.get("/bulk-jobs/{job_id}", response_model=BulkJobStatusResponse)
+def get_bulk_job_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    job = bulk_job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    user_id = getattr(current_user, "id", None)
+    if job.user_id is not None and user_id is not None and job.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    return _bulk_job_status_response(job)
+
+
+@router.get("/bulk-jobs/{job_id}/download")
+def download_bulk_job_excel(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Download partial or final Excel for a bulk job."""
+    job = bulk_job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    user_id = getattr(current_user, "id", None)
+    if job.user_id is not None and user_id is not None and job.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    if not job.excel_file or (job.completed + job.failed) <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No extracted data available yet",
+        )
+
+    filename = job.excel_file.split("/")[-1]
+    path: Path | None = bulk_excel_service.resolve_safe_path(filename)
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+
+    logger.info(
+        "Bulk job Excel download user_id=%s job_id=%s file=%s status=%s",
+        user_id,
+        job_id,
+        filename,
+        job.status,
+    )
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
+
+
+@router.get("/bulk-download/{filename}")
+def download_bulk_excel(
+    filename: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Download a bulk-enriched profile Excel workbook."""
+    path: Path | None = bulk_excel_service.resolve_safe_path(filename)
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+
+    logger.info(
+        "Bulk LinkedIn Excel download user_id=%s file=%s",
         getattr(current_user, "id", None),
         filename,
     )

@@ -10,12 +10,30 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import get_settings
 from app.linkedin.extractor import ProfileResult
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RichBatchOutcome:
+    """Result of one Apify actor run for a URL batch."""
+
+    results_by_url: dict[str, dict[str, Any]] = field(default_factory=dict)
+    actor_run_id: str | None = None
+    batch_error: str | None = None
+
+    @property
+    def success_count(self) -> int:
+        return sum(1 for r in self.results_by_url.values() if r.get("status") == "ok")
+
+    @property
+    def failure_count(self) -> int:
+        return sum(1 for r in self.results_by_url.values() if r.get("status") != "ok")
 
 
 class LinkedInApifyProfileExtractor:
@@ -140,15 +158,9 @@ class LinkedInApifyProfileExtractor:
             "profile_url": str(item.get("inputUrl") or "").strip(),
         }
 
-        if not any(
-            [
-                data["name"],
-                data["headline"],
-                data["company"],
-                data["job_title"],
-                data["summary"],
-            ]
-        ):
+        from app.linkedin.validator import is_valid_extraction
+
+        if not is_valid_extraction({"success": True, "status": "ok", "data": data}):
             return {
                 "success": False,
                 "data": None,
@@ -156,6 +168,163 @@ class LinkedInApifyProfileExtractor:
             }
 
         return {"success": True, "data": data, "message": None}
+
+    def extract_rich_batch(
+        self,
+        profile_urls: list[str],
+        *,
+        chunk_size: int = 15,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Extract multiple profiles. Returns map normalized_url -> {status, data?, error?}.
+        Uses batched Apify calls for speed; retries missing URLs one-by-one.
+        """
+        if not profile_urls:
+            return {}
+
+        results: dict[str, dict[str, Any]] = {}
+        pending = list(profile_urls)
+
+        for start in range(0, len(pending), chunk_size):
+            chunk = pending[start : start + chunk_size]
+            outcome = self.run_rich_batch(chunk)
+            results.update(outcome.results_by_url)
+
+        # Retry any URL the batch did not return.
+        missing = [url for url in profile_urls if results.get(url, {}).get("status") != "ok"]
+        for url in missing:
+            if results.get(url, {}).get("status") == "ok":
+                continue
+            single = self.extract_rich(url)
+            if single.get("success") and single.get("data"):
+                data = single["data"]
+                profile_url = str(data.get("profile_url") or url).strip() or url
+                results[url] = {"status": "ok", "data": data, "error": None}
+                if profile_url != url:
+                    results[profile_url] = results[url]
+            else:
+                results[url] = {
+                    "status": "failed",
+                    "data": None,
+                    "error": single.get("message") or "No profile data returned",
+                }
+
+        return results
+
+    def run_rich_batch(self, profile_urls: list[str]) -> RichBatchOutcome:
+        """Run existing Apify actor for one batch of URLs (blocking)."""
+        return self._extract_rich_chunk(profile_urls)
+
+    def _extract_rich_chunk(self, profile_urls: list[str]) -> RichBatchOutcome:
+        settings = get_settings()
+        token = (settings.apify_token or "").strip()
+        actor_id = (
+            (settings.apify_profile_actor_id or "").strip()
+            or (settings.apify_actor_id or "").strip()
+        )
+
+        def fail_all(msg: str) -> RichBatchOutcome:
+            return RichBatchOutcome(
+                results_by_url={
+                    url: {"status": "failed", "data": None, "error": msg} for url in profile_urls
+                },
+                batch_error=msg,
+            )
+
+        if not token:
+            return fail_all("APIFY_TOKEN is not configured")
+        if not actor_id:
+            return fail_all("APIFY_PROFILE_ACTOR_ID (or APIFY_ACTOR_ID) is not configured")
+
+        try:
+            from apify_client import ApifyClient
+        except ImportError as exc:
+            return fail_all(f"apify-client import failed: {exc}")
+
+        run_input = {"urls": [{"url": url} for url in profile_urls]}
+        logger.info(
+            "Starting Apify rich batch actor %s for %s urls",
+            actor_id,
+            len(profile_urls),
+        )
+        client = ApifyClient(token)
+        actor_run_id: str | None = None
+        try:
+            run = client.actor(actor_id).call(run_input=run_input)
+        except Exception as exc:
+            logger.exception("Apify rich batch actor call failed")
+            return fail_all(f"Apify profile extraction failed: {exc}")
+
+        if not run:
+            return fail_all("Apify returned an empty run response")
+
+        actor_run_id = str(run.get("id") or "") or None
+
+        status = (run.get("status") or "").upper()
+        if status and status not in {"SUCCEEDED", "SUCCEEDED_WITH_WARNINGS"}:
+            msg = f"Apify run finished with status: {status or 'unknown'}"
+            return RichBatchOutcome(
+                results_by_url=fail_all(msg).results_by_url,
+                actor_run_id=actor_run_id,
+                batch_error=msg,
+            )
+
+        dataset_id = run.get("defaultDatasetId")
+        if not dataset_id:
+            msg = "Apify run has no dataset id"
+            return RichBatchOutcome(
+                results_by_url=fail_all(msg).results_by_url,
+                actor_run_id=actor_run_id,
+                batch_error=msg,
+            )
+
+        try:
+            items = list(client.dataset(dataset_id).iterate_items())
+        except Exception as exc:
+            logger.exception("Apify batch dataset read failed")
+            msg = f"Failed to read Apify dataset: {exc}"
+            return RichBatchOutcome(
+                results_by_url=fail_all(msg).results_by_url,
+                actor_run_id=actor_run_id,
+                batch_error=msg,
+            )
+
+        logger.info("Apify rich batch returned %s items for %s urls", len(items), len(profile_urls))
+
+        results: dict[str, dict[str, Any]] = {}
+        url_set = set(profile_urls)
+
+        for raw_item in items:
+            if not isinstance(raw_item, dict):
+                continue
+            data = self._map_rich_item(raw_item)
+            data.pop("image", None)
+            profile_url = str(data.get("profile_url") or "").strip()
+            if not profile_url:
+                continue
+            from app.linkedin.validator import is_valid_extraction
+
+            if not is_valid_extraction({"success": True, "status": "ok", "data": data}):
+                continue
+            matched = profile_url if profile_url in url_set else None
+            if not matched:
+                from app.linkedin.validator import normalize_profile_url
+
+                normalized = normalize_profile_url(profile_url)
+                if normalized in url_set:
+                    matched = normalized
+            if matched:
+                results[matched] = {"status": "ok", "data": data, "error": None}
+
+        for url in profile_urls:
+            if url not in results:
+                results[url] = {
+                    "status": "failed",
+                    "data": None,
+                    "error": "No data returned for this URL in batch",
+                }
+
+        return RichBatchOutcome(results_by_url=results, actor_run_id=actor_run_id)
 
     def extract(self, profile_url: str) -> ProfileResult:
         settings = get_settings()

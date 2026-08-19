@@ -44,6 +44,12 @@ async def lifespan(app: FastAPI):
     logger.info("Starting %s", settings.app_name)
     init_db()
     logger.info("Database initialized with seed data")
+    try:
+        from app.linkedin.bulk_service import resume_incomplete_bulk_jobs
+
+        resume_incomplete_bulk_jobs()
+    except Exception:
+        logger.exception("Failed to resume incomplete LinkedIn bulk jobs")
     start_scheduler()
     yield
     stop_scheduler()

@@ -151,6 +151,25 @@ export const linkedinProfileService = {
     api.get(`/linkedin/download/${encodeURIComponent(filename)}`, {
       responseType: 'blob',
     }),
+  bulkExtract: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/linkedin/bulk-extract', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120_000,
+    }).then((r) => r.data);
+  },
+  getBulkJob: (jobId) => api.get(`/linkedin/bulk-jobs/${jobId}`).then((r) => r.data),
+  downloadBulkExcel: (filename) =>
+    api.get(`/linkedin/bulk-download/${encodeURIComponent(filename)}`, {
+      responseType: 'blob',
+      timeout: 120_000,
+    }),
+  downloadBulkJob: (jobId) =>
+    api.get(`/linkedin/bulk-jobs/${jobId}/download`, {
+      responseType: 'blob',
+      timeout: 120_000,
+    }),
 };
 
 /** Apify-only LeadSense Profile Extractor (jobs + cache + Excel). */

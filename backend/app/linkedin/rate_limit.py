@@ -37,3 +37,6 @@ class RateLimiter:
 
 # Module-level limiter shared by routes (10 extracts / user / hour).
 profile_extract_limiter = RateLimiter(max_calls=10, window_seconds=3600)
+
+# Bulk Excel uploads: 5 jobs / user / hour.
+bulk_extract_limiter = RateLimiter(max_calls=5, window_seconds=3600)

@@ -11,6 +11,8 @@ import pytest
 _TEST_DB = Path(__file__).resolve().parent / "bulk_email_e2e_test.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB.as_posix()}"
 os.environ["USE_SQLITE_FALLBACK"] = "true"
+os.environ["SKIP_BULK_RESUME"] = "1"
+os.environ.setdefault("BULK_RETRY_BASE_DELAY_SECONDS", "0")
 os.environ.setdefault("USE_MOCK_SES", "true")
 os.environ.setdefault("USE_MOCK_GROQ", "true")
 

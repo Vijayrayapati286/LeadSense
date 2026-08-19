@@ -74,6 +74,21 @@ class Settings(BaseSettings):
     # When set, preferred over building a single li_at cookie for Apify.
     linkedin_cookies_json: str = ""
 
+    # Bulk LinkedIn extract: concurrent Apify batch processing
+    max_concurrent_apify_runs: int = Field(10, validation_alias="MAX_CONCURRENT_APIFY_RUNS")
+    apify_batch_size: int = Field(10, validation_alias="APIFY_BATCH_SIZE")
+    # Max extraction attempts per URL (attempt 1 + retries). Success stops immediately.
+    apify_max_retries: int = Field(5, validation_alias="APIFY_MAX_RETRIES")
+    max_bulk_urls: int = Field(250, validation_alias="MAX_BULK_URLS")
+    bulk_retry_base_delay_seconds: float = Field(5.0, validation_alias="BULK_RETRY_BASE_DELAY_SECONDS")
+    bulk_retry_backoff_multiplier: float = Field(2.0, validation_alias="BULK_RETRY_BACKOFF_MULTIPLIER")
+    bulk_stale_processing_seconds: int = Field(900, validation_alias="BULK_STALE_PROCESSING_SECONDS")
+    # Comma-separated substrings; matching errors skip further retries.
+    bulk_non_retryable_errors: str = Field(
+        "invalid url,malformed,permanently unavailable,profile not found,not a linkedin",
+        validation_alias="BULK_NON_RETRYABLE_ERRORS",
+    )
+
     @property
     def azure_authority(self) -> str:
         return f"https://login.microsoftonline.com/{self.azure_tenant_id}"
