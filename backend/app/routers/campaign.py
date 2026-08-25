@@ -13,10 +13,13 @@ from app.schemas.schemas import (
     CampaignRecipientResponse,
     CampaignCreate,
     CampaignResponse,
-    CampaignSequenceStageCreate,
-    CampaignSequenceStageResponse,
-    CampaignSequenceStageUpdate,
     CampaignUpdate,
+    EngagementStudioListsRequest,
+    EngagementStudioListsResponse,
+    EngagementStudioOverviewResponse,
+    EngagementStudioStageCreate,
+    EngagementStudioStageResponse,
+    EngagementStudioStageUpdate,
     ListScheduleRequest,
     ListScheduleResponse,
     MessageResponse,
@@ -158,55 +161,118 @@ def save_campaign_template(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.get("/campaign/{campaign_id}/sequence", response_model=list[CampaignSequenceStageResponse])
-def list_sequence_stages(
+def _stage_to_response(stage) -> EngagementStudioStageResponse:
+    response = EngagementStudioStageResponse.model_validate(stage)
+    if stage.mailer_id and stage.mailer:
+        response.mailer_name = stage.mailer.name
+    return response
+
+
+@router.get("/campaign/{campaign_id}/engagement-studio/stages", response_model=list[EngagementStudioStageResponse])
+def list_engagement_studio_stages(
     campaign_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stages = campaign_service.list_sequence_stages(db, campaign_id)
-    return [CampaignSequenceStageResponse.model_validate(s) for s in stages]
+    stages = campaign_service.list_engagement_studio_stages(db, campaign_id)
+    return [_stage_to_response(s) for s in stages]
 
 
-@router.post("/campaign/{campaign_id}/sequence", response_model=CampaignSequenceStageResponse, status_code=201)
-def create_sequence_stage(
+@router.post(
+    "/campaign/{campaign_id}/engagement-studio/stages",
+    response_model=EngagementStudioStageResponse,
+    status_code=201,
+)
+def create_engagement_studio_stage(
     campaign_id: int,
-    data: CampaignSequenceStageCreate,
+    data: EngagementStudioStageCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     try:
-        stage = campaign_service.create_sequence_stage(db, campaign_id, data)
-        return CampaignSequenceStageResponse.model_validate(stage)
+        stage = campaign_service.create_engagement_studio_stage(db, campaign_id, data)
+        return _stage_to_response(stage)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.put("/campaign/sequence/{stage_id}", response_model=CampaignSequenceStageResponse)
-def update_sequence_stage(
+@router.put("/campaign/engagement-studio/stages/{stage_id}", response_model=EngagementStudioStageResponse)
+def update_engagement_studio_stage(
     stage_id: int,
-    data: CampaignSequenceStageUpdate,
+    data: EngagementStudioStageUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     try:
-        stage = campaign_service.update_sequence_stage(db, stage_id, data.model_dump(exclude_unset=True))
-        return CampaignSequenceStageResponse.model_validate(stage)
+        stage = campaign_service.update_engagement_studio_stage(db, stage_id, data.model_dump(exclude_unset=True))
+        return _stage_to_response(stage)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.delete("/campaign/sequence/{stage_id}", response_model=MessageResponse)
-def delete_sequence_stage(
+@router.delete("/campaign/engagement-studio/stages/{stage_id}", response_model=MessageResponse)
+def delete_engagement_studio_stage(
     stage_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     try:
-        campaign_service.delete_sequence_stage(db, stage_id)
-        return MessageResponse(message="Sequence stage deleted")
+        campaign_service.delete_engagement_studio_stage(db, stage_id)
+        return MessageResponse(message="Engagement Studio stage deleted")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/campaign/{campaign_id}/engagement-studio/lists", response_model=EngagementStudioListsResponse)
+def get_engagement_studio_lists(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return EngagementStudioListsResponse(group_ids=campaign_service.get_engagement_studio_lists(db, campaign_id))
+
+
+@router.put("/campaign/{campaign_id}/engagement-studio/lists", response_model=EngagementStudioListsResponse)
+def set_engagement_studio_lists(
+    campaign_id: int,
+    data: EngagementStudioListsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        group_ids = campaign_service.set_engagement_studio_lists(db, campaign_id, data.group_ids)
+        return EngagementStudioListsResponse(group_ids=group_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/campaign/{campaign_id}/engagement-studio/overview", response_model=EngagementStudioOverviewResponse)
+def get_engagement_studio_overview(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    overview = campaign_service.get_engagement_studio_overview(db, campaign_id)
+    return EngagementStudioOverviewResponse(
+        total=overview["total"],
+        responded=overview["responded"],
+        non_responsive=overview["non_responsive"],
+        non_responsive_recipients=[
+            CampaignListMemberResponse(
+                id=cr.recipient.id,
+                name=cr.recipient.name,
+                email=cr.recipient.email,
+                company=cr.recipient.company,
+                designation=cr.recipient.designation,
+                industry=cr.recipient.industry,
+                is_suppressed=cr.recipient.is_suppressed,
+                suppression_reason=cr.recipient.suppression_reason,
+                status=cr.status,
+                template_id=cr.template_id,
+            )
+            for cr in overview["non_responsive_recipients"]
+        ],
+    )
 
 
 @router.get("/campaign/{campaign_id}/recipients", response_model=CampaignRecipientListResponse)

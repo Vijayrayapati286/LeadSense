@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     azure_tenant_id: str = "common"
     azure_redirect_uri: str = "http://localhost:8000/api/auth/callback"
 
+    # Reply detection (graph_reply_service.py) — polls each rep's mailbox via
+    # Microsoft Graph app-only Mail.Read. Off by default: the same Azure AD
+    # app used for SSO needs that Application permission additionally granted
+    # (with admin consent) before this can do anything, so it ships inert
+    # until both the permission exists and this flag is turned on.
+    enable_reply_polling: bool = False
+    graph_reply_poll_interval_seconds: int = 300
+
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"

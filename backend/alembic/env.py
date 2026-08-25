@@ -9,9 +9,11 @@ from app.database.connection import Base, DATABASE_URL
 from app.models import (  # noqa: F401
     Campaign,
     CampaignRecipient,
-    CampaignSequenceStage,
     CustomField,
     EmailLog,
+    EngagementStudioList,
+    EngagementStudioStage,
+    MailboxSyncState,
     Recipient,
     RecipientCustomValue,
     RecipientGroup,

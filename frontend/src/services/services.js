@@ -35,11 +35,14 @@ export const campaignService = {
   scheduleList: (id, groupId, scheduledAt) => api.post(`/campaign/${id}/lists/${groupId}/schedule`, { scheduled_at: scheduledAt }),
 };
 
-export const sequenceService = {
-  getAll: (campaignId) => api.get(`/campaign/${campaignId}/sequence`),
-  create: (campaignId, data) => api.post(`/campaign/${campaignId}/sequence`, data),
-  update: (stageId, data) => api.put(`/campaign/sequence/${stageId}`, data),
-  delete: (stageId) => api.delete(`/campaign/sequence/${stageId}`),
+export const engagementStudioService = {
+  getStages: (campaignId) => api.get(`/campaign/${campaignId}/engagement-studio/stages`),
+  createStage: (campaignId, data) => api.post(`/campaign/${campaignId}/engagement-studio/stages`, data),
+  updateStage: (stageId, data) => api.put(`/campaign/engagement-studio/stages/${stageId}`, data),
+  deleteStage: (stageId) => api.delete(`/campaign/engagement-studio/stages/${stageId}`),
+  getLists: (campaignId) => api.get(`/campaign/${campaignId}/engagement-studio/lists`),
+  setLists: (campaignId, groupIds) => api.put(`/campaign/${campaignId}/engagement-studio/lists`, { group_ids: groupIds }),
+  getOverview: (campaignId) => api.get(`/campaign/${campaignId}/engagement-studio/overview`),
 };
 
 export const recipientService = {

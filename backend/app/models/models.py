@@ -55,9 +55,12 @@ class Campaign(Base):
     campaign_recipient_lists: Mapped[list["CampaignRecipientList"]] = relationship(
         "CampaignRecipientList", back_populates="campaign", cascade="all, delete-orphan"
     )
-    sequence_stages: Mapped[list["CampaignSequenceStage"]] = relationship(
-        "CampaignSequenceStage", back_populates="campaign", cascade="all, delete-orphan",
-        order_by="CampaignSequenceStage.stage_order",
+    engagement_studio_stages: Mapped[list["EngagementStudioStage"]] = relationship(
+        "EngagementStudioStage", back_populates="campaign", cascade="all, delete-orphan",
+        order_by="EngagementStudioStage.stage_order",
+    )
+    engagement_studio_lists: Mapped[list["EngagementStudioList"]] = relationship(
+        "EngagementStudioList", back_populates="campaign", cascade="all, delete-orphan"
     )
 
 
@@ -338,9 +341,13 @@ class CampaignRecipientList(Base):
     group: Mapped["RecipientGroup"] = relationship("RecipientGroup")
 
 
-class CampaignSequenceStage(Base):
-    """A follow-up stage in a campaign's email sequence. Stage 0 is always the
-    campaign's Template row; rows here represent stage_order >= 1 follow-ups."""
+class EngagementStudioStage(Base):
+    """A follow-up stage in a campaign's Engagement Studio automation. Stage 0
+    is always the campaign's Template row; rows here represent stage_order >= 1
+    follow-ups. Content comes from either a library Mailer (mailer_id — a live
+    reference, so edits to the Mailer are picked up on next send) or the
+    stage's own inline subject/body/closing/cta; exactly one source is
+    required (enforced in the schema/service layer, not the DB)."""
 
     __tablename__ = "campaign_sequence_stages"
     __table_args__ = (UniqueConstraint("campaign_id", "stage_order", name="uq_campaign_stage_order"),)
@@ -350,12 +357,40 @@ class CampaignSequenceStage(Base):
     stage_order: Mapped[int] = mapped_column(Integer, nullable=False)
     delay_value: Mapped[int] = mapped_column(Integer, nullable=False)
     delay_unit: Mapped[str] = mapped_column(String(20), default="days")  # minutes, hours, days
-    subject: Mapped[str] = mapped_column(String(500), nullable=False)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
+    mailer_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("mailers.id"), nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
     closing: Mapped[str | None] = mapped_column(Text, nullable=True)
     cta: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Condition: skip sending this stage to a prospect auto-tagged "Hot" (a
+    # reply — see event_service.handle_reply and scheduler_service's
+    # per-stage classification), on top of the always-applied
+    # TERMINAL_STATUSES check (replied/bounced/suppressed). Prospects the
+    # scheduler auto-tags "Cold" (no reply yet) are NOT skipped — they keep
+    # moving through the sequence.
+    skip_if_tagged: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="sequence_stages")
+    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="engagement_studio_stages")
+    mailer: Mapped["Mailer | None"] = relationship("Mailer")
+
+
+class EngagementStudioList(Base):
+    """Which of a campaign's prospect lists (RecipientGroup, already tagged
+    into the campaign via CampaignRecipientList) are enrolled in that
+    campaign's Engagement Studio automation. No rows = the whole campaign is
+    enrolled (backward-compatible default, matching pre-Engagement-Studio
+    behavior)."""
+
+    __tablename__ = "engagement_studio_lists"
+    __table_args__ = (UniqueConstraint("campaign_id", "group_id", name="uq_engagement_studio_list"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    campaign_id: Mapped[int] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=False)
+    group_id: Mapped[int] = mapped_column(Integer, ForeignKey("recipient_groups.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="engagement_studio_lists")
+    group: Mapped["RecipientGroup"] = relationship("RecipientGroup")
 
 
 class AppSetting(Base):
@@ -384,7 +419,26 @@ class EmailLog(Base):
     # send — copied from CampaignRecipient.sender_user_id at send time, so it
     # stays accurate even if that row's sender later changes for its next stage.
     sender_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    # The RFC 5322 Message-ID we set on the outgoing mail (ses_service.py's
+    # _build_raw_message) — a prospect's mail client echoes this back in the
+    # reply's In-Reply-To/References headers, which is how
+    # graph_reply_service.py matches an inbound reply to this send.
+    message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="email_logs")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="email_logs")
     sender_user: Mapped["User | None"] = relationship("User", foreign_keys=[sender_user_id])
+
+
+class MailboxSyncState(Base):
+    """Poll cursor for one rep's mailbox, used by graph_reply_service.py to
+    avoid re-fetching mail already scanned for replies on the previous poll."""
+
+    __tablename__ = "mailbox_sync_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user: Mapped["User"] = relationship("User")

@@ -21,12 +21,14 @@ import {
   FiLayers,
   FiCalendar,
   FiRefreshCw,
+  FiTarget,
+  FiTrendingUp,
 } from 'react-icons/fi';
 import {
   campaignService,
   recipientService,
   recipientGroupService,
-  sequenceService,
+  engagementStudioService,
   templateService,
   mailerService,
   emailService,
@@ -58,10 +60,12 @@ const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'template', label: 'Template' },
   { id: 'candidates', label: 'Prospects' },
-  { id: 'sequence', label: 'Follow-up Sequence' },
+  { id: 'engagement-studio', label: 'Engagement Studio' },
 ];
 
-const EMPTY_STAGE_FORM = { delay_value: 3, delay_unit: 'days', subject: '', body: '', closing: '', cta: '' };
+const EMPTY_STAGE_FORM = {
+  delay_value: 3, delay_unit: 'days', mailer_id: null, subject: '', body: '', closing: '', cta: '', skip_if_tagged: true,
+};
 const EMPTY_TEMPLATE_CONTENT = { subject: '', body: '', closing: '', cta: '' };
 const EMPTY_RECIPIENT_FORM = { name: '', email: '', company: '', designation: '', industry: '' };
 
@@ -124,8 +128,16 @@ export default function CampaignDetailPage() {
   const [stages, setStages] = useState([]);
   const [stageLoading, setStageLoading] = useState(false);
   const [stageForm, setStageForm] = useState(EMPTY_STAGE_FORM);
+  const [stageContentSource, setStageContentSource] = useState('library');
   const [addingStage, setAddingStage] = useState(false);
   const [deletingStageId, setDeletingStageId] = useState(null);
+
+  const [campaignLists, setCampaignLists] = useState([]);
+  const [targetListIds, setTargetListIds] = useState([]);
+  const [savingLists, setSavingLists] = useState(false);
+  const [studioOverview, setStudioOverview] = useState(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [showNonResponsive, setShowNonResponsive] = useState(false);
 
   const loadCampaign = useCallback(async () => {
     try {
@@ -158,29 +170,66 @@ export default function CampaignDetailPage() {
   const loadStages = useCallback(async () => {
     setStageLoading(true);
     try {
-      const { data } = await sequenceService.getAll(id);
+      const { data } = await engagementStudioService.getStages(id);
       setStages(data);
     } catch {
-      toast.error('Failed to load follow-up sequence');
+      toast.error('Failed to load Engagement Studio');
     } finally {
       setStageLoading(false);
     }
   }, [id, toast]);
 
+  const loadStudioLists = useCallback(async () => {
+    try {
+      const [listsRes, targetRes] = await Promise.all([
+        campaignService.getLists(id),
+        engagementStudioService.getLists(id),
+      ]);
+      setCampaignLists(listsRes.data ?? []);
+      setTargetListIds(targetRes.data?.group_ids ?? []);
+    } catch {
+      toast.error('Failed to load target prospect lists');
+    }
+  }, [id, toast]);
+
+  const loadStudioOverview = useCallback(async () => {
+    setOverviewLoading(true);
+    try {
+      const { data } = await engagementStudioService.getOverview(id);
+      setStudioOverview(data);
+    } catch {
+      toast.error('Failed to load engagement overview');
+    } finally {
+      setOverviewLoading(false);
+    }
+  }, [id, toast]);
+
   useEffect(() => {
-    if (activeTab === 'sequence') loadStages();
-  }, [activeTab, loadStages]);
+    if (activeTab === 'engagement-studio') {
+      loadStages();
+      loadStudioLists();
+      loadStudioOverview();
+    }
+  }, [activeTab, loadStages, loadStudioLists, loadStudioOverview]);
 
   const handleAddStage = async () => {
-    if (!stageForm.subject || !stageForm.body) {
+    const usingLibrary = stageContentSource === 'library';
+    if (usingLibrary && !stageForm.mailer_id) {
+      toast.error('Select a template from the library');
+      return;
+    }
+    if (!usingLibrary && (!stageForm.subject || !stageForm.body)) {
       toast.error('Subject and body are required');
       return;
     }
     setAddingStage(true);
     try {
       const nextOrder = stages.length > 0 ? Math.max(...stages.map((s) => s.stage_order)) + 1 : 1;
-      await sequenceService.create(id, { ...stageForm, stage_order: nextOrder });
-      toast.success('Follow-up stage added');
+      const payload = usingLibrary
+        ? { ...stageForm, subject: null, body: null, closing: null, stage_order: nextOrder }
+        : { ...stageForm, mailer_id: null, stage_order: nextOrder };
+      await engagementStudioService.createStage(id, payload);
+      toast.success('Engagement Studio stage added');
       setStageForm(EMPTY_STAGE_FORM);
       loadStages();
     } catch (err) {
@@ -192,11 +241,30 @@ export default function CampaignDetailPage() {
 
   const handleDeleteStage = async () => {
     try {
-      await sequenceService.delete(deletingStageId);
+      await engagementStudioService.deleteStage(deletingStageId);
       toast.success('Stage removed');
       loadStages();
     } catch {
       toast.error('Failed to remove stage');
+    }
+  };
+
+  const toggleTargetList = (groupId) => {
+    setTargetListIds((prev) =>
+      prev.includes(groupId) ? prev.filter((gid) => gid !== groupId) : [...prev, groupId]
+    );
+  };
+
+  const handleSaveTargetLists = async () => {
+    setSavingLists(true);
+    try {
+      await engagementStudioService.setLists(id, targetListIds);
+      toast.success('Target prospect lists saved');
+      loadStudioOverview();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to save target lists');
+    } finally {
+      setSavingLists(false);
     }
   };
 
@@ -1034,89 +1102,235 @@ export default function CampaignDetailPage() {
             </div>
           )}
 
-          {activeTab === 'sequence' && (
-            <div className="card">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <FiClock size={18} /> Follow-up Sequence
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">
-                Stage 0 is the email on the Template tab, sent immediately. Add follow-up stages below —
-                each fires automatically after the configured delay, as long as the prospect hasn't
-                replied, bounced, or been suppressed.
-              </p>
+          {activeTab === 'engagement-studio' && (
+            <div className="space-y-6">
+              <div className="card">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <FiClock size={18} /> Engagement Studio
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Stage 0 is the email on the Template tab, sent immediately. Add stages below — each fires
+                  automatically after the configured delay. A reply auto-tags the prospect "Hot" and stops the
+                  sequence for them (if the stage says so); no reply auto-tags "Cold" and they keep moving
+                  through the remaining stages. Bounced or suppressed prospects always stop.
+                </p>
+              </div>
 
-              {stageLoading ? (
-                <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  {stages.map((s) => (
-                    <div key={s.id} className="rounded-xl border border-gray-200 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">
-                            Stage {s.stage_order} — after {s.delay_value} {s.delay_unit}
-                          </p>
-                          <p className="text-sm text-gray-600 mt-1">{s.subject}</p>
-                          <p className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{s.body}</p>
-                        </div>
-                        <button
-                          onClick={() => setDeletingStageId(s.id)}
-                          className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600"
-                        >
-                          <FiTrash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
+              <div className="card">
+                <h3 className="text-base font-semibold flex items-center gap-2">
+                  <FiTarget size={16} /> Target Prospect Lists
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Choose which of this campaign's prospect lists are enrolled in automated follow-ups.
+                  Select none to enroll every prospect in the campaign.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {campaignLists.map((list) => (
+                    <label
+                      key={list.group_id}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm cursor-pointer ${
+                        targetListIds.includes(list.group_id)
+                          ? 'border-primary-500 bg-primary-50 text-primary-700'
+                          : 'border-gray-200 text-gray-600'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="hidden"
+                        checked={targetListIds.includes(list.group_id)}
+                        onChange={() => toggleTargetList(list.group_id)}
+                      />
+                      {list.name} <span className="text-gray-400">({list.total})</span>
+                    </label>
                   ))}
-                  {stages.length === 0 && (
-                    <p className="text-sm text-gray-400">No follow-up stages yet — this campaign only sends the initial email.</p>
+                  {campaignLists.length === 0 && (
+                    <p className="text-sm text-gray-400">No prospect lists tagged into this campaign yet.</p>
                   )}
                 </div>
-              )}
-
-              <div className="mt-6 pt-4 border-t border-gray-100 space-y-3">
-                <p className="text-sm font-medium text-gray-700">Add a follow-up stage</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-500">Send after</span>
-                  <input
-                    type="number"
-                    min={1}
-                    className="input-field w-20"
-                    value={stageForm.delay_value}
-                    onChange={(e) => setStageForm((p) => ({ ...p, delay_value: Number(e.target.value) }))}
-                  />
-                  <select
-                    className="input-field w-auto"
-                    value={stageForm.delay_unit}
-                    onChange={(e) => setStageForm((p) => ({ ...p, delay_unit: e.target.value }))}
+                {campaignLists.length > 0 && (
+                  <button
+                    onClick={handleSaveTargetLists}
+                    disabled={savingLists}
+                    className="btn-secondary mt-3 flex items-center gap-2"
                   >
-                    <option value="minutes">Minutes</option>
-                    <option value="hours">Hours</option>
-                    <option value="days">Days</option>
-                  </select>
+                    {savingLists ? <LoadingSpinner size="sm" /> : <FiSave size={14} />} Save Target Lists
+                  </button>
+                )}
+              </div>
+
+              <div className="card">
+                <h3 className="text-base font-semibold flex items-center gap-2">
+                  <FiTrendingUp size={16} /> Engagement Overview
+                </h3>
+                {overviewLoading ? (
+                  <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+                ) : studioOverview && (
+                  <>
+                    <div className="mt-3 grid grid-cols-3 gap-3">
+                      <div className="rounded-xl border border-gray-200 p-3 text-center">
+                        <p className="text-2xl font-semibold text-gray-900">{studioOverview.total}</p>
+                        <p className="text-xs text-gray-500 mt-1">Total Engaged</p>
+                      </div>
+                      <div className="rounded-xl border border-gray-200 p-3 text-center">
+                        <p className="text-2xl font-semibold text-green-600">{studioOverview.responded}</p>
+                        <p className="text-xs text-gray-500 mt-1">Responded</p>
+                      </div>
+                      <div className="rounded-xl border border-gray-200 p-3 text-center">
+                        <p className="text-2xl font-semibold text-amber-600">{studioOverview.non_responsive}</p>
+                        <p className="text-xs text-gray-500 mt-1">Non-responsive</p>
+                      </div>
+                    </div>
+                    {studioOverview.non_responsive_recipients.length > 0 && (
+                      <div className="mt-3">
+                        <button
+                          onClick={() => setShowNonResponsive((v) => !v)}
+                          className="text-sm text-primary-600 hover:underline"
+                        >
+                          {showNonResponsive ? 'Hide' : 'View'} non-responsive prospects
+                        </button>
+                        {showNonResponsive && (
+                          <div className="mt-2 max-h-64 overflow-y-auto space-y-1">
+                            {studioOverview.non_responsive_recipients.map((r) => (
+                              <div key={r.id} className="text-sm text-gray-600 flex justify-between border-b border-gray-100 py-1">
+                                <span>{r.name} — {r.email}</span>
+                                <span className="text-gray-400">{r.company}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="card">
+                <h3 className="text-base font-semibold">Stages</h3>
+                {stageLoading ? (
+                  <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+                ) : (
+                  <div className="mt-4 space-y-3">
+                    {stages.map((s) => (
+                      <div key={s.id} className="rounded-xl border border-gray-200 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">
+                              Stage {s.stage_order} — after {s.delay_value} {s.delay_unit}
+                              {s.skip_if_tagged && (
+                                <span className="ml-2 text-xs font-normal text-gray-400">(skips prospects who replied / tagged Hot)</span>
+                              )}
+                            </p>
+                            {s.mailer_name ? (
+                              <p className="text-sm text-gray-600 mt-1">
+                                From template library: <span className="font-medium">{s.mailer_name}</span>
+                              </p>
+                            ) : (
+                              <>
+                                <p className="text-sm text-gray-600 mt-1">{s.subject}</p>
+                                <p className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{s.body}</p>
+                              </>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => setDeletingStageId(s.id)}
+                            className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600"
+                          >
+                            <FiTrash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {stages.length === 0 && (
+                      <p className="text-sm text-gray-400">No stages yet — this campaign only sends the initial email.</p>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-6 pt-4 border-t border-gray-100 space-y-3">
+                  <p className="text-sm font-medium text-gray-700">Add a stage</p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-500">Send after</span>
+                    <input
+                      type="number"
+                      min={1}
+                      className="input-field w-20"
+                      value={stageForm.delay_value}
+                      onChange={(e) => setStageForm((p) => ({ ...p, delay_value: Number(e.target.value) }))}
+                    />
+                    <select
+                      className="input-field w-auto"
+                      value={stageForm.delay_unit}
+                      onChange={(e) => setStageForm((p) => ({ ...p, delay_unit: e.target.value }))}
+                    >
+                      <option value="minutes">Minutes</option>
+                      <option value="hours">Hours</option>
+                      <option value="days">Days</option>
+                    </select>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setStageContentSource('library')}
+                      className={`px-3 py-1.5 rounded-lg text-sm border ${stageContentSource === 'library' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-gray-200 text-gray-600'}`}
+                    >
+                      From Template Library
+                    </button>
+                    <button
+                      onClick={() => setStageContentSource('custom')}
+                      className={`px-3 py-1.5 rounded-lg text-sm border ${stageContentSource === 'custom' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-gray-200 text-gray-600'}`}
+                    >
+                      Custom Content
+                    </button>
+                  </div>
+
+                  {stageContentSource === 'library' ? (
+                    <select
+                      className="input-field"
+                      value={stageForm.mailer_id ?? ''}
+                      onChange={(e) => setStageForm((p) => ({ ...p, mailer_id: e.target.value ? Number(e.target.value) : null }))}
+                    >
+                      <option value="">Select a template…</option>
+                      {mailers.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name} — {m.subject}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <>
+                      <input
+                        className="input-field"
+                        placeholder="Subject"
+                        value={stageForm.subject}
+                        onChange={(e) => setStageForm((p) => ({ ...p, subject: e.target.value }))}
+                      />
+                      <textarea
+                        className="input-field font-mono text-sm"
+                        rows={5}
+                        placeholder="Body — use {{Name}}, {{Company}} etc for personalization"
+                        value={stageForm.body}
+                        onChange={(e) => setStageForm((p) => ({ ...p, body: e.target.value }))}
+                      />
+                      <input
+                        className="input-field"
+                        placeholder="Closing (optional)"
+                        value={stageForm.closing}
+                        onChange={(e) => setStageForm((p) => ({ ...p, closing: e.target.value }))}
+                      />
+                    </>
+                  )}
+
+                  <label className="flex items-center gap-2 text-sm text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={stageForm.skip_if_tagged}
+                      onChange={(e) => setStageForm((p) => ({ ...p, skip_if_tagged: e.target.checked }))}
+                    />
+                    Skip prospects who replied (auto-tagged Hot) — non-repliers (Cold) still get this stage
+                  </label>
+
+                  <button onClick={handleAddStage} disabled={addingStage} className="btn-primary flex items-center gap-2">
+                    {addingStage ? <LoadingSpinner size="sm" /> : <FiPlus size={16} />} Add Stage
+                  </button>
                 </div>
-                <input
-                  className="input-field"
-                  placeholder="Subject"
-                  value={stageForm.subject}
-                  onChange={(e) => setStageForm((p) => ({ ...p, subject: e.target.value }))}
-                />
-                <textarea
-                  className="input-field font-mono text-sm"
-                  rows={5}
-                  placeholder="Body — use {{Name}}, {{Company}} etc for personalization"
-                  value={stageForm.body}
-                  onChange={(e) => setStageForm((p) => ({ ...p, body: e.target.value }))}
-                />
-                <input
-                  className="input-field"
-                  placeholder="Closing (optional)"
-                  value={stageForm.closing}
-                  onChange={(e) => setStageForm((p) => ({ ...p, closing: e.target.value }))}
-                />
-                <button onClick={handleAddStage} disabled={addingStage} className="btn-primary flex items-center gap-2">
-                  {addingStage ? <LoadingSpinner size="sm" /> : <FiPlus size={16} />} Add Stage
-                </button>
               </div>
             </div>
           )}
@@ -1664,8 +1878,8 @@ export default function CampaignDetailPage() {
         isOpen={!!deletingStageId}
         onClose={() => setDeletingStageId(null)}
         onConfirm={handleDeleteStage}
-        title="Remove Follow-up Stage"
-        message="Remove this follow-up stage? Prospects already scheduled for it will no longer receive it."
+        title="Remove Engagement Studio Stage"
+        message="Remove this stage? Prospects already scheduled for it will no longer receive it."
         confirmText="Remove"
       />
 

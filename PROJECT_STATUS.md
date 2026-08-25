@@ -37,10 +37,21 @@ original open-source project this was cloned from.
   (`campaign.use_recipient_timezone`, recipient timezone auto-derived from
   Country/State at Excel-import time). All surfaced in the Prospects tab's
   "Preview & Send" dialog.
+- **Engagement Studio** (formerly "Follow-up Sequence", `EngagementStudioStage`
+  / `EngagementStudioList` models): per-campaign automation of stages 1+
+  (stage 0 is always the Template tab's immediate send). Each stage either
+  references a reusable library template (`Mailer`, via `mailer_id` — a live
+  reference, so edits are picked up on the next send) or has its own inline
+  content, fires after a configurable delay, and can be set to skip prospects
+  who already have a manual response tag (`skip_if_tagged`). Optionally
+  scoped to a subset of the campaign's prospect lists
+  (`EngagementStudioList`; no rows = whole campaign). The Engagement Studio
+  tab also shows a responded vs. non-responsive breakdown for whatever scope
+  is configured.
 - **Background jobs**: APScheduler running in-process inside the FastAPI
   app (`scheduler_service.py`) — polls every 5s for queued sends, every
-  300s for due follow-up stages. **No distributed lock** — see Critical
-  Constraints below.
+  300s for due Engagement Studio stages. **No distributed lock** — see
+  Critical Constraints below.
 
 ## Auth
 
@@ -98,8 +109,8 @@ recorded in this repo.
 
 ## Critical constraints — read before touching scaling or auto-scaling
 
-- **Backend must run as exactly one replica/task, always.** The follow-up
-  and queued-send scheduler is in-process with no distributed lock —
+- **Backend must run as exactly one replica/task, always.** The Engagement
+  Studio and queued-send scheduler is in-process with no distributed lock —
   running more than one backend instance means every due prospect gets
   duplicated sends. Fix requires moving to a real queue (e.g. SQS or
   similar) before this can change.
@@ -135,6 +146,6 @@ recorded in this repo.
 - `backend/alembic/versions/` — schema migrations (run via
   `alembic upgrade head`; not run automatically at container startup)
 - `frontend/src/pages/` — `CampaignDetailPage.jsx` is the largest/most
-  central file (prospects, templates, sending, follow-ups all live here)
+  central file (prospects, templates, sending, Engagement Studio all live here)
 - `frontend/src/utils/mergeFields.js` — the 15 standard merge-field
   definitions, mirrored server-side in `backend/app/utils/helpers.py`

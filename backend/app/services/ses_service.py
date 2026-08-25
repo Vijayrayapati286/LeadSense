@@ -128,8 +128,31 @@ class SESService:
         display_name, address = parseaddr(source)
         msg_root["From"] = formataddr((str(Header(display_name, "utf-8")), address)) if display_name else address
         msg_root["To"] = to_email
+        # Set our own Message-ID (rather than letting SES fill one in) so we
+        # control and persist its exact value — reply-detection (see
+        # graph_reply_service.py) matches an inbound reply's In-Reply-To /
+        # References headers against EmailLog.message_id, which only works
+        # if we know beforehand what value the prospect's reply will echo.
+        domain = address.split("@", 1)[-1] if "@" in address else self.settings.aws_ses_sender_email.rsplit("@", 1)[-1]
+        msg_root["Message-ID"] = f"<{uuid.uuid4().hex}@{domain}>"
         if reply_to:
             msg_root["Reply-To"] = reply_to
+            # Also set Sender to encourage mail clients to route replies to
+            # the rep's real mailbox (some clients prefer Sender when
+            # determining where replies land). This is safe because Reply-To
+            # remains authoritative for replies.
+            try:
+                msg_root["Sender"] = reply_to
+            except Exception:
+                pass
+        # Add a List-Unsubscribe header (mailto) to help mailbox providers
+        # and users identify an unsubscribe path and improve deliverability.
+        if reply_to:
+            try:
+                msg_root["List-Unsubscribe"] = f"<mailto:{reply_to}?subject=unsubscribe>"
+            except Exception:
+                # Best-effort header addition; don't fail the send if it errors
+                pass
 
         msg_alt = MIMEMultipart("alternative")
         msg_root.attach(msg_alt)
@@ -167,10 +190,15 @@ class SESService:
                 Destinations=[delivery_to],
                 RawMessage={"Data": raw_message.as_bytes()},
             )
-            return {"status": "sent", "message_id": response["MessageId"], "error": None}
+            return {
+                "status": "sent",
+                "message_id": response["MessageId"],
+                "rfc_message_id": raw_message["Message-ID"],
+                "error": None,
+            }
         except Exception as exc:
             logger.error("SES send failed for %s: %s", to_email, exc)
-            return {"status": "failed", "message_id": None, "error": str(exc)}
+            return {"status": "failed", "message_id": None, "rfc_message_id": None, "error": str(exc)}
 
     def send_bulk_email(
         self,
@@ -224,6 +252,7 @@ class SESService:
                 "recipient_name": recipient.get("name", ""),
                 "status": status,
                 "message_id": result.get("message_id"),
+                "rfc_message_id": result.get("rfc_message_id"),
                 "error": result.get("error"),
             })
 
@@ -236,6 +265,7 @@ class SESService:
             return {
                 "status": "sent",
                 "message_id": f"mock-{uuid.uuid4().hex[:12]}",
+                "rfc_message_id": f"<{uuid.uuid4().hex}@mock.local>",
                 "error": None,
                 "delivered_to": to_email,
                 "original_recipient": original_recipient or to_email,
@@ -243,6 +273,7 @@ class SESService:
         return {
             "status": "failed",
             "message_id": None,
+            "rfc_message_id": None,
             "error": "Mock failure: simulated SES error",
             "delivered_to": to_email,
             "original_recipient": original_recipient or to_email,

@@ -117,5 +117,14 @@ def handle_complaint(
 
 def handle_reply(db: Session, email: str, campaign_id: int | None = None) -> None:
     """A reply stops automated follow-ups for this recipient in this campaign,
-    but does NOT blacklist the address — it's a good lead, not a bad one."""
+    but does NOT blacklist the address — it's a good lead, not a bad one.
+
+    Also auto-tags the recipient "Hot" — always overriding any earlier tag
+    (manual or automatic), since an actual reply is the strongest engagement
+    signal available. This is what lets Engagement Studio stages
+    automatically exclude responders (see scheduler_service.py's
+    skip_if_tagged handling) without a rep having to tag them by hand."""
     _mark_campaign_recipients(db, email, campaign_id, "replied", "replied_at")
+    for recipient in db.query(Recipient).filter(Recipient.email == email).all():
+        recipient.response_tag = "Hot"
+    db.commit()

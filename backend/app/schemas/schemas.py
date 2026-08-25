@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -522,31 +522,41 @@ class ListScheduleResponse(BaseModel):
     scheduled_at: datetime
 
 
-# ── Campaign Sequence Stages ───────────────────────────────────────────────────
+# ── Engagement Studio ───────────────────────────────────────────────────────────
 
 DelayUnit = Literal["minutes", "hours", "days"]
 
 
-class CampaignSequenceStageCreate(BaseModel):
+class EngagementStudioStageCreate(BaseModel):
     stage_order: int = Field(..., ge=1)
     delay_value: int = Field(..., ge=1)
     delay_unit: DelayUnit = "days"
-    subject: str
-    body: str
-    closing: str | None = None
-    cta: str | None = None
-
-
-class CampaignSequenceStageUpdate(BaseModel):
-    delay_value: int | None = None
-    delay_unit: DelayUnit | None = None
+    mailer_id: int | None = None
     subject: str | None = None
     body: str | None = None
     closing: str | None = None
     cta: str | None = None
+    skip_if_tagged: bool = True
+
+    @model_validator(mode="after")
+    def _one_content_source(self):
+        if self.mailer_id is None and not (self.subject and self.body):
+            raise ValueError("Provide a mailer_id (template library) or both subject and body")
+        return self
 
 
-class CampaignSequenceStageResponse(BaseModel):
+class EngagementStudioStageUpdate(BaseModel):
+    delay_value: int | None = None
+    delay_unit: DelayUnit | None = None
+    mailer_id: int | None = None
+    subject: str | None = None
+    body: str | None = None
+    closing: str | None = None
+    cta: str | None = None
+    skip_if_tagged: bool | None = None
+
+
+class EngagementStudioStageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -554,10 +564,28 @@ class CampaignSequenceStageResponse(BaseModel):
     stage_order: int
     delay_value: int
     delay_unit: str
-    subject: str
-    body: str
+    mailer_id: int | None
+    subject: str | None
+    body: str | None
     closing: str | None
     cta: str | None
+    skip_if_tagged: bool
+    mailer_name: str | None = None
+
+
+class EngagementStudioListsRequest(BaseModel):
+    group_ids: list[int]
+
+
+class EngagementStudioListsResponse(BaseModel):
+    group_ids: list[int]
+
+
+class EngagementStudioOverviewResponse(BaseModel):
+    total: int
+    responded: int
+    non_responsive: int
+    non_responsive_recipients: list[CampaignListMemberResponse]
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────

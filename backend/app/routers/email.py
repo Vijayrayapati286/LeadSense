@@ -134,6 +134,7 @@ def send_emails(
                 status=result["details"][0]["status"],
                 error_message=result["details"][0].get("error"),
                 sender_user_id=current_user.id,
+                message_id=result["details"][0].get("rfc_message_id"),
             ))
             campaign.emails_sent += result["sent"]
             if result["sent"] > 0:

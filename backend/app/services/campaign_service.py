@@ -9,17 +9,24 @@ from app.models import (
     Campaign,
     CampaignRecipient,
     CampaignRecipientList,
-    CampaignSequenceStage,
+    EngagementStudioList,
+    EngagementStudioStage,
+    Mailer,
     Recipient,
     RecipientGroup,
     Template,
 )
-from app.schemas.schemas import CampaignCreate, CampaignSequenceStageCreate, CampaignUpdate
+from app.schemas.schemas import CampaignCreate, CampaignUpdate, EngagementStudioStageCreate
 from app.services.app_settings_service import AppSettingsService
 from app.utils.helpers import sanitize_html, sanitize_manual_body
 
 
 app_settings_service = AppSettingsService()
+
+# Statuses that stop automated follow-ups — kept in sync with
+# scheduler_service.TERMINAL_STATUSES (duplicated here rather than imported to
+# avoid a service-to-service import for one constant).
+_TERMINAL_STATUSES = {"replied", "suppressed", "bounced", "invalid_email"}
 
 
 class CampaignService:
@@ -328,50 +335,122 @@ class CampaignService:
         db.commit()
         return len(rows)
 
-    def list_sequence_stages(self, db: Session, campaign_id: int) -> list[CampaignSequenceStage]:
+    def list_engagement_studio_stages(self, db: Session, campaign_id: int) -> list[EngagementStudioStage]:
         return (
-            db.query(CampaignSequenceStage)
-            .filter(CampaignSequenceStage.campaign_id == campaign_id)
-            .order_by(CampaignSequenceStage.stage_order)
+            db.query(EngagementStudioStage)
+            .filter(EngagementStudioStage.campaign_id == campaign_id)
+            .order_by(EngagementStudioStage.stage_order)
             .all()
         )
 
-    def create_sequence_stage(
-        self, db: Session, campaign_id: int, data: CampaignSequenceStageCreate
-    ) -> CampaignSequenceStage:
+    def create_engagement_studio_stage(
+        self, db: Session, campaign_id: int, data: EngagementStudioStageCreate
+    ) -> EngagementStudioStage:
         if not self.get_by_id(db, campaign_id):
             raise ValueError("Campaign not found")
 
         existing = (
-            db.query(CampaignSequenceStage)
+            db.query(EngagementStudioStage)
             .filter(
-                CampaignSequenceStage.campaign_id == campaign_id,
-                CampaignSequenceStage.stage_order == data.stage_order,
+                EngagementStudioStage.campaign_id == campaign_id,
+                EngagementStudioStage.stage_order == data.stage_order,
             )
             .first()
         )
         if existing:
             raise ValueError(f"Stage order {data.stage_order} already exists for this campaign")
 
-        stage = CampaignSequenceStage(campaign_id=campaign_id, **data.model_dump())
+        if data.mailer_id is not None:
+            if not db.query(Mailer).filter(Mailer.id == data.mailer_id).first():
+                raise ValueError("Template library entry not found")
+        elif not (data.subject and data.body):
+            raise ValueError("Provide a mailer_id (template library) or both subject and body")
+
+        stage = EngagementStudioStage(campaign_id=campaign_id, **data.model_dump())
         db.add(stage)
         db.commit()
         db.refresh(stage)
         return stage
 
-    def update_sequence_stage(self, db: Session, stage_id: int, update_data: dict) -> CampaignSequenceStage:
-        stage = db.query(CampaignSequenceStage).filter(CampaignSequenceStage.id == stage_id).first()
+    def update_engagement_studio_stage(self, db: Session, stage_id: int, update_data: dict) -> EngagementStudioStage:
+        stage = db.query(EngagementStudioStage).filter(EngagementStudioStage.id == stage_id).first()
         if not stage:
-            raise ValueError("Sequence stage not found")
+            raise ValueError("Engagement Studio stage not found")
+        if "mailer_id" in update_data and update_data["mailer_id"] is not None:
+            if not db.query(Mailer).filter(Mailer.id == update_data["mailer_id"]).first():
+                raise ValueError("Template library entry not found")
         for field, value in update_data.items():
             setattr(stage, field, value)
         db.commit()
         db.refresh(stage)
         return stage
 
-    def delete_sequence_stage(self, db: Session, stage_id: int) -> None:
-        stage = db.query(CampaignSequenceStage).filter(CampaignSequenceStage.id == stage_id).first()
+    def delete_engagement_studio_stage(self, db: Session, stage_id: int) -> None:
+        stage = db.query(EngagementStudioStage).filter(EngagementStudioStage.id == stage_id).first()
         if not stage:
-            raise ValueError("Sequence stage not found")
+            raise ValueError("Engagement Studio stage not found")
         db.delete(stage)
         db.commit()
+
+    def get_engagement_studio_lists(self, db: Session, campaign_id: int) -> list[int]:
+        return [
+            row.group_id
+            for row in db.query(EngagementStudioList.group_id)
+            .filter(EngagementStudioList.campaign_id == campaign_id)
+            .all()
+        ]
+
+    def set_engagement_studio_lists(self, db: Session, campaign_id: int, group_ids: list[int]) -> list[int]:
+        """Replace-all: only lists already tagged into this campaign (via
+        CampaignRecipientList / list_campaign_lists) may be selected."""
+        valid_group_ids = {row["group_id"] for row in self.list_campaign_lists(db, campaign_id)}
+        unknown = set(group_ids) - valid_group_ids
+        if unknown:
+            raise ValueError(f"List(s) {sorted(unknown)} are not part of this campaign")
+
+        db.query(EngagementStudioList).filter(EngagementStudioList.campaign_id == campaign_id).delete()
+        for group_id in group_ids:
+            db.add(EngagementStudioList(campaign_id=campaign_id, group_id=group_id))
+        db.commit()
+        return self.get_engagement_studio_lists(db, campaign_id)
+
+    def get_engagement_studio_overview(self, db: Session, campaign_id: int) -> dict:
+        """Cohort breakdown for the Engagement Studio's configured scope (its
+        selected prospect lists, or every campaign prospect if none are
+        selected — same backward-compatible default as the scheduler uses)."""
+        group_ids = self.get_engagement_studio_lists(db, campaign_id)
+
+        query = db.query(CampaignRecipient).join(Recipient, Recipient.id == CampaignRecipient.recipient_id).filter(
+            CampaignRecipient.campaign_id == campaign_id
+        )
+        if group_ids:
+            member_ids = (
+                db.query(CampaignRecipientList.recipient_id)
+                .filter(
+                    CampaignRecipientList.campaign_id == campaign_id,
+                    CampaignRecipientList.group_id.in_(group_ids),
+                )
+                .distinct()
+            )
+            query = query.filter(CampaignRecipient.recipient_id.in_(member_ids))
+
+        rows = query.filter(CampaignRecipient.status != "not_contacted").all()
+
+        # "Hot" is the auto-tag a reply sets (event_service.handle_reply) —
+        # everything else (Cold, an untagged not-yet-evaluated row, or any
+        # manual Warm/Negative not yet overridden by the scheduler) counts as
+        # still non-responsive, since only a reply exits the sequence.
+        total = len(rows)
+        responded = len([
+            cr for cr in rows if cr.status == "replied" or cr.recipient.response_tag == "Hot"
+        ])
+        non_responsive_rows = [
+            cr for cr in rows if cr.status not in _TERMINAL_STATUSES and cr.recipient.response_tag != "Hot"
+        ]
+
+        return {
+            "total": total,
+            "responded": responded,
+            "non_responsive": len(non_responsive_rows),
+            "non_responsive_recipients": non_responsive_rows[:200],
+        }

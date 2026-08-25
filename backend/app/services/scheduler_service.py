@@ -1,7 +1,7 @@
-"""Follow-up sequence scheduler.
+"""Engagement Studio scheduler.
 
 Polls CampaignRecipient rows periodically for ones whose next follow-up is
-due, and sends the next CampaignSequenceStage via the existing SES service —
+due, and sends the next EngagementStudioStage via the existing SES service —
 no new infrastructure (queue/worker), it just runs inside the FastAPI process.
 """
 
@@ -14,11 +14,23 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 
 from app.database.connection import SessionLocal
-from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template, User
+from app.models import (
+    CampaignRecipient,
+    CampaignRecipientList,
+    EmailLog,
+    EngagementStudioList,
+    EngagementStudioStage,
+    Recipient,
+    Template,
+    User,
+)
+from app.config import get_settings
+from app.services.graph_reply_service import poll_replies
 from app.services.ses_service import SESService
 from app.utils.helpers import build_recipient_context, render_email_body, render_template, utc_now
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 ses_service = SESService()
 
 # Statuses that should never receive another automated follow-up.
@@ -56,7 +68,7 @@ def _resolve_sender(cr: CampaignRecipient) -> User | None:
     return cr.sender_user or cr.campaign.owner_user
 
 
-def compute_next_send_at(stage: CampaignSequenceStage):
+def compute_next_send_at(stage: EngagementStudioStage):
     unit = stage.delay_unit
     value = stage.delay_value
     if unit == "minutes":
@@ -66,6 +78,15 @@ def compute_next_send_at(stage: CampaignSequenceStage):
     else:
         delta = timedelta(days=value)
     return utc_now() + delta
+
+
+def _resolve_stage_content(stage: EngagementStudioStage) -> tuple[str, str, str | None]:
+    """(subject, body, closing) for a stage — pulled live from its library
+    Mailer when mailer_id is set (so edits to the Mailer are picked up on the
+    next send), otherwise the stage's own inline content."""
+    if stage.mailer_id and stage.mailer:
+        return stage.mailer.subject, stage.mailer.body, stage.mailer.closing
+    return stage.subject, stage.body, stage.closing
 
 
 def process_due_followups() -> None:
@@ -107,10 +128,10 @@ def process_due_followups() -> None:
 
             next_stage_order = cr.current_stage + 1
             stage = (
-                db.query(CampaignSequenceStage)
+                db.query(EngagementStudioStage)
                 .filter(
-                    CampaignSequenceStage.campaign_id == cr.campaign_id,
-                    CampaignSequenceStage.stage_order == next_stage_order,
+                    EngagementStudioStage.campaign_id == cr.campaign_id,
+                    EngagementStudioStage.stage_order == next_stage_order,
                 )
                 .first()
             )
@@ -120,11 +141,30 @@ def process_due_followups() -> None:
                 continue
 
             recipient = cr.recipient
+
+            # Auto-classify engagement: a reply anywhere already tagged this
+            # recipient "Hot" (event_service.handle_reply). If that hasn't
+            # happened, reaching this point means a stage came due with no
+            # reply — tag "Cold", overriding any earlier manual tag (Warm/
+            # Negative). Hot itself is never downgraded back to Cold here.
+            if recipient.response_tag != "Hot":
+                recipient.response_tag = "Cold"
+
+            # Condition: a "Hot" tag (an actual reply) stops automation here,
+            # on top of the reply/bounce/suppression check already applied
+            # above via TERMINAL_STATUSES — "Cold" (non-responsive) keeps
+            # moving through the sequence.
+            if stage.skip_if_tagged and recipient.response_tag == "Hot":
+                cr.next_send_at = None
+                db.commit()
+                continue
+
+            stage_subject, stage_body, stage_closing = _resolve_stage_content(stage)
             context = build_recipient_context(recipient)
-            subject = render_template(stage.subject, context)
-            body = render_template(stage.body, context)
-            if stage.closing:
-                body = f"{body}\n\n{render_template(stage.closing, context)}"
+            subject = render_template(stage_subject, context)
+            body = render_template(stage_body, context)
+            if stage_closing:
+                body = f"{body}\n\n{render_template(stage_closing, context)}"
 
             owner = _resolve_sender(cr)
             result = ses_service.send_email(
@@ -143,6 +183,7 @@ def process_due_followups() -> None:
                     status=result["status"],
                     error_message=result.get("error"),
                     sender_user_id=owner.id if owner else None,
+                    message_id=result.get("rfc_message_id"),
                 )
             )
 
@@ -151,10 +192,10 @@ def process_due_followups() -> None:
             if result["status"] == "sent":
                 cr.current_stage = next_stage_order
                 following_stage = (
-                    db.query(CampaignSequenceStage)
+                    db.query(EngagementStudioStage)
                     .filter(
-                        CampaignSequenceStage.campaign_id == cr.campaign_id,
-                        CampaignSequenceStage.stage_order == next_stage_order + 1,
+                        EngagementStudioStage.campaign_id == cr.campaign_id,
+                        EngagementStudioStage.stage_order == next_stage_order + 1,
                     )
                     .first()
                 )
@@ -262,6 +303,7 @@ def process_queued_initial_sends() -> None:
                     status=result["status"],
                     error_message=result.get("error"),
                     sender_user_id=owner.id if owner else None,
+                    message_id=result.get("rfc_message_id"),
                 )
             )
 
@@ -270,11 +312,31 @@ def process_queued_initial_sends() -> None:
             if result["status"] == "sent":
                 cr.campaign.emails_sent += 1
                 next_stage = (
-                    db.query(CampaignSequenceStage)
-                    .filter(CampaignSequenceStage.campaign_id == cr.campaign_id, CampaignSequenceStage.stage_order == 1)
+                    db.query(EngagementStudioStage)
+                    .filter(EngagementStudioStage.campaign_id == cr.campaign_id, EngagementStudioStage.stage_order == 1)
                     .first()
                 )
-                cr.next_send_at = compute_next_send_at(next_stage) if next_stage else None
+                # Enroll in the automated chain only if this recipient is in
+                # one of the campaign's selected Engagement Studio lists — or
+                # if no lists are configured at all, in which case every
+                # recipient enrolls (matches pre-Engagement-Studio behavior).
+                studio_group_ids = [
+                    row.group_id
+                    for row in db.query(EngagementStudioList.group_id)
+                    .filter(EngagementStudioList.campaign_id == cr.campaign_id)
+                    .all()
+                ]
+                in_scope = not studio_group_ids or (
+                    db.query(CampaignRecipientList)
+                    .filter(
+                        CampaignRecipientList.campaign_id == cr.campaign_id,
+                        CampaignRecipientList.recipient_id == cr.recipient_id,
+                        CampaignRecipientList.group_id.in_(studio_group_ids),
+                    )
+                    .first()
+                    is not None
+                )
+                cr.next_send_at = compute_next_send_at(next_stage) if (next_stage and in_scope) else None
             else:
                 cr.next_send_at = None
 
@@ -301,9 +363,20 @@ def start_scheduler() -> None:
         process_queued_initial_sends, "interval",
         seconds=QUEUED_SEND_POLL_INTERVAL_SECONDS, id="process_queued_initial_sends",
     )
+    # Registered unconditionally — poll_replies itself no-ops until
+    # settings.enable_reply_polling is true AND Graph app-only auth actually
+    # succeeds, so there's no behavior change just from this job existing.
+    _scheduler.add_job(
+        poll_replies, "interval",
+        seconds=settings.graph_reply_poll_interval_seconds, id="poll_replies",
+    )
     _scheduler.start()
     logger.info("Follow-up scheduler started (polling every %ds)", POLL_INTERVAL_SECONDS)
     logger.info("Queued-send scheduler started (polling every %ds)", QUEUED_SEND_POLL_INTERVAL_SECONDS)
+    logger.info(
+        "Reply-polling scheduler started (polling every %ds, active=%s)",
+        settings.graph_reply_poll_interval_seconds, settings.enable_reply_polling,
+    )
 
 
 def stop_scheduler() -> None:
