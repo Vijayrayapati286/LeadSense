@@ -13,23 +13,49 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 
-from app.linkedin.bulk_excel_service import BulkExcelError, BulkExcelService
+from app.database.connection import SessionLocal
+from app.linkedin.backup_service import (
+    BackupError,
+    create_job_backup,
+    resolve_backup_path,
+    restore_backup,
+)
+from app.linkedin.bulk_excel_service import BulkExcelError, BulkExcelService, refresh_job_result_excel
 from app.linkedin.bulk_jobs import (
     BulkExtractJob,
     bulk_job_store,
     create_job_with_items,
+    get_job_row,
+    list_job_items,
+    list_jobs,
     list_recent_comparison_items,
 )
+from app.linkedin.bulk_models import BulkBackupRow, BulkExtractJobRow, BulkJobItemRow
 from app.linkedin.bulk_service import BulkExtractService
+from app.linkedin.conflict_service import (
+    conflicting_fields,
+    item_needs_review,
+    list_job_audit,
+    refresh_job_after_resolutions,
+    resolve_item_fields,
+)
 from app.linkedin.excel_service import LinkedInExcelService
 from app.linkedin.hybrid import HybridLinkedInProfileExtractor
 from app.linkedin.apify_extractor import LinkedInApifyProfileExtractor
 from app.linkedin.jobs import job_store
 from app.linkedin.rate_limit import bulk_extract_limiter, profile_extract_limiter
 from app.linkedin.schemas import (
+    BackupCreateResponse,
+    BackupListItem,
+    BackupListResponse,
+    BackupRestoreResponse,
     BulkJobCreateResponse,
+    BulkJobItemsPageResponse,
+    BulkJobListResponse,
     BulkJobResultsResponse,
     BulkJobStatusResponse,
+    ConflictBulkResolveRequest,
+    ConflictResolveRequest,
     JobCreateResponse,
     JobStatusResponse,
     LinkedInExtractData,
@@ -77,6 +103,10 @@ def _bulk_job_status_response(job: BulkExtractJob) -> BulkJobStatusResponse:
             verified=job.verified,
             mismatched=job.mismatched,
             review=job.review,
+            needs_review=getattr(job, "needs_review", 0) or 0,
+            resolved=getattr(job, "resolved", 0) or 0,
+            backup_status=getattr(job, "backup_status", None) or "none",
+            original_file_name=getattr(job, "original_file_name", None),
             progress_percent=percent,
             total_profiles=job.total,
             processed_profiles=processed,
@@ -84,12 +114,23 @@ def _bulk_job_status_response(job: BulkExtractJob) -> BulkJobStatusResponse:
             failed_profiles=job.failed,
             total_batches=job.total_batches,
             completed_batches=job.completed_batches,
+            created_at=job.created_at or None,
+            updated_at=job.updated_at or None,
             started_at=job.started_at,
             completed_at=job.completed_at,
             excel_file=job.excel_file,
             download_ready=download_ready,
             error=job.error,
         )
+
+
+def _require_bulk_job(job_id: str, user_id: int | None) -> BulkExtractJob:
+    job = bulk_job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    if job.user_id is not None and user_id is not None and job.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return job
 
 
 @router.post("/extract", response_model=LinkedInExtractResponse)
@@ -299,6 +340,39 @@ async def bulk_extract(
         input_columns=input_columns,
         url_rows=url_rows,
     )
+
+    # Persist original upload in S3 (metadata in Postgres — never store binaries in DB).
+    try:
+        from app.linkedin.s3_persist import persist_original_upload
+
+        db = SessionLocal()
+        try:
+            persist_original_upload(
+                db,
+                user_id=user_id,
+                batch_id=job.id,
+                filename=filename,
+                content=content,
+                content_type=file.content_type,
+            )
+        finally:
+            db.close()
+    except Exception as exc:
+        from app.storage.exceptions import FileValidationError, S3StorageError
+
+        if isinstance(exc, FileValidationError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        if isinstance(exc, S3StorageError):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to store upload in S3: {exc}",
+            ) from exc
+        logger.exception("Unexpected S3 original-upload failure job_id=%s", job.id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to store upload in S3",
+        ) from exc
+
     background_tasks.add_task(_background_bulk_extract, job.id)
 
     logger.info(
@@ -308,6 +382,418 @@ async def bulk_extract(
         len(url_rows),
     )
     return BulkJobCreateResponse(job_id=job.id, total=len(url_rows))
+
+
+
+
+@router.get("/bulk-jobs", response_model=BulkJobListResponse)
+def list_bulk_jobs(
+    q: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    phase: str | None = Query(None),
+    needs_review: bool | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    payload = list_jobs(
+        user_id=user_id,
+        q=q,
+        status=status_filter,
+        phase=phase,
+        needs_review=needs_review,
+        page=page,
+        page_size=page_size,
+    )
+    return BulkJobListResponse(
+        total=payload["total"],
+        page=payload["page"],
+        page_size=payload["page_size"],
+        items=[_bulk_job_status_response(j) for j in payload["items"]],
+    )
+
+
+@router.get("/bulk-jobs/{job_id}/items", response_model=BulkJobItemsPageResponse)
+def get_bulk_job_items(
+    job_id: str,
+    verification_status: str | None = Query(None),
+    extraction_status: str | None = Query(None),
+    needs_review: bool | None = Query(None),
+    q: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    _require_bulk_job(job_id, user_id)
+    payload = list_job_items(
+        job_id,
+        verification_status=verification_status,
+        extraction_status=extraction_status,
+        needs_review=needs_review,
+        q=q,
+        page=page,
+        page_size=page_size,
+    )
+    return BulkJobItemsPageResponse(
+        job_id=job_id,
+        total=payload["total"],
+        page=payload["page"],
+        page_size=payload["page_size"],
+        items=payload["items"],
+    )
+
+
+@router.get("/bulk-jobs/{job_id}/conflicts")
+def get_bulk_job_conflicts(
+    job_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    _require_bulk_job(job_id, user_id)
+    payload = list_job_items(
+        job_id,
+        needs_review=True,
+        page=page,
+        page_size=page_size,
+    )
+    enriched = []
+    db = SessionLocal()
+    try:
+        for item in payload["items"]:
+            row = db.query(BulkJobItemRow).filter(BulkJobItemRow.id == item["item_id"]).first()
+            fields = item.get("conflicts") or (conflicting_fields(row) if row else [])
+            # A stored MISMATCH/REVIEW that no longer has any live difference was
+            # decided by an older rule set; settle it so it leaves the queue.
+            if row and not fields:
+                from app.linkedin.verification import VERIFY_VERIFIED
+
+                if (row.verification_status or "").upper() in {
+                    "MISMATCH",
+                    "REVIEW",
+                    "NEEDS_REVIEW",
+                }:
+                    row.verification_status = VERIFY_VERIFIED
+                    row.verification_reason = (
+                        (row.verification_reason or "") + "; auto-cleared: values match"
+                    ).strip("; ")
+            enriched.append(
+                {
+                    **item,
+                    "conflicts": fields,
+                    "verification_status": getattr(row, "verification_status", None)
+                    or item.get("verification_status"),
+                }
+            )
+        db.commit()
+        from app.linkedin.conflict_service import refresh_job_after_resolutions
+
+        job = get_job_row(db, job_id)
+        if job:
+            refresh_job_after_resolutions(db, job)
+            db.commit()
+    finally:
+        db.close()
+    # Drop items whose location conflicts were auto-cleared.
+    enriched = [row for row in enriched if row.get("conflicts")]
+    return {
+        "job_id": job_id,
+        "total": len(enriched),
+        "page": payload["page"],
+        "page_size": payload["page_size"],
+        "items": enriched,
+    }
+
+
+@router.get("/bulk-jobs/{job_id}/audit")
+def get_bulk_job_audit(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    _require_bulk_job(job_id, user_id)
+    db = SessionLocal()
+    try:
+        entries = list_job_audit(db, job_id)
+    finally:
+        db.close()
+    return {"job_id": job_id, "total": len(entries), "items": entries}
+
+
+@router.post("/bulk-jobs/{job_id}/conflicts/{item_id}/resolve")
+def resolve_bulk_conflict(
+    job_id: str,
+    item_id: int,
+    body: ConflictResolveRequest,
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    _require_bulk_job(job_id, user_id)
+    decisions = {
+        d.field: {"resolution": d.resolution, "edited_value": getattr(d, "edited_value", None)}
+        for d in body.decisions
+    }
+    if not decisions:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No decisions provided")
+
+    db = SessionLocal()
+    try:
+        job = get_job_row(db, job_id)
+        item = (
+            db.query(BulkJobItemRow)
+            .filter(BulkJobItemRow.id == item_id, BulkJobItemRow.job_id == job_id)
+            .first()
+        )
+        if not job or not item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+        if not item_needs_review(item) and (item.verification_status or "").upper() != "RESOLVED":
+            # allow re-resolve only for mismatch/review items; still allow if fields conflict
+            if not conflicting_fields(item):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Item does not need conflict resolution",
+                )
+        try:
+            resolve_item_fields(db, item, decisions=decisions, user_id=user_id, user=current_user)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        refresh_job_after_resolutions(db, job)
+
+        icp_record_id = None
+        icp_synced = False
+        try:
+            from app.icp.service import sync_icp_if_eligible
+
+            icp_row = sync_icp_if_eligible(db, item, user_id=job.user_id or user_id)
+            if icp_row is not None:
+                icp_record_id = icp_row.id
+                icp_synced = True
+        except Exception as exc:
+            logger.exception("ICP sync failed after resolve job_id=%s item_id=%s", job_id, item_id)
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Resolve succeeded locally but ICP Database sync failed: {exc}",
+            ) from exc
+
+        try:
+            refresh_job_result_excel(db, job, excel_service=bulk_excel_service)
+        except Exception:
+            logger.exception("Excel refresh after conflict resolve failed job_id=%s", job_id)
+        db.commit()
+        return {
+            "job_id": job_id,
+            "item_id": item_id,
+            "verification_status": item.verification_status,
+            "needs_review": job.needs_review_count or 0,
+            "resolved": job.resolved_count or 0,
+            "phase": job.phase,
+            "icp_synced": icp_synced,
+            "icp_record_id": icp_record_id,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.post("/bulk-jobs/{job_id}/conflicts/bulk-resolve")
+def bulk_resolve_conflicts(
+    job_id: str,
+    body: ConflictBulkResolveRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not body.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bulk resolve requires confirm=true",
+        )
+    user_id = getattr(current_user, "id", None)
+    _require_bulk_job(job_id, user_id)
+    decisions = {
+        d.field: {"resolution": d.resolution, "edited_value": getattr(d, "edited_value", None)}
+        for d in body.decisions
+    }
+    if not decisions or not body.item_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to resolve")
+
+    db = SessionLocal()
+    try:
+        job = get_job_row(db, job_id)
+        if not job:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        updated = 0
+        for item_id in body.item_ids:
+            item = (
+                db.query(BulkJobItemRow)
+                .filter(BulkJobItemRow.id == item_id, BulkJobItemRow.job_id == job_id)
+                .first()
+            )
+            if not item or not item_needs_review(item):
+                continue
+            # only apply decisions for fields that actually conflict
+            field_set = {c["field"] for c in conflicting_fields(item)}
+            scoped = {k: v for k, v in decisions.items() if k in field_set}
+            if not scoped:
+                continue
+            resolve_item_fields(db, item, decisions=scoped, user_id=user_id, user=current_user)
+            try:
+                from app.icp.service import sync_icp_if_eligible
+
+                sync_icp_if_eligible(db, item, user_id=job.user_id or user_id)
+            except Exception as exc:
+                logger.exception("ICP sync failed during bulk-resolve item_id=%s", item_id)
+                db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"ICP Database sync failed for item {item_id}: {exc}",
+                ) from exc
+            updated += 1
+        refresh_job_after_resolutions(db, job)
+        refresh_job_result_excel(db, job, excel_service=bulk_excel_service)
+        db.commit()
+        return {
+            "job_id": job_id,
+            "updated": updated,
+            "needs_review": job.needs_review_count or 0,
+            "resolved": job.resolved_count or 0,
+            "phase": job.phase,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.post("/bulk-jobs/{job_id}/backup", response_model=BackupCreateResponse)
+def create_bulk_job_backup(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    _require_bulk_job(job_id, user_id)
+    try:
+        row = create_job_backup(job_id, user_id=user_id)
+    except BackupError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return BackupCreateResponse(
+        backup_id=row.id,
+        job_id=job_id,
+        status=row.status,
+        file_path=row.file_path,
+    )
+
+
+@router.get("/bulk-jobs/{job_id}/backup/download")
+def download_bulk_job_backup(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    job = _require_bulk_job(job_id, user_id)
+    path = resolve_backup_path(getattr(job, "backup_file_path", None) or "")
+    if path is None:
+        db = SessionLocal()
+        try:
+            row = (
+                db.query(BulkBackupRow)
+                .filter(BulkBackupRow.job_id == job_id)
+                .order_by(BulkBackupRow.id.desc())
+                .first()
+            )
+            if row:
+                path = resolve_backup_path(row.file_path)
+        finally:
+            db.close()
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backup not found")
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=path.name,
+    )
+
+
+@router.get("/bulk-backups", response_model=BackupListResponse)
+def list_bulk_backups(
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    db = SessionLocal()
+    try:
+        q = db.query(BulkBackupRow)
+        if user_id is not None:
+            q = q.filter(BulkBackupRow.user_id == user_id)
+        rows = q.order_by(BulkBackupRow.created_at.desc()).limit(200).all()
+        items = []
+        for row in rows:
+            job = db.query(BulkExtractJobRow).filter(BulkExtractJobRow.id == row.job_id).first()
+            items.append(
+                BackupListItem(
+                    id=row.id,
+                    job_id=row.job_id,
+                    backup_version=row.backup_version,
+                    status=row.status,
+                    file_path=row.file_path,
+                    created_at=row.created_at.isoformat() if row.created_at else None,
+                    original_file_name=job.original_file_name if job else None,
+                )
+            )
+        return BackupListResponse(total=len(items), items=items)
+    finally:
+        db.close()
+
+
+@router.get("/bulk-backups/{backup_id}/download")
+def download_backup_by_id(
+    backup_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    db = SessionLocal()
+    try:
+        row = db.query(BulkBackupRow).filter(BulkBackupRow.id == backup_id).first()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backup not found")
+        if row.user_id is not None and user_id is not None and row.user_id != user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backup not found")
+        path = resolve_backup_path(row.file_path)
+        if path is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backup file missing")
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+    finally:
+        db.close()
+
+
+@router.post("/bulk-backups/restore", response_model=BackupRestoreResponse)
+async def restore_bulk_backup(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    user_id = getattr(current_user, "id", None)
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty backup file")
+    try:
+        job = restore_backup(content, user_id=user_id)
+    except BackupError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return BackupRestoreResponse(
+        job_id=job.id,
+        status=job.status,
+        total=job.total_urls or 0,
+    )
 
 
 @router.get("/bulk-jobs/{job_id}", response_model=BulkJobStatusResponse)
@@ -348,7 +834,16 @@ def download_bulk_job_excel(
     job_id: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Download partial or final Excel for a bulk job."""
+    """Return a temporary (presigned) download URL for the verified Excel result."""
+    from app.storage.exceptions import (
+        FileNotFoundStorageError,
+        S3StorageError,
+        UnauthorizedFileAccess,
+    )
+    from app.storage.file_service import ensure_verified_download
+    from app.storage.schemas import DownloadUrlResponse
+    from app.linkedin.bulk_models import BulkExtractJobRow, BulkJobItemRow
+
     job = bulk_job_store.get(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
@@ -357,29 +852,61 @@ def download_bulk_job_excel(
     if job.user_id is not None and user_id is not None and job.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    if not job.excel_finalized or not job.excel_file or (job.completed + job.failed) <= 0:
+    if not job.excel_finalized or (job.completed + job.failed) <= 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Result Excel is not ready yet",
         )
 
-    filename = job.excel_file.split("/")[-1]
-    path: Path | None = bulk_excel_service.resolve_safe_path(filename)
-    if path is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    db = SessionLocal()
+    try:
+        job_row = db.query(BulkExtractJobRow).filter(BulkExtractJobRow.id == job_id).first()
+        if job_row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    logger.info(
-        "Bulk job Excel download user_id=%s job_id=%s file=%s status=%s",
-        user_id,
-        job_id,
-        filename,
-        job.status,
-    )
-    return FileResponse(
-        path,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=filename,
-    )
+        def _generate() -> tuple[bytes, str]:
+            items = (
+                db.query(BulkJobItemRow)
+                .filter(BulkJobItemRow.job_id == job_id)
+                .order_by(BulkJobItemRow.source_row_number.asc())
+                .all()
+            )
+            content, filename, relative = BulkExcelService().build_result_workbook_from_items(
+                job_id=job_id,
+                items=items,
+                input_columns=list(job_row.input_columns or []),
+            )
+            job_row.result_file_path = relative
+            job_row.excel_finalized = True
+            return content, filename or f"bulk_{job_id}.xlsx"
+
+        try:
+            payload = ensure_verified_download(
+                db,
+                job=job_row,
+                user_id=user_id,
+                generate_bytes=_generate,
+            )
+        except UnauthorizedFileAccess:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from None
+        except FileNotFoundStorageError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except S3StorageError as exc:
+            logger.exception("S3 download URL failed job_id=%s", job_id)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+
+        logger.info(
+            "Bulk job Excel download URL user_id=%s job_id=%s reused=%s",
+            user_id,
+            job_id,
+            payload.get("reused"),
+        )
+        return DownloadUrlResponse(**payload)
+    finally:
+        db.close()
 
 
 @router.get("/bulk-download/{filename}")

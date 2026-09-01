@@ -240,6 +240,7 @@ class BulkExcelService:
             "Original Designation",
             "Original Company",
             "Original Location",
+            "Original Company Location",
             "Extracted Name",
             "Extracted Designation",
             "Extracted Company",
@@ -251,9 +252,19 @@ class BulkExcelService:
             "Designation Match",
             "Company Match",
             "Location Match",
+            "Company Location Match",
             "Verification Score",
             "Verification Status",
             "Verification Reason",
+            "Resolution",
+            "Resolved Name",
+            "Resolved Designation",
+            "Resolved Company",
+            "Resolved Location",
+            "Resolved Company Location",
+            "Resolution Summary",
+            "Changed By",
+            "Change Log",
             "Error",
         ]
         extra_original = [
@@ -300,6 +311,7 @@ class BulkExcelService:
             row["Original Designation"] = originals.get("designation")
             row["Original Company"] = originals.get("company")
             row["Original Location"] = originals.get("location")
+            row["Original Company Location"] = originals.get("company_location")
             row["Extracted Name"] = getattr(item, "name", None)
             row["Extracted Designation"] = getattr(item, "designation", None)
             row["Extracted Company"] = getattr(item, "company", None)
@@ -311,17 +323,86 @@ class BulkExcelService:
             row["Designation Match"] = _match_label(getattr(item, "designation_match", None))
             row["Company Match"] = _match_label(getattr(item, "company_match", None))
             row["Location Match"] = _match_label(getattr(item, "location_match", None))
+            row["Company Location Match"] = _match_label(
+                getattr(item, "company_location_match", None)
+            )
             score = getattr(item, "verification_score", None)
             row["Verification Score"] = "" if score is None else score
             row["Verification Status"] = getattr(item, "verification_status", "") or ""
             row["Verification Reason"] = getattr(item, "verification_reason", None)
+            row["Resolution"] = getattr(item, "resolution_summary", None)
+            row["Resolved Name"] = getattr(item, "resolved_name", None)
+            row["Resolved Designation"] = getattr(item, "resolved_designation", None)
+            row["Resolved Company"] = getattr(item, "resolved_company", None)
+            row["Resolved Location"] = getattr(item, "resolved_location", None)
+            row["Resolved Company Location"] = getattr(item, "resolved_company_location", None)
+            row["Resolution Summary"] = getattr(item, "resolution_summary", None)
+            row["Changed By"] = ""
+            row["Change Log"] = ""
             row["Error"] = getattr(item, "last_error", None)
             out_rows.append(row)
 
+        from app.linkedin.conflict_service import audit_by_item_id, serialize_audit_row
+
+        audit_entries = []
+        for item in items:
+            for row in list(getattr(item, "resolutions", None) or []):
+                audit_entries.append(serialize_audit_row(row, item))
+        if not audit_entries:
+            try:
+                from app.database.connection import SessionLocal
+                from app.linkedin.conflict_service import list_job_audit
+
+                db = SessionLocal()
+                try:
+                    audit_entries = list_job_audit(db, job_id)
+                finally:
+                    db.close()
+            except Exception:
+                audit_entries = []
+        grouped = audit_by_item_id(audit_entries)
+        for item, row in zip(items, out_rows):
+            logs = grouped.get(int(getattr(item, "id")), [])
+            row["Changed By"] = "; ".join(
+                dict.fromkeys(e.get("actor") or "Unknown user" for e in logs)
+            )
+            row["Change Log"] = " | ".join(e.get("change_summary") or "" for e in logs if e.get("change_summary"))
+
         result_df = pd.DataFrame(out_rows, columns=columns)
+        audit_columns = [
+            "When",
+            "Who",
+            "Email",
+            "Sheet row",
+            "Profile URL",
+            "Field",
+            "Action",
+            "Uploaded (from)",
+            "Extracted",
+            "Chosen value",
+            "Summary",
+        ]
+        audit_rows = [
+            {
+                "When": e.get("resolved_at"),
+                "Who": e.get("actor"),
+                "Email": e.get("resolved_by_email"),
+                "Sheet row": e.get("source_row_number"),
+                "Profile URL": e.get("url"),
+                "Field": e.get("field"),
+                "Action": e.get("resolution"),
+                "Uploaded (from)": e.get("uploaded_value"),
+                "Extracted": e.get("extracted_value"),
+                "Chosen value": e.get("resolved_value"),
+                "Summary": e.get("change_summary"),
+            }
+            for e in audit_entries
+        ]
+        audit_df = pd.DataFrame(audit_rows, columns=audit_columns)
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             result_df.to_excel(writer, index=False, sheet_name="Profiles")
+            audit_df.to_excel(writer, index=False, sheet_name="Audit log")
             from openpyxl.styles import Font, PatternFill
 
             ws = writer.sheets.get("Profiles")
@@ -413,3 +494,25 @@ class BulkExcelService:
         if not text or text.lower() in {"none", "null", "n/a"}:
             return None
         return text
+
+
+def refresh_job_result_excel(db: Session, job, *, excel_service: BulkExcelService | None = None) -> None:
+    """Rebuild the verified Excel workbook from current job items and persist to S3."""
+    from app.linkedin.bulk_models import BulkJobItemRow
+    from app.linkedin.s3_persist import persist_verified_excel
+
+    excel = excel_service or BulkExcelService()
+    items = (
+        db.query(BulkJobItemRow)
+        .filter(BulkJobItemRow.job_id == job.id)
+        .order_by(BulkJobItemRow.source_row_number.asc())
+        .all()
+    )
+    content, filename, relative = excel.build_result_workbook_from_items(
+        job_id=job.id,
+        items=items,
+        input_columns=list(job.input_columns or []),
+    )
+    job.result_file_path = relative
+    job.excel_finalized = True
+    persist_verified_excel(db, job=job, content=content, filename=filename)

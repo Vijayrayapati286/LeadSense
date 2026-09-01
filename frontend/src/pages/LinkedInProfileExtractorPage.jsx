@@ -1,8 +1,51 @@
 import { useEffect, useRef, useState } from 'react';
-import { FiCheck, FiDownload, FiSearch, FiUpload, FiUser, FiX } from 'react-icons/fi';
+import {
+  FiArrowRight,
+  FiClipboard,
+  FiDownload,
+  FiFile,
+  FiLayers,
+  FiLink,
+  FiSearch,
+  FiUpload,
+  FiUser,
+} from 'react-icons/fi';
 import { useToast } from '../hooks/useToast';
 import { linkedinProfileService } from '../services/services';
+import { downloadBlob } from '../utils/helpers';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import GitDiffCompare, { buildDiff } from '../components/bulk/GitDiffCompare';
+import ExtractionReviewPanel from '../components/bulk/ExtractionReviewPanel';
+import { ExtractorNav, WorkspaceHeader } from '../components/ui/GrowthWorkspace';
+
+const PROFILE_STORE = 'leadsense.linkedin.savedProfiles';
+
+function profileStoreKey(raw) {
+  const text = (raw || '').trim().toLowerCase();
+  const match = text.match(/linkedin\.com\/in\/([^/?#]+)/);
+  return match ? match[1].replace(/\/+$/, '') : text;
+}
+
+function loadSavedProfiles() {
+  try {
+    return JSON.parse(localStorage.getItem(PROFILE_STORE) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function getSavedProfile(rawUrl) {
+  if (!rawUrl) return null;
+  return loadSavedProfiles()[profileStoreKey(rawUrl)] || null;
+}
+
+function saveProfile(rawUrl, data) {
+  const all = loadSavedProfiles();
+  const key = profileStoreKey(rawUrl || data?.profile_url);
+  if (!key) return;
+  all[key] = { ...data, saved_at: new Date().toISOString() };
+  localStorage.setItem(PROFILE_STORE, JSON.stringify(all));
+}
 
 function Field({ label, value }) {
   return (
@@ -15,28 +58,11 @@ function Field({ label, value }) {
   );
 }
 
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-const COMPARE_FIELDS = [
-  { key: 'name', label: 'Name', matchKey: 'name_match' },
-  { key: 'designation', label: 'Designation', matchKey: 'designation_match' },
-  { key: 'company', label: 'Company', matchKey: 'company_match' },
-  { key: 'location', label: 'Location', matchKey: 'location_match' },
-];
-
 const STAGES = [
   { id: 'uploading', label: 'Uploading' },
   { id: 'extracting', label: 'Extracting' },
   { id: 'comparing', label: 'Comparing' },
+  { id: 'review', label: 'Review' },
   { id: 'completed', label: 'Completed' },
 ];
 
@@ -45,153 +71,70 @@ function stageIndex(phase) {
   return idx < 0 ? 0 : idx;
 }
 
-function DataCard({ title, icon, values, meet }) {
-  return (
-    <div
-      className={`bg-white rounded-2xl border border-gray-200 shadow-sm p-5 w-full max-w-sm ${
-        meet === 'left' ? 'animate-meet-left' : meet === 'right' ? 'animate-meet-right' : ''
-      }`}
-    >
-      <p className="text-sm font-semibold text-gray-800 mb-4">
-        {icon} {title}
-      </p>
-      <dl className="space-y-3">
-        {COMPARE_FIELDS.map((field) => (
-          <div key={field.key}>
-            <dt className="text-[11px] uppercase tracking-wide text-gray-400">{field.label}</dt>
-            <dd className="text-sm text-gray-900 mt-0.5">{values?.[field.key] || '—'}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
-  );
-}
-
-function ComparisonPanel({ item, animKey }) {
-  const [visibleFields, setVisibleFields] = useState(0);
-  const [showSummary, setShowSummary] = useState(false);
-  const compared = COMPARE_FIELDS.filter((f) => item[f.matchKey] !== null && item[f.matchKey] !== undefined);
-  const matched = compared.filter((f) => item[f.matchKey] === true).length;
-
-  useEffect(() => {
-    setVisibleFields(0);
-    setShowSummary(false);
-    const timers = COMPARE_FIELDS.map((_, i) =>
-      setTimeout(() => setVisibleFields(i + 1), 800 + i * 380),
-    );
-    const summaryTimer = setTimeout(() => setShowSummary(true), 800 + COMPARE_FIELDS.length * 380 + 200);
-    return () => {
-      timers.forEach(clearTimeout);
-      clearTimeout(summaryTimer);
-    };
-  }, [animKey, item?.item_id]);
-
-  const status = item.verification_status || 'NOT_VERIFIED';
-  const isMatch = status === 'VERIFIED';
-
-  return (
-    <div key={animKey} className="space-y-5">
-      <div className="flex flex-col lg:flex-row items-stretch justify-center gap-4 lg:gap-8">
-        <DataCard title="Uploaded Data" icon="📄" values={item.uploaded} meet="left" />
-        <div className="flex flex-col items-center justify-center min-w-[88px]">
-          <div className="text-primary-500 font-semibold text-lg animate-scan-pulse">↔</div>
-          <p className="text-xs text-gray-500 mt-1 animate-scan-pulse">Comparing…</p>
-          <div className="mt-3 h-16 w-px bg-gradient-to-b from-transparent via-primary-400 to-transparent animate-scan-pulse" />
-        </div>
-        <DataCard title="Extracted Data" icon="🔍" values={item.extracted} meet="right" />
-      </div>
-
-      <div className="bg-gray-50 rounded-xl border border-gray-100 p-4 space-y-2">
-        {COMPARE_FIELDS.slice(0, visibleFields).map((field) => {
-          const match = item[field.matchKey];
-          const skipped = match === null || match === undefined;
-          return (
-            <div
-              key={field.key}
-              className={`flex flex-wrap items-center justify-between gap-2 text-sm rounded-lg px-3 py-2 animate-field-in ${
-                match === false ? 'bg-amber-50' : 'bg-white'
-              }`}
-            >
-              <span className="font-medium text-gray-700 w-28">{field.label}</span>
-              <span className="text-gray-500 flex-1 min-w-[140px]">
-                {item.uploaded?.[field.key] || '—'} → {item.extracted?.[field.key] || '—'}
-              </span>
-              {skipped ? (
-                <span className="text-xs text-gray-400">skipped</span>
-              ) : match ? (
-                <span className="text-green-600 font-medium flex items-center gap-1">
-                  <FiCheck /> MATCH
-                </span>
-              ) : (
-                <span className="text-red-600 font-medium flex items-center gap-1">
-                  <FiX /> MISMATCH
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {showSummary && (
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <p className="font-semibold text-gray-900">Verification Complete</p>
-          <p className="text-sm text-gray-600 mt-1">
-            Match Score: {item.verification_score ?? 0}% · {matched} / {compared.length || 0} fields
-            matched
-          </p>
-          <p className={`mt-2 text-sm font-medium ${isMatch ? 'text-green-700' : 'text-amber-700'}`}>
-            {isMatch ? '✓ MATCH' : `⚠ ${status}`}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function LinkedInProfileExtractorPage() {
   const toast = useToast();
   const fileInputRef = useRef(null);
   const pollRef = useRef(null);
-  const seenCompareRef = useRef(new Set());
-  const compareTimerRef = useRef(null);
+  const reviewRetryRef = useRef(0);
 
   const [mode, setMode] = useState('single');
   const [url, setUrl] = useState('');
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
+  const [existingSnapshot, setExistingSnapshot] = useState(null);
+  const [awaitingApproval, setAwaitingApproval] = useState(false);
 
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkJob, setBulkJob] = useState(null);
   const [bulkJobId, setBulkJobId] = useState(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkDownloading, setBulkDownloading] = useState(false);
-  const [compareItem, setCompareItem] = useState(null);
-  const [compareAnimKey, setCompareAnimKey] = useState(0);
-  const [compareQueue, setCompareQueue] = useState([]);
+  const [dragOver, setDragOver] = useState(false);
+  const [reviewItems, setReviewItems] = useState([]);
+  const [reviewBusy, setReviewBusy] = useState(false);
 
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
-      if (compareTimerRef.current) clearTimeout(compareTimerRef.current);
     };
   }, []);
 
+  // If the job finished (or has successes) but the board is still empty, retry load.
   useEffect(() => {
-    if (compareItem) return undefined;
-    if (compareQueue.length === 0) return undefined;
-    const next = compareQueue[0];
-    setCompareQueue((q) => q.slice(1));
-    setCompareItem(next);
-    setCompareAnimKey((k) => k + 1);
+    if (!bulkJobId || !bulkJob) return undefined;
+    const successCount = bulkJob.success ?? bulkJob.completed ?? 0;
+    if (successCount > 0 && reviewItems.length === 0 && reviewRetryRef.current < 5) {
+      const timer = setTimeout(() => {
+        reviewRetryRef.current += 1;
+        refreshReviewItems(bulkJobId);
+      }, 400);
+      return () => clearTimeout(timer);
+    }
     return undefined;
-  }, [compareQueue, compareItem]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkJobId, bulkJob?.success, bulkJob?.completed, bulkJob?.status, reviewItems.length]);
 
-  useEffect(() => {
-    if (!compareItem) return undefined;
-    const timer = setTimeout(() => setCompareItem(null), 2800);
-    return () => clearTimeout(timer);
-  }, [compareItem]);
+  const refreshReviewItems = async (jobId) => {
+    if (!jobId) return;
+    try {
+      const [allPayload, conflictsPayload] = await Promise.all([
+        linkedinProfileService.listBulkJobItems(jobId, { page_size: 500 }),
+        linkedinProfileService.getBulkConflicts(jobId, { page_size: 500 }).catch(() => ({ items: [] })),
+      ]);
+      const conflictMap = new Map(
+        (conflictsPayload.items || []).map((row) => [row.item_id, row]),
+      );
+      const merged = (allPayload.items || []).map((item) => {
+        const conflictRow = conflictMap.get(item.item_id);
+        return conflictRow ? { ...item, conflicts: conflictRow.conflicts } : item;
+      });
+      setReviewItems(merged);
+      if (merged.length > 0) reviewRetryRef.current = 0;
+    } catch {
+      // Review refresh is best-effort during polling.
+    }
+  };
 
   const handleExtract = async () => {
     const trimmed = url.trim();
@@ -207,6 +150,8 @@ export default function LinkedInProfileExtractorPage() {
     setExtracting(true);
     setError('');
     setResult(null);
+    setExistingSnapshot(null);
+    setAwaitingApproval(false);
 
     try {
       const response = await linkedinProfileService.extract(trimmed);
@@ -216,8 +161,26 @@ export default function LinkedInProfileExtractorPage() {
         toast.error(message);
         return;
       }
-      setResult(response.data);
-      toast.success('Profile extracted');
+      const data = response.data;
+      setResult(data);
+      const previous =
+        getSavedProfile(trimmed) || getSavedProfile(data.profile_url);
+      if (previous) {
+        setExistingSnapshot(previous);
+        const hasMajor = buildDiff(previous, data).some(
+          (row) => row.major && row.status !== 'unchanged' && row.status !== 'empty',
+        );
+        if (hasMajor) {
+          setAwaitingApproval(true);
+          toast.warning('Major changes vs existing record — review and approve');
+        } else {
+          saveProfile(trimmed, data);
+          toast.success('Profile extracted');
+        }
+      } else {
+        saveProfile(trimmed, data);
+        toast.success('Profile extracted');
+      }
     } catch (err) {
       const message =
         (typeof err.response?.data?.detail === 'string' && err.response.data.detail) ||
@@ -230,12 +193,21 @@ export default function LinkedInProfileExtractorPage() {
     }
   };
 
+  const handlePasteUrl = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      setUrl(text.trim());
+    } catch {
+      toast.error('Could not read clipboard');
+    }
+  };
+
   const handleDownloadBulkJob = async (jobId, { silent = false } = {}) => {
     if (!jobId) return;
     setBulkDownloading(true);
     try {
-      const { data: blob } = await linkedinProfileService.downloadBulkJob(jobId);
-      downloadBlob(blob, `bulk_${jobId}.xlsx`);
+      const { blob, filename } = await linkedinProfileService.downloadBulkJob(jobId);
+      downloadBlob(blob, filename || `bulk_${jobId}.xlsx`);
       if (!silent) {
         toast.success('Downloaded extracted profiles');
       }
@@ -251,15 +223,7 @@ export default function LinkedInProfileExtractorPage() {
   };
 
   const ingestResults = async (jobId) => {
-    try {
-      const payload = await linkedinProfileService.getBulkJobResults(jobId, 20);
-      const fresh = (payload.items || []).filter((row) => !seenCompareRef.current.has(row.item_id));
-      if (!fresh.length) return;
-      fresh.forEach((row) => seenCompareRef.current.add(row.item_id));
-      setCompareQueue((q) => [...q, ...fresh.reverse()]);
-    } catch {
-      /* status poll still drives progress */
-    }
+    await refreshReviewItems(jobId);
   };
 
   const pollBulkJob = (jobId) => {
@@ -269,15 +233,17 @@ export default function LinkedInProfileExtractorPage() {
       try {
         const status = await linkedinProfileService.getBulkJob(jobId);
         setBulkJob(status);
-        if ((status.success || status.completed || 0) > 0) {
-          ingestResults(jobId);
+        // Refresh the review board whenever anything has been processed so
+        // extracted rows appear live for the user during the run.
+        if ((status.processed || status.success || status.completed || status.failed || 0) > 0) {
+          await ingestResults(jobId);
         }
 
         if (status.status === 'done') {
           clearInterval(pollRef.current);
           pollRef.current = null;
           setBulkProcessing(false);
-          ingestResults(jobId);
+          await ingestResults(jobId);
           toast.success(
             `Extraction completed — ${status.success ?? status.completed} succeeded, ${status.failed} failed.`,
           );
@@ -285,6 +251,7 @@ export default function LinkedInProfileExtractorPage() {
           clearInterval(pollRef.current);
           pollRef.current = null;
           setBulkProcessing(false);
+          await ingestResults(jobId);
           const message = status.error || 'Bulk extraction failed';
           setError(message);
           if (status.download_ready) {
@@ -304,6 +271,43 @@ export default function LinkedInProfileExtractorPage() {
     }, 1500);
   };
 
+  const handleResolveItem = async (item, decisions) => {
+    if (!item || !bulkJobId) return;
+    setReviewBusy(true);
+    try {
+      const result = await linkedinProfileService.resolveConflict(bulkJobId, item.item_id, decisions);
+      if (result?.icp_synced) {
+        toast.success('Resolved and added to ICP Database');
+      } else {
+        toast.success('Record resolved');
+      }
+      await refreshReviewItems(bulkJobId);
+      const status = await linkedinProfileService.getBulkJob(bulkJobId);
+      setBulkJob(status);
+      const pending = (status.needs_review || 0) > 0;
+      if (!pending) {
+        toast.success('All conflicts resolved. You can download a clean Excel.');
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || err.message || 'Resolve failed');
+      throw err;
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+
+  const acceptBulkFile = (file) => {
+    if (!file) return;
+    setBulkFile(file);
+  };
+
+  const handleBulkDrop = (event) => {
+    event.preventDefault();
+    setDragOver(false);
+    if (bulkProcessing) return;
+    acceptBulkFile(event.dataTransfer.files?.[0] || null);
+  };
+
   const handleBulkUpload = async () => {
     if (!bulkFile) {
       toast.error('Choose an Excel or CSV file first');
@@ -314,9 +318,9 @@ export default function LinkedInProfileExtractorPage() {
     setError('');
     setBulkJob(null);
     setBulkJobId(null);
-    setCompareItem(null);
-    setCompareQueue([]);
-    seenCompareRef.current = new Set();
+    setReviewItems([]);
+    setReviewBusy(false);
+    reviewRetryRef.current = 0;
 
     try {
       const response = await linkedinProfileService.bulkExtract(bulkFile);
@@ -352,64 +356,106 @@ export default function LinkedInProfileExtractorPage() {
   const showBulkProgress = bulkJob && (bulkProcessing || ['done', 'failed'].includes(bulkJob.status));
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">LeadSense Profile Extractor</h1>
-        <p className="text-gray-500 mt-1">
-          Paste a public LinkedIn profile URL, or upload a sheet. Processing runs in the background
-          — you only need to upload and download.
-        </p>
-      </div>
+    <div className="workspace-shell">
+      <WorkspaceHeader
+        eyebrow="Prospect intelligence"
+        title={<>Turn profile links into clean, actionable records.</>}
+        description="Extract one public profile or process an entire sheet. LeadSense compares every result, highlights meaningful changes, and keeps your ICP database trustworthy."
+      >
+        <ExtractorNav />
+      </WorkspaceHeader>
 
-      <div className="flex gap-2 border-b border-gray-200">
-        <button
-          type="button"
-          onClick={() => setMode('single')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            mode === 'single'
-              ? 'border-primary-600 text-primary-700'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          Single URL
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode('bulk')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            mode === 'bulk'
-              ? 'border-primary-600 text-primary-700'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          Bulk URL Extraction
-        </button>
-      </div>
+      <div className="surface-card min-h-[560px] overflow-hidden flex flex-col animate-rise-in">
+        <div className="flex items-center justify-between gap-4 px-6 lg:px-8 pt-4 border-b border-slate-100 bg-slate-50/70">
+          <div className="flex gap-6">
+          <button
+            type="button"
+            onClick={() => setMode('single')}
+            className={`inline-flex items-center gap-2 pb-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              mode === 'single'
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-400 hover:text-gray-600'
+            }`}
+          >
+            <FiLink size={16} />
+            Single profile
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('bulk')}
+            className={`inline-flex items-center gap-2 pb-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              mode === 'bulk'
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-400 hover:text-gray-600'
+            }`}
+          >
+            <FiLayers size={16} />
+            Bulk URLs
+          </button>
+          </div>
+        </div>
 
       {mode === 'single' ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-          <label className="block text-sm font-medium text-gray-700" htmlFor="linkedin-profile-url">
-            Public LinkedIn profile URL
-          </label>
-          <input
-            id="linkedin-profile-url"
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://www.linkedin.com/in/username/"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-            disabled={extracting}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !extracting) handleExtract();
-            }}
-          />
+        <div className="flex-1 flex flex-col p-6 sm:p-8 lg:p-10">
+          <div className="max-w-3xl w-full mx-auto flex-1 flex flex-col justify-center space-y-8">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-primary-600">
+                New extraction
+              </p>
+              <label
+                className="block mt-1 text-2xl font-semibold text-gray-900"
+                htmlFor="linkedin-profile-url"
+              >
+                Public LinkedIn profile URL
+              </label>
+              <p className="text-sm text-gray-500 mt-1">
+                Paste a public <span className="font-medium text-gray-700">/in/</span> profile. The
+                URL is cleaned automatically.
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-gray-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+              One link at a time
+            </span>
+          </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <div className="relative">
+              <FiLink className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+              <input
+                id="linkedin-profile-url"
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://www.linkedin.com/in/your-name"
+                className="w-full rounded-2xl border border-gray-300 bg-white pl-11 pr-28 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                disabled={extracting}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !extracting) handleExtract();
+                }}
+              />
+              <button
+                type="button"
+                onClick={handlePasteUrl}
+                disabled={extracting}
+                className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
+              >
+                <FiClipboard size={14} />
+                Paste
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+            <p className="text-xs text-gray-500 flex items-center gap-2">
+              <FiSearch size={14} className="text-gray-400" />
+              Public profiles only — no login required.
+            </p>
             <button
               type="button"
               onClick={handleExtract}
               disabled={extracting}
-              className="btn-primary flex items-center gap-2"
+              className="btn-primary inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-2.5"
             >
               {extracting ? (
                 <>
@@ -419,26 +465,33 @@ export default function LinkedInProfileExtractorPage() {
               ) : (
                 <>
                   <FiUser size={16} />
-                  Extract
+                  Extract profile
+                  <FiArrowRight size={16} />
                 </>
               )}
             </button>
-            {!extracting && (
-              <span className="text-xs text-gray-500 flex items-center gap-1">
-                <FiSearch size={12} />
-                Apify · supreme_coder/linkedin-profile-scraper
-              </span>
-            )}
+          </div>
           </div>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
-          <div>
-            <p className="text-sm font-medium text-gray-700">Upload Excel or CSV</p>
-            <p className="text-xs text-gray-500 mt-1">
-              Columns such as Name, LinkedIn URL, Designation, Company, and Location are detected
-              automatically. Original rows are kept in the result file.
-            </p>
+        <div className="flex-1 flex flex-col p-6 sm:p-8 lg:p-10">
+          <div className="flex-1 flex flex-col max-w-5xl w-full mx-auto space-y-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-primary-50 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+                  New extraction
+                </span>
+                <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                  Sheet upload
+                </span>
+              </div>
+              <p className="mt-3 text-2xl font-semibold text-primary-700">Upload Excel or CSV</p>
+              <p className="text-sm text-gray-500 mt-1 max-w-2xl">
+                Columns such as Name, LinkedIn URL, Designation, Company, Person Location, and Company Location are detected
+                automatically. Original rows are kept in the result file.
+              </p>
+            </div>
           </div>
 
           <input
@@ -449,40 +502,74 @@ export default function LinkedInProfileExtractorPage() {
             onChange={(e) => setBulkFile(e.target.files?.[0] || null)}
           />
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={bulkProcessing}
-              className="btn-secondary flex items-center gap-2"
-            >
-              <FiUpload size={16} />
-              Choose file
-            </button>
-            {bulkFile ? (
-              <span className="text-sm text-gray-600 truncate max-w-xs">{bulkFile.name}</span>
-            ) : (
-              <span className="text-sm text-gray-400">No file selected</span>
-            )}
+          <button
+            type="button"
+            onClick={() => !bulkProcessing && fileInputRef.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!bulkProcessing) setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleBulkDrop}
+            disabled={bulkProcessing}
+            className={`w-full rounded-2xl border-2 border-dashed px-6 py-10 text-left transition-colors ${
+              dragOver
+                ? 'border-primary-500 bg-primary-50'
+                : bulkFile
+                  ? 'border-primary-200 bg-primary-50/40'
+                  : 'border-gray-200 bg-gray-50 hover:border-primary-300 hover:bg-white'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white border border-gray-200 text-primary-600">
+                {bulkFile ? <FiFile size={22} /> : <FiUpload size={22} />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-gray-900">
+                  {bulkFile ? bulkFile.name : 'Drop your sheet here, or click to browse'}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {bulkFile
+                    ? `${(bulkFile.size / 1024).toFixed(1)} KB · Excel, CSV, TSV, or ODS`
+                    : 'Supports .xlsx, .xls, .csv, .tsv, .txt, and .ods'}
+                </p>
+              </div>
+              <span className="shrink-0 inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700">
+                <FiUpload size={16} />
+                {bulkFile ? 'Replace file' : 'Choose file'}
+              </span>
+            </div>
+          </button>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+            <p className="text-xs text-gray-500">
+              Processing runs in the background — upload, wait, then download.
+            </p>
             <button
               type="button"
               onClick={handleBulkUpload}
               disabled={bulkProcessing || !bulkFile}
-              className="btn-primary flex items-center gap-2"
+              className="btn-primary inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-2.5"
             >
-              {bulkProcessing ? 'Working…' : 'Start extraction'}
+              {bulkProcessing ? 'Working…' : (
+                <>
+                  Start extraction
+                  <FiArrowRight size={16} />
+                </>
+              )}
             </button>
           </div>
 
           {showBulkProgress && (
             <div className="space-y-5">
-              <ol className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <ol className="grid grid-cols-2 sm:grid-cols-5 gap-2" aria-label="Extraction progress">
                 {STAGES.map((stage, idx) => {
                   const done = idx < activeStage || phase === 'completed';
                   const current = stage.id === phase || (phase === 'completed' && idx === 3);
                   return (
                     <li
                       key={stage.id}
+                      aria-current={current ? 'step' : undefined}
                       className={`rounded-xl px-3 py-2 text-center text-xs font-medium border ${
                         current
                           ? 'border-primary-500 bg-primary-50 text-primary-800'
@@ -524,14 +611,43 @@ export default function LinkedInProfileExtractorPage() {
                   </p>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600">
                     <span>Matched: {bulkJob.verified ?? 0}</span>
-                    <span>Mismatched: {bulkJob.mismatched ?? 0}</span>
+                    <span>Mismatched: {(bulkJob.needs_review || 0) || (bulkJob.mismatched ?? 0)}</span>
                   </div>
                 </div>
               </div>
 
-              {compareItem && bulkJob.status !== 'done' && (
-                <ComparisonPanel item={compareItem} animKey={compareAnimKey} />
-              )}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-gray-800">
+                    Review extracted vs uploaded records
+                  </p>
+                  {reviewItems.length > 0 ? (
+                    <p className="text-xs text-gray-500">
+                      Showing {reviewItems.filter((i) => (i.extraction_status || '').toUpperCase() === 'SUCCESS').length}{' '}
+                      extracted
+                      {bulkProcessing ? ' · updating live…' : ''}
+                    </p>
+                  ) : null}
+                </div>
+                {(bulkJob.needs_review || 0) > 0 ? (
+                  <p className="text-sm text-amber-800">
+                    {bulkJob.needs_review} record{bulkJob.needs_review === 1 ? '' : 's'} need
+                    resolution — click a row to open the comparison popup.
+                  </p>
+                ) : null}
+                <ExtractionReviewPanel
+                  items={reviewItems}
+                  busy={reviewBusy}
+                  onResolve={handleResolveItem}
+                  emptyMessage={
+                    bulkProcessing
+                      ? 'Extraction in progress — rows will appear here as each profile is extracted…'
+                      : (bulkJob.success || bulkJob.completed || 0) > 0
+                        ? 'Could not load extracted rows. Refresh the page or re-open this job from History.'
+                        : 'Records will appear here as extraction and verification complete.'
+                  }
+                />
+              </div>
 
               {(bulkJob.status === 'done' || bulkJob.status === 'failed') && (
                 <div
@@ -560,37 +676,70 @@ export default function LinkedInProfileExtractorPage() {
                     <p>{bulkJob.success ?? bulkJob.completed ?? 0} Successful</p>
                     <p>{bulkJob.failed ?? 0} Failed</p>
                     <p>{bulkJob.verified ?? 0} Verified</p>
-                    <p>{bulkJob.mismatched ?? 0} Mismatch</p>
+                    <p>{bulkJob.needs_review ?? bulkJob.mismatched ?? 0} Need review</p>
+                    <p>{bulkJob.resolved ?? 0} Conflicts resolved</p>
                   </div>
                   <div className="flex justify-center gap-6 text-xs text-gray-600">
                     <span>Extraction ✓ Completed</span>
-                    <span>Verification ✓ Completed</span>
+                    <span>
+                      Verification {(bulkJob.needs_review || 0) > 0 ? '⚠ Needs review' : '✓ Completed'}
+                    </span>
                     <span>Excel {bulkJob.download_ready ? '✓ Ready' : '… Generating'}</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleDownloadBulkJob(bulkJobId)}
-                    disabled={bulkDownloading || !bulkJob.download_ready}
-                    className="btn-primary inline-flex items-center gap-2"
-                  >
-                    {bulkDownloading ? (
-                      <>
-                        <LoadingSpinner size="sm" />
-                        Downloading…
-                      </>
-                    ) : (
-                      <>
-                        <FiDownload size={16} />
-                        Download Result Excel
-                      </>
-                    )}
-                  </button>
+                  {(() => {
+                    const openConflicts = bulkJob.needs_review || 0;
+                    return (
+                      <div className="flex flex-col items-center gap-3">
+                        {openConflicts > 0 && (
+                          <p className="text-sm text-amber-800">
+                            Resolve {openConflicts} conflict{openConflicts === 1 ? '' : 's'} in the
+                            review panel above for a clean download, or export the file as-is.
+                          </p>
+                        )}
+                        <div className="flex flex-wrap justify-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadBulkJob(bulkJobId)}
+                            disabled={
+                              bulkDownloading || !bulkJob.download_ready || openConflicts > 0
+                            }
+                            className="btn-primary inline-flex items-center gap-2"
+                          >
+                            {bulkDownloading && !openConflicts ? (
+                              <>
+                                <LoadingSpinner size="sm" />
+                                Downloading…
+                              </>
+                            ) : (
+                              <>
+                                <FiDownload size={16} />
+                                Download Result Excel
+                              </>
+                            )}
+                          </button>
+                          {openConflicts > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadBulkJob(bulkJobId)}
+                              disabled={bulkDownloading || !bulkJob.download_ready}
+                              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                            >
+                              <FiDownload size={16} />
+                              Download with conflicts
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
           )}
+          </div>
         </div>
       )}
+      </div>
 
       {error && !(extracting || bulkProcessing) && (
         <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2" role="alert">
@@ -598,8 +747,46 @@ export default function LinkedInProfileExtractorPage() {
         </p>
       )}
 
-      {mode === 'single' && result && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+      {mode === 'single' && result && existingSnapshot && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 sm:p-8 space-y-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+              Git compare
+            </p>
+            <h2 className="text-lg font-semibold text-gray-900 mt-1">Existing vs extracted</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Red rows are major identity changes. Approve them before they replace the saved
+              record.
+            </p>
+          </div>
+          <GitDiffCompare
+            existing={existingSnapshot}
+            extracted={result}
+            requireApproval={awaitingApproval}
+            onApprove={
+              awaitingApproval
+                ? () => {
+                    saveProfile(url || result.profile_url, result);
+                    setAwaitingApproval(false);
+                    toast.success('Major changes approved and saved');
+                  }
+                : undefined
+            }
+            onReject={
+              awaitingApproval
+                ? () => {
+                    setResult(existingSnapshot);
+                    setAwaitingApproval(false);
+                    toast.success('Kept existing record');
+                  }
+                : undefined
+            }
+          />
+        </div>
+      )}
+
+      {mode === 'single' && result && !awaitingApproval && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 sm:p-8 space-y-5">
           <div className="flex flex-wrap items-start gap-4">
             {result.image ? (
               <img
@@ -642,6 +829,7 @@ export default function LinkedInProfileExtractorPage() {
           </dl>
         </div>
       )}
+
     </div>
   );
 }

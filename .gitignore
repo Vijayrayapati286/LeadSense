@@ -28,3 +28,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local S3 mock store (USE_MOCK_S3=true)
+backend/outputs/s3_mock/

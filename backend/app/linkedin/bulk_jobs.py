@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,7 @@ from app.linkedin.bulk_models import (
     PHASE_COMPARING,
     PHASE_COMPLETED,
     PHASE_EXTRACTING,
+    PHASE_REVIEW,
     PHASE_UPLOADING,
     TERMINAL_ITEM_STATUSES,
     BulkExtractJobRow,
@@ -31,11 +33,16 @@ from app.linkedin.bulk_models import (
     ExtractionAttemptRow,
 )
 from app.linkedin.verification import (
+    COMPARE_FIELDS,
+    VERIFY_ALREADY_EXISTS,
     VERIFY_MISMATCH,
+    VERIFY_RESOLVED,
     VERIFY_REVIEW,
     VERIFY_VERIFIED,
     apply_verification,
 )
+
+logger = logging.getLogger(__name__)
 
 BulkJobStatus = Literal["pending", "running", "done", "failed"]
 
@@ -54,8 +61,13 @@ class BulkExtractJob:
     verified: int = 0
     mismatched: int = 0
     review: int = 0
+    needs_review: int = 0
+    resolved: int = 0
     phase: str = "uploading"
     excel_finalized: bool = False
+    backup_status: str = "none"
+    backup_file_path: str | None = None
+    original_file_name: str | None = None
     total_batches: int = 0
     completed_batches: int = 0
     excel_file: str | None = None
@@ -75,7 +87,11 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def derive_phase(job: BulkExtractJobRow) -> str:
-    if job.status in {"done", "failed"}:
+    if job.status == "failed":
+        return PHASE_COMPLETED
+    if job.status == "done":
+        if (getattr(job, "needs_review_count", 0) or 0) > 0:
+            return PHASE_REVIEW
         return PHASE_COMPLETED
     if job.status == "pending":
         return PHASE_UPLOADING
@@ -90,6 +106,7 @@ def derive_phase(job: BulkExtractJobRow) -> str:
 
 def job_row_to_snapshot(job: BulkExtractJobRow) -> BulkExtractJob:
     processed = (job.success_count or 0) + (job.failed_count or 0)
+    started = getattr(job, "started_at", None) or job.created_at
     return BulkExtractJob(
         job_id=job.id,
         user_id=job.user_id,
@@ -101,13 +118,18 @@ def job_row_to_snapshot(job: BulkExtractJobRow) -> BulkExtractJob:
         verified=job.verified_count or 0,
         mismatched=job.mismatch_count or 0,
         review=job.review_count or 0,
+        needs_review=getattr(job, "needs_review_count", 0) or 0,
+        resolved=getattr(job, "resolved_count", 0) or 0,
         phase=job.phase or derive_phase(job),
         excel_finalized=bool(job.excel_finalized),
+        backup_status=getattr(job, "backup_status", None) or "none",
+        backup_file_path=getattr(job, "backup_file_path", None),
+        original_file_name=job.original_file_name,
         total_batches=0,
         completed_batches=0,
         excel_file=job.result_file_path,
         error=job.error,
-        started_at=_iso(job.created_at) if job.status != "pending" else _iso(job.created_at),
+        started_at=_iso(started),
         completed_at=_iso(job.completed_at),
         created_at=_iso(job.created_at) or "",
         updated_at=_iso(job.updated_at) or "",
@@ -115,6 +137,7 @@ def job_row_to_snapshot(job: BulkExtractJobRow) -> BulkExtractJob:
 
 
 def refresh_job_counters(db: Session, job: BulkExtractJobRow) -> BulkExtractJobRow:
+    db.flush()
     success = (
         db.query(func.count(BulkJobItemRow.id))
         .filter(BulkJobItemRow.job_id == job.id, BulkJobItemRow.status == ITEM_SUCCESS)
@@ -165,6 +188,25 @@ def refresh_job_counters(db: Session, job: BulkExtractJobRow) -> BulkExtractJobR
         .scalar()
         or 0
     )
+    resolved = (
+        db.query(func.count(BulkJobItemRow.id))
+        .filter(
+            BulkJobItemRow.job_id == job.id,
+            BulkJobItemRow.verification_status == VERIFY_RESOLVED,
+        )
+        .scalar()
+        or 0
+    )
+    needs_review = (
+        db.query(func.count(BulkJobItemRow.id))
+        .filter(
+            BulkJobItemRow.job_id == job.id,
+            BulkJobItemRow.status == ITEM_SUCCESS,
+            BulkJobItemRow.verification_status.in_((VERIFY_MISMATCH, VERIFY_REVIEW)),
+        )
+        .scalar()
+        or 0
+    )
     total = (
         db.query(func.count(BulkJobItemRow.id)).filter(BulkJobItemRow.job_id == job.id).scalar() or 0
     )
@@ -174,6 +216,8 @@ def refresh_job_counters(db: Session, job: BulkExtractJobRow) -> BulkExtractJobR
     job.verified_count = int(verified)
     job.mismatch_count = int(mismatched)
     job.review_count = int(review)
+    job.resolved_count = int(resolved)
+    job.needs_review_count = int(needs_review)
     job.processed_count = int(success) + int(failed)
     job.total_urls = int(total)
     job.phase = derive_phase(job)
@@ -344,11 +388,24 @@ def copy_canonical_results_to_duplicates(db: Session, job_id: str) -> int:
         item.last_error = canon.last_error
         item.attempt_count = int(canon.attempt_count or 0)
         item.completed_at = now
+        if (canon.verification_status or "").upper() == VERIFY_ALREADY_EXISTS:
+            item.verification_status = canon.verification_status
+            item.verification_reason = canon.verification_reason
+            item.verification_score = canon.verification_score
+            copied += 1
+            continue
         apply_verification(
             item,
             match_threshold=int(getattr(get_settings(), "verify_match_threshold", 100)),
             review_threshold=int(getattr(get_settings(), "verify_review_threshold", 75)),
         )
+        try:
+            from app.icp.service import sync_icp_if_eligible
+
+            job = get_job_row(db, item.job_id) if hasattr(item, "job_id") else None
+            sync_icp_if_eligible(db, item, user_id=getattr(job, "user_id", None) if job else None)
+        except Exception:
+            logger.exception("ICP sync failed for duplicate item %s (extraction kept)", item.id)
         copied += 1
     return copied
 
@@ -455,38 +512,208 @@ def list_recent_comparison_items(job_id: str, *, limit: int = 20) -> list[dict[s
         db.close()
 
 
+def _live_score(matches: dict[str, bool | None]) -> int | None:
+    compared = [m for m in matches.values() if m is not None]
+    if not compared:
+        return None
+    return int(round((sum(1 for m in compared if m) / len(compared)) * 100))
+
+
 def item_to_result_dict(item: BulkJobItemRow) -> dict[str, Any]:
+    from app.linkedin.conflict_service import conflicting_fields, live_matches
     from app.linkedin.verification import original_fields
 
     originals = original_fields(item.source_row_json if isinstance(item.source_row_json, dict) else {})
+    # Compare live rather than reporting the *_match columns, which are frozen at
+    # extraction time and drift whenever the matching rules improve.
+    succeeded = item.status == ITEM_SUCCESS
+    status = (item.verification_status or "").upper()
+    if status == VERIFY_ALREADY_EXISTS:
+        matches = dict.fromkeys(COMPARE_FIELDS, None)
+        conflicts = []
+        needs_review = False
+        scored = item.verification_score or 100
+    else:
+        matches = live_matches(item) if succeeded else dict.fromkeys(COMPARE_FIELDS, None)
+        conflicts = conflicting_fields(item) if succeeded else []
+        needs_review = bool(conflicts) and status != VERIFY_RESOLVED
+        scored = _live_score(matches)
+    if not conflicts and status in {VERIFY_MISMATCH, VERIFY_REVIEW}:
+        # Flagged by an older rule set; the values agree now. The stored row is
+        # corrected when the review queue is opened.
+        status = VERIFY_VERIFIED
     return {
         "item_id": item.id,
         "source_row_number": item.source_row_number,
         "url": item.normalized_url or item.profile_url,
         "extraction_status": item.status,
         "attempt_count": item.attempt_count or 0,
+        "created_at": _iso(item.created_at),
+        "updated_at": _iso(item.updated_at),
+        "completed_at": _iso(item.completed_at),
         "error": item.last_error,
+        "uploaded_raw": item.source_row_json if isinstance(item.source_row_json, dict) else {},
         "uploaded": {
             "name": originals.get("name"),
             "designation": originals.get("designation"),
             "company": originals.get("company"),
             "location": originals.get("location"),
+            "company_location": originals.get("company_location"),
         },
         "extracted": {
             "name": item.name,
             "designation": item.designation,
             "company": item.company,
             "location": item.location,
+            "company_location": item.location,
+            "headline": item.headline,
             "about": item.about,
+            "followers": item.followers,
+            "connections": item.connections,
         },
-        "name_match": item.name_match,
-        "designation_match": item.designation_match,
-        "company_match": item.company_match,
-        "location_match": item.location_match,
-        "verification_status": item.verification_status,
-        "verification_score": item.verification_score or 0,
+        "name_match": matches["name"],
+        "designation_match": matches["designation"],
+        "company_match": matches["company"],
+        "location_match": matches["location"],
+        "company_location_match": matches["company_location"],
+        "conflicts": conflicts,
+        "verification_status": status or item.verification_status,
+        "verification_score": scored if scored is not None else (item.verification_score or 0),
         "verification_reason": item.verification_reason,
+        "resolved": {
+            "name": getattr(item, "resolved_name", None),
+            "designation": getattr(item, "resolved_designation", None),
+            "company": getattr(item, "resolved_company", None),
+            "location": getattr(item, "resolved_location", None),
+            "company_location": getattr(item, "resolved_company_location", None),
+        },
+        "resolution_summary": getattr(item, "resolution_summary", None),
+        "needs_review": needs_review,
     }
+
+
+def list_jobs(
+    *,
+    user_id: int | None,
+    q: str | None = None,
+    status: str | None = None,
+    phase: str | None = None,
+    needs_review: bool | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        query = db.query(BulkExtractJobRow)
+        if user_id is not None:
+            query = query.filter(BulkExtractJobRow.user_id == user_id)
+        if status:
+            statuses = [s.strip() for s in status.split(",") if s.strip()]
+            if statuses:
+                query = query.filter(BulkExtractJobRow.status.in_(statuses))
+        if phase:
+            phases = [s.strip() for s in phase.split(",") if s.strip()]
+            if phases:
+                query = query.filter(BulkExtractJobRow.phase.in_(phases))
+        if needs_review is True:
+            query = query.filter(BulkExtractJobRow.needs_review_count > 0)
+        elif needs_review is False:
+            query = query.filter(
+                or_(
+                    BulkExtractJobRow.needs_review_count.is_(None),
+                    BulkExtractJobRow.needs_review_count == 0,
+                )
+            )
+        if q:
+            like = f"%{q.strip()}%"
+            query = query.filter(
+                or_(
+                    BulkExtractJobRow.id.ilike(like),
+                    BulkExtractJobRow.original_file_name.ilike(like),
+                )
+            )
+        total = query.count()
+        page = max(int(page), 1)
+        page_size = min(max(int(page_size), 1), 100)
+        rows = (
+            query.order_by(BulkExtractJobRow.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        for row in rows:
+            refresh_job_counters(db, row)
+        db.commit()
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": [job_row_to_snapshot(r) for r in rows],
+        }
+    finally:
+        db.close()
+
+
+def list_job_items(
+    job_id: str,
+    *,
+    verification_status: str | None = None,
+    extraction_status: str | None = None,
+    needs_review: bool | None = None,
+    q: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        query = db.query(BulkJobItemRow).filter(BulkJobItemRow.job_id == job_id)
+        if extraction_status:
+            statuses = [s.strip() for s in extraction_status.split(",") if s.strip()]
+            if statuses:
+                query = query.filter(BulkJobItemRow.status.in_(statuses))
+        if verification_status:
+            statuses = [s.strip().upper() for s in verification_status.split(",") if s.strip()]
+            if statuses:
+                query = query.filter(BulkJobItemRow.verification_status.in_(statuses))
+        if needs_review is True:
+            query = query.filter(
+                BulkJobItemRow.status == ITEM_SUCCESS,
+                BulkJobItemRow.verification_status.in_((VERIFY_MISMATCH, VERIFY_REVIEW)),
+            )
+        elif needs_review is False:
+            query = query.filter(
+                or_(
+                    BulkJobItemRow.status != ITEM_SUCCESS,
+                    BulkJobItemRow.verification_status.notin_((VERIFY_MISMATCH, VERIFY_REVIEW)),
+                )
+            )
+        if q:
+            like = f"%{q.strip()}%"
+            query = query.filter(
+                or_(
+                    BulkJobItemRow.profile_url.ilike(like),
+                    BulkJobItemRow.normalized_url.ilike(like),
+                    BulkJobItemRow.name.ilike(like),
+                    BulkJobItemRow.company.ilike(like),
+                )
+            )
+        total = query.count()
+        page = max(int(page), 1)
+        page_size = min(max(int(page_size), 1), 500)
+        rows = (
+            query.order_by(BulkJobItemRow.source_row_number.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": [item_to_result_dict(r) for r in rows],
+        }
+    finally:
+        db.close()
 
 
 class BulkJobStore:

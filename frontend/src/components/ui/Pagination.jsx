@@ -7,16 +7,18 @@ export default function Pagination({ page, pageSize, total, onPageChange }) {
 
   return (
     <div className="flex items-center justify-between px-2 py-3">
-      <p className="text-sm text-gray-600">
+      <p className="text-sm text-slate-600">
         Showing <span className="font-medium">{total > 0 ? start : 0}</span> to{' '}
         <span className="font-medium">{end}</span> of{' '}
         <span className="font-medium">{total}</span> results
       </p>
       <div className="flex items-center gap-1">
         <button
+          type="button"
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1}
-          className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          aria-label="Previous page"
+          className="p-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <FiChevronLeft size={16} />
         </button>
@@ -33,12 +35,15 @@ export default function Pagination({ page, pageSize, total, onPageChange }) {
           }
           return (
             <button
+              type="button"
               key={pageNum}
               onClick={() => onPageChange(pageNum)}
+              aria-label={`Page ${pageNum}`}
+              aria-current={page === pageNum ? 'page' : undefined}
               className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
                 page === pageNum
                   ? 'bg-primary-600 text-white'
-                  : 'border border-gray-300 hover:bg-gray-50 text-gray-700'
+                  : 'border border-slate-300 hover:bg-slate-50 text-slate-700'
               }`}
             >
               {pageNum}
@@ -46,9 +51,11 @@ export default function Pagination({ page, pageSize, total, onPageChange }) {
           );
         })}
         <button
+          type="button"
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages}
-          className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          aria-label="Next page"
+          className="p-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <FiChevronRight size={16} />
         </button>

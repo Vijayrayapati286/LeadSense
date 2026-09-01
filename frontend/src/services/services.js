@@ -1,5 +1,23 @@
 import api from './api';
 
+async function downloadViaMeta(metaEndpoint, fallbackFilename) {
+  const meta = await api.get(metaEndpoint, { timeout: 120_000 }).then((r) => r.data);
+  const filename = meta.filename || fallbackFilename;
+  if (meta.file_id && String(meta.download_url || '').includes('/api/files/')) {
+    const { data: blob } = await api.get(`/files/${meta.file_id}/content`, {
+      responseType: 'blob',
+      timeout: 120_000,
+    });
+    return { blob, filename, ...meta };
+  }
+  const resp = await fetch(meta.download_url);
+  if (!resp.ok) {
+    throw new Error('Download failed');
+  }
+  const blob = await resp.blob();
+  return { blob, filename, ...meta };
+}
+
 export const authService = {
   getLoginUrl: () => api.get('/auth/login'),
   devLogin: (data) => api.post('/auth/dev-login', data),
@@ -28,7 +46,6 @@ export const campaignService = {
   update: (id, data) => api.put(`/campaign/${id}`, data),
   delete: (id) => api.delete(`/campaign/${id}`),
   saveTemplate: (id, data) => api.post(`/campaign/${id}/template`, data),
-  getRecipients: (id) => api.get(`/campaign/${id}/recipients`),
   getLists: (id) => api.get(`/campaign/${id}/lists`),
   getListMembers: (id, groupId) => api.get(`/campaign/${id}/lists/${groupId}/recipients`),
   retagList: (id, groupId, templateId) => api.put(`/campaign/${id}/lists/${groupId}/template`, { template_id: templateId }),
@@ -38,7 +55,6 @@ export const campaignService = {
 export const sequenceService = {
   getAll: (campaignId) => api.get(`/campaign/${campaignId}/sequence`),
   create: (campaignId, data) => api.post(`/campaign/${campaignId}/sequence`, data),
-  update: (stageId, data) => api.put(`/campaign/sequence/${stageId}`, data),
   delete: (stageId) => api.delete(`/campaign/sequence/${stageId}`),
 };
 
@@ -56,7 +72,6 @@ export const recipientService = {
   },
   create: (data) => api.post('/recipients', data),
   getAll: (params) => api.get('/recipients', { params }),
-  selectRecipients: (data) => api.post('/recipients/select-recipients', data),
   search: (params) => api.get('/recipients/search', { params }),
   searchIds: (params) => api.get('/recipients/search-ids', { params }),
   export: (params) => api.get('/recipients/export', { params, responseType: 'blob' }),
@@ -72,19 +87,15 @@ export const savedSearchService = {
 
 export const recipientGroupService = {
   getAll: (params) => api.get('/recipient-groups', { params }),
-  getById: (id) => api.get(`/recipient-groups/${id}`),
   create: (data) => api.post('/recipient-groups', data),
   update: (id, data) => api.put(`/recipient-groups/${id}`, data),
   delete: (id) => api.delete(`/recipient-groups/${id}`),
-  getMembers: (id, params) => api.get(`/recipient-groups/${id}/members`, { params }),
   addMembers: (id, recipientIds) => api.post(`/recipient-groups/${id}/members`, { recipient_ids: recipientIds }),
-  removeMember: (id, recipientId) => api.delete(`/recipient-groups/${id}/members/${recipientId}`),
 };
 
 export const templateService = {
   getPlaceholderTemplates: () => api.get('/templates/placeholder-templates'),
   generateAI: (data) => api.post('/templates/generate-ai-template', data),
-  preview: (data) => api.post('/templates/preview-template', data),
 };
 
 export const emailService = {
@@ -120,37 +131,14 @@ export const appSettingsService = {
 
 export const mailerService = {
   getAll: (params) => api.get('/mailers', { params }),
-  getById: (id) => api.get(`/mailers/${id}`),
   create: (data) => api.post('/mailers', data),
   update: (id, data) => api.put(`/mailers/${id}`, data),
   delete: (id) => api.delete(`/mailers/${id}`),
 };
 
-export const salesNavService = {
-  extract: (searchUrl) =>
-    api.post(
-      '/salesnav/extract',
-      { search_url: searchUrl },
-      { responseType: 'blob', timeout: 600_000 },
-    ),
-  extractProfile: (profileUrl) =>
-    api.post(
-      '/salesnav/extract-profile',
-      { profile_url: profileUrl },
-      { responseType: 'blob', timeout: 120_000 },
-    ),
-};
-
 export const linkedinProfileService = {
   extract: (url) =>
     api.post('/linkedin/extract', { url }, { timeout: 180_000 }).then((r) => r.data),
-  extractProfile: (url) =>
-    api.post('/linkedin/extract-profile', { url }, { timeout: 120_000 }).then((r) => r.data),
-  getJob: (jobId) => api.get(`/linkedin/jobs/${jobId}`).then((r) => r.data),
-  downloadExcel: (filename) =>
-    api.get(`/linkedin/download/${encodeURIComponent(filename)}`, {
-      responseType: 'blob',
-    }),
   bulkExtract: (file) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -160,25 +148,76 @@ export const linkedinProfileService = {
     }).then((r) => r.data);
   },
   getBulkJob: (jobId) => api.get(`/linkedin/bulk-jobs/${jobId}`).then((r) => r.data),
-  downloadBulkExcel: (filename) =>
-    api.get(`/linkedin/bulk-download/${encodeURIComponent(filename)}`, {
+  downloadBulkJob: (jobId) => downloadViaMeta(`/linkedin/bulk-jobs/${jobId}/download`, `bulk_${jobId}.xlsx`),
+  listBulkJobs: (params = {}) =>
+    api.get('/linkedin/bulk-jobs', { params }).then((r) => r.data),
+  listBulkJobItems: (jobId, params = {}) =>
+    api.get(`/linkedin/bulk-jobs/${jobId}/items`, { params }).then((r) => r.data),
+  getBulkConflicts: (jobId, params = {}) =>
+    api.get(`/linkedin/bulk-jobs/${jobId}/conflicts`, { params }).then((r) => r.data),
+  getBulkJobAudit: (jobId) =>
+    api.get(`/linkedin/bulk-jobs/${jobId}/audit`).then((r) => r.data),
+  resolveConflict: (jobId, itemId, decisions) =>
+    api
+      .post(`/linkedin/bulk-jobs/${jobId}/conflicts/${itemId}/resolve`, { decisions })
+      .then((r) => r.data),
+  bulkResolveConflicts: (jobId, payload) =>
+    api.post(`/linkedin/bulk-jobs/${jobId}/conflicts/bulk-resolve`, payload).then((r) => r.data),
+  createBulkBackup: (jobId) =>
+    api.post(`/linkedin/bulk-jobs/${jobId}/backup`).then((r) => r.data),
+  downloadBulkJobBackup: (jobId) =>
+    api.get(`/linkedin/bulk-jobs/${jobId}/backup/download`, {
       responseType: 'blob',
       timeout: 120_000,
     }),
-  downloadBulkJob: (jobId) =>
-    api.get(`/linkedin/bulk-jobs/${jobId}/download`, {
+  listBulkBackups: () => api.get('/linkedin/bulk-backups').then((r) => r.data),
+  downloadBackup: (backupId) =>
+    api.get(`/linkedin/bulk-backups/${backupId}/download`, {
       responseType: 'blob',
       timeout: 120_000,
     }),
-  getBulkJobResults: (jobId, limit = 25) =>
-    api.get(`/linkedin/bulk-jobs/${jobId}/results`, { params: { limit } }).then((r) => r.data),
+  restoreBulkBackup: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api
+      .post('/linkedin/bulk-backups/restore', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120_000,
+      })
+      .then((r) => r.data);
+  },
 };
 
-/** Apify-only LeadSense Profile Extractor (jobs + cache + Excel). */
-export const profileExtractorService = {
-  extract: (url) =>
-    api.post('/v1/profile/extract', { url }, { timeout: 30_000 }).then((r) => r.data),
-  getJob: (jobId) => api.get(`/v1/profile/${jobId}`).then((r) => r.data),
-  download: (jobId) =>
-    api.get(`/v1/profile/${jobId}/download`, { responseType: 'blob', timeout: 60_000 }),
+export const icpService = {
+  list: (params = {}) => api.get('/icp', { params }).then((r) => r.data),
+  get: (id) => api.get(`/icp/${id}`).then((r) => r.data),
+  create: (payload) => api.post('/icp', payload).then((r) => r.data),
+  update: (id, payload) => api.put(`/icp/${id}`, payload).then((r) => r.data),
+  remove: (id) => api.delete(`/icp/${id}`).then((r) => r.data),
+};
+
+export const offeringsService = {
+  list: (params = {}) => api.get('/offerings', { params }).then((r) => r.data),
+  get: (id) => api.get(`/offerings/${id}`).then((r) => r.data),
+  create: (payload) => api.post('/offerings', payload).then((r) => r.data),
+  update: (id, payload) => api.put(`/offerings/${id}`, payload).then((r) => r.data),
+  remove: (id) => api.delete(`/offerings/${id}`).then((r) => r.data),
+  generateIcp: (description) =>
+    api.post('/offerings/generate-icp', { description }, { timeout: 120_000 }).then((r) => r.data),
+  stats: (id) => api.get(`/offerings/${id}/stats`).then((r) => r.data),
+  startMatch: (id, force = false, verifiedOnly = true) =>
+    api.post(`/offerings/${id}/match`, null, { params: { force, verified_only: verifiedOnly } }).then((r) => r.data),
+  matchingStatus: (id) => api.get(`/offerings/${id}/matching-status`).then((r) => r.data),
+  listMatches: (id, params = {}) =>
+    api.get(`/offerings/${id}/matches`, { params }).then((r) => r.data),
+  approveMatch: (id, matchId) =>
+    api.post(`/offerings/${id}/matches/${matchId}/approve`).then((r) => r.data),
+  rejectMatch: (id, matchId) =>
+    api.post(`/offerings/${id}/matches/${matchId}/reject`).then((r) => r.data),
+  matchesForIcp: (icpRecordId, params = {}) =>
+    api.get(`/offerings/by-icp/${icpRecordId}`, { params }).then((r) => r.data),
+  feedback: (matchId, action) =>
+    api.post(`/offerings/matches/${matchId}/feedback`, { action }).then((r) => r.data),
+  prepareCampaignRecipients: (id, payload) =>
+    api.post(`/offerings/${id}/prepare-campaign-recipients`, payload).then((r) => r.data),
 };

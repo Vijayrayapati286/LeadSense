@@ -16,6 +16,8 @@ os.environ.setdefault("BULK_RETRY_BASE_DELAY_SECONDS", "0")
 os.environ.setdefault("APIFY_MAX_RETRIES", "5")
 os.environ.setdefault("USE_MOCK_SES", "true")
 os.environ.setdefault("USE_MOCK_GROQ", "true")
+os.environ.setdefault("USE_MOCK_S3", "true")
+os.environ.setdefault("S3_BUCKET_NAME", "test-bucket")
 
 try:
     _TEST_DB.unlink(missing_ok=True)

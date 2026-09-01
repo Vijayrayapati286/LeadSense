@@ -148,12 +148,26 @@ class BulkBatchRunner:
                 logger.error("[JOB-%s] Job not found", job_id)
                 return
             job.status = "running"
+            if getattr(job, "started_at", None) is None:
+                job.started_at = datetime.now(timezone.utc)
             job.phase = PHASE_EXTRACTING
             job.excel_finalized = False
             job.updated_at = datetime.now(timezone.utc)
             recover_stale_processing(
                 db, job_id, self.settings.bulk_stale_processing_seconds, force=True
             )
+            copy_canonical_results_to_duplicates(db, job_id)
+            from app.icp.service import skip_job_items_already_in_icp
+
+            icp_skipped = skip_job_items_already_in_icp(
+                db, job_id, user_id=getattr(job, "user_id", None)
+            )
+            if icp_skipped:
+                logger.info(
+                    "[JOB-%s] Skipped %s URL(s) already in ICP Database",
+                    job_id,
+                    icp_skipped,
+                )
             copy_canonical_results_to_duplicates(db, job_id)
             refresh_job_counters(db, job)
             cfg_error = self._missing_apify_config()
@@ -501,6 +515,19 @@ class BulkBatchRunner:
             verification.status,
             verification.score,
         )
+        try:
+            from app.icp.service import sync_icp_if_eligible
+            from app.linkedin.bulk_jobs import get_job_row
+
+            job = get_job_row(db, item.job_id)
+            sync_icp_if_eligible(db, item, user_id=getattr(job, "user_id", None) if job else None)
+        except Exception:
+            # Do not fail the extraction batch if ICP sync fails; resolve/retry can repair.
+            logger.exception(
+                "[JOB-%s] [URL-%s] ICP sync failed after auto-verify (extraction kept)",
+                item.job_id,
+                item.id,
+            )
 
     def _mark_failure(
         self,
@@ -549,19 +576,27 @@ class BulkBatchRunner:
             .order_by(BulkJobItemRow.source_row_number.asc())
             .all()
         )
-        _, _filename, relative = self.excel.build_result_workbook_from_items(
+        content, filename, relative = self.excel.build_result_workbook_from_items(
             job_id=job.id,
             items=items,
             input_columns=list(job.input_columns or []),
         )
         job.result_file_path = relative
+        try:
+            from app.linkedin.s3_persist import persist_verified_excel
 
+            persist_verified_excel(db, job=job, content=content, filename=filename)
+        except Exception:
+            logger.exception("S3 persist after excel write failed job_id=%s", job.id)
     def _finalize_job(self, db, job) -> None:
         copy_canonical_results_to_duplicates(db, job.id)
         refresh_job_counters(db, job)
         self._write_excel(db, job)
         job.status = "done"
-        job.phase = "completed"
+        if (getattr(job, "needs_review_count", 0) or 0) > 0:
+            job.phase = "review"
+        else:
+            job.phase = "completed"
         job.excel_finalized = True
         job.completed_at = datetime.now(timezone.utc)
         job.error = None

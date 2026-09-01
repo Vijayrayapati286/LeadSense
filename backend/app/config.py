@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
+    # S3 file storage (binaries). Leave USE_MOCK_S3=true for local/dev without AWS.
+    # Production: set S3_BUCKET_NAME + USE_MOCK_S3=false; prefer IAM role over long-lived keys.
+    s3_bucket_name: str = Field("", validation_alias="S3_BUCKET_NAME")
+    use_mock_s3: bool = Field(True, validation_alias="USE_MOCK_S3")
+    s3_presign_expires_seconds: int = Field(3600, validation_alias="S3_PRESIGN_EXPIRES_SECONDS")
+    max_upload_file_bytes: int = Field(26_214_400, validation_alias="MAX_UPLOAD_FILE_BYTES")  # 25 MiB
     aws_ses_sender_email: str = "noreply@example.com"
     # Domain used for the personalized From address (local part swapped for
     # the sending rep's, e.g. vijay.rayapati@mail.feuji.com) — see

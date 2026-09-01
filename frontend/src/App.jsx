@@ -12,8 +12,15 @@ import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
 import SettingsPage from './pages/SettingsPage';
 import BlacklistPage from './pages/BlacklistPage';
-import SalesNavExtractPage from './pages/SalesNavExtractPage';
 import LinkedInProfileExtractorPage from './pages/LinkedInProfileExtractorPage';
+import BulkHistoryPage from './pages/BulkHistoryPage';
+import BulkJobDetailPage from './pages/BulkJobDetailPage';
+import BulkNeedsReviewPage from './pages/BulkNeedsReviewPage';
+import BulkBackupsPage from './pages/BulkBackupsPage';
+import IcpDatabasePage from './pages/IcpDatabasePage';
+import OfferingsPage from './pages/OfferingsPage';
+import OfferingCreatePage from './pages/OfferingCreatePage';
+import OfferingDetailPage from './pages/OfferingDetailPage';
 
 export default function App() {
   return (
@@ -34,8 +41,17 @@ export default function App() {
           <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/logs" element={<EmailLogsPage />} />
-          <Route path="/salesnav" element={<SalesNavExtractPage />} />
+          <Route path="/salesnav" element={<Navigate to="/linkedin-extractor" replace />} />
           <Route path="/linkedin-extractor" element={<LinkedInProfileExtractorPage />} />
+          <Route path="/linkedin-history" element={<BulkHistoryPage />} />
+          <Route path="/linkedin-history/:jobId" element={<BulkJobDetailPage />} />
+          <Route path="/linkedin-needs-review" element={<BulkNeedsReviewPage />} />
+          <Route path="/linkedin-backups" element={<BulkBackupsPage />} />
+          <Route path="/icp-database" element={<IcpDatabasePage />} />
+          <Route path="/offerings" element={<OfferingsPage />} />
+          <Route path="/offerings/new" element={<OfferingCreatePage />} />
+          <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />
+          <Route path="/offerings/:id" element={<OfferingDetailPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>

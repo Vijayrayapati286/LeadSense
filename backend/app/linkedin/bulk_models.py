@@ -28,7 +28,12 @@ JOB_FAILED = "failed"
 PHASE_UPLOADING = "uploading"
 PHASE_EXTRACTING = "extracting"
 PHASE_COMPARING = "comparing"
+PHASE_REVIEW = "review"
 PHASE_COMPLETED = "completed"
+
+BACKUP_NONE = "none"
+BACKUP_READY = "ready"
+BACKUP_FAILED = "failed"
 
 
 class BulkExtractJobRow(Base):
@@ -46,8 +51,12 @@ class BulkExtractJobRow(Base):
     verified_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     mismatch_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    needs_review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resolved_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     phase: Mapped[str] = mapped_column(String(32), nullable=False, default=PHASE_UPLOADING)
     excel_finalized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    backup_status: Mapped[str] = mapped_column(String(32), nullable=False, default=BACKUP_NONE)
+    backup_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=JOB_PENDING, index=True)
     result_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -55,10 +64,16 @@ class BulkExtractJobRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     items: Mapped[list["BulkJobItemRow"]] = relationship(
         "BulkJobItemRow",
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
+    backups: Mapped[list["BulkBackupRow"]] = relationship(
+        "BulkBackupRow",
         back_populates="job",
         cascade="all, delete-orphan",
     )
@@ -108,7 +123,16 @@ class BulkJobItemRow(Base):
     designation_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     company_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     location_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    company_location_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     verification_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolved_designation: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolved_company: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolved_location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolved_company_location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolution_summary: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resolved_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -118,6 +142,11 @@ class BulkJobItemRow(Base):
     job: Mapped["BulkExtractJobRow"] = relationship("BulkExtractJobRow", back_populates="items")
     attempts: Mapped[list["ExtractionAttemptRow"]] = relationship(
         "ExtractionAttemptRow",
+        back_populates="job_item",
+        cascade="all, delete-orphan",
+    )
+    resolutions: Mapped[list["ConflictResolutionRow"]] = relationship(
+        "ConflictResolutionRow",
         back_populates="job_item",
         cascade="all, delete-orphan",
     )
@@ -142,3 +171,49 @@ class ExtractionAttemptRow(Base):
     apify_run_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     job_item: Mapped["BulkJobItemRow"] = relationship("BulkJobItemRow", back_populates="attempts")
+
+
+class ConflictResolutionRow(Base):
+    __tablename__ = "linkedin_bulk_conflict_resolutions"
+    __table_args__ = (Index("ix_bulk_conflict_item_field", "job_item_id", "field"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("linkedin_bulk_job_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    field: Mapped[str] = mapped_column(String(64), nullable=False)
+    uploaded_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution: Mapped[str] = mapped_column(String(32), nullable=False)
+    resolved_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resolved_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resolved_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    job_item: Mapped["BulkJobItemRow"] = relationship("BulkJobItemRow", back_populates="resolutions")
+
+
+class BulkBackupRow(Base):
+    __tablename__ = "linkedin_bulk_backups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("linkedin_bulk_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    backup_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    job: Mapped["BulkExtractJobRow"] = relationship("BulkExtractJobRow", back_populates="backups")
