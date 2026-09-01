@@ -9,6 +9,10 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database.connection import init_db
+from app.icp import router as icp_router
+from app.linkedin import router as linkedin_router
+from app.offerings import router as offerings_router
+from app.profile_extractor import router as profile_extractor_router
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 from app.routers import (
     app_settings,
@@ -22,6 +26,7 @@ from app.routers import (
     mailers,
     recipient_groups,
     recipients,
+    salesnav,
     tags,
     templates,
     users,
@@ -41,6 +46,18 @@ async def lifespan(app: FastAPI):
     logger.info("Starting %s", settings.app_name)
     init_db()
     logger.info("Database initialized with seed data")
+    try:
+        from app.linkedin.bulk_service import resume_incomplete_bulk_jobs
+
+        resume_incomplete_bulk_jobs()
+    except Exception:
+        logger.exception("Failed to resume incomplete LinkedIn bulk jobs")
+    try:
+        from app.offerings.match_batch_runner import resume_incomplete_match_jobs
+
+        resume_incomplete_match_jobs()
+    except Exception:
+        logger.exception("Failed to resume incomplete offering match jobs")
     start_scheduler()
     yield
     stop_scheduler()
@@ -89,6 +106,17 @@ app.include_router(webhooks.router, prefix=API_PREFIX)
 app.include_router(app_settings.router, prefix=API_PREFIX)
 app.include_router(custom_fields.router, prefix=API_PREFIX)
 app.include_router(users.router, prefix=API_PREFIX)
+app.include_router(salesnav.router, prefix=API_PREFIX)
+app.include_router(linkedin_router, prefix=API_PREFIX)
+app.include_router(profile_extractor_router, prefix=API_PREFIX)
+app.include_router(icp_router, prefix=API_PREFIX)
+app.include_router(offerings_router, prefix=API_PREFIX)
+
+from app.storage.routes import batches_router as storage_batches_router
+from app.storage.routes import router as storage_files_router
+
+app.include_router(storage_files_router, prefix=API_PREFIX)
+app.include_router(storage_batches_router, prefix=API_PREFIX)
 
 
 @app.get("/")

@@ -31,6 +31,7 @@ import {
   mailerService,
   emailService,
   customFieldService,
+  logService,
 } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import { useContactSearch } from '../hooks/useContactSearch';
@@ -42,6 +43,7 @@ import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import SlideOver from '../components/ui/SlideOver';
 import UploadErrorModal from '../components/ui/UploadErrorModal';
 import EmailPreview from '../components/EmailPreview';
 import FilterBuilder from '../components/FilterBuilder';
@@ -120,6 +122,10 @@ export default function CampaignDetailPage() {
   const [scheduleAt, setScheduleAt] = useState('');
   const [useRecipientTz, setUseRecipientTz] = useState(false);
   const [sending, setSending] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLogs, setHistoryLogs] = useState([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const [stages, setStages] = useState([]);
   const [stageLoading, setStageLoading] = useState(false);
@@ -145,6 +151,32 @@ export default function CampaignDetailPage() {
   useEffect(() => {
     loadCampaign();
   }, [loadCampaign]);
+
+  useEffect(() => {
+    if (!historyOpen) return undefined;
+    let cancelled = false;
+    (async () => {
+      setHistoryLoading(true);
+      try {
+        const { data } = await logService.getAll({
+          campaign_id: id,
+          page: 1,
+          page_size: 50,
+        });
+        if (!cancelled) {
+          setHistoryLogs(data.items || []);
+          setHistoryTotal(data.total || 0);
+        }
+      } catch {
+        if (!cancelled) toast.error('Failed to load campaign history');
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [historyOpen, id, toast]);
 
   const loadTemplates = useCallback(async () => {
     try {
@@ -892,6 +924,9 @@ export default function CampaignDetailPage() {
           <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="btn-secondary flex items-center gap-2">
             <FiEdit2 size={16} /> Edit Campaign
           </button>
+          <button type="button" onClick={() => setHistoryOpen(true)} className="btn-secondary flex items-center gap-2">
+            <FiClock size={16} /> History
+          </button>
           <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
             <FiSend size={16} /> Send Campaign
             {activeSelectedIds.length > 0 && (
@@ -1280,7 +1315,7 @@ export default function CampaignDetailPage() {
                     </div>
                   ) : results.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 mt-3">
-                      No prospects found. Upload prospects from the Prospects page or adjust your filters.
+                      No prospects found. Upload prospects above or adjust your filters.
                     </div>
                   ) : (
                     <>
@@ -1947,6 +1982,70 @@ export default function CampaignDetailPage() {
         message={`Delete "${deletingList?.name}"? Prospects stay in the system — this only removes the list.`}
         confirmText="Delete"
       />
+
+      <SlideOver
+        isOpen={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        title="Campaign history"
+        subtitle={`${campaign.campaign_name} · ${campaign.campaign_id}`}
+        width="lg"
+      >
+        <div className="space-y-5">
+          <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 space-y-3 text-sm">
+            <div className="flex justify-between gap-3">
+              <span className="text-gray-500">Created</span>
+              <span className="font-medium text-gray-900">{formatDateTime(campaign.created_at)}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-gray-500">Scheduled</span>
+              <span className="font-medium text-gray-900">
+                {campaign.scheduled_at ? formatDateTime(campaign.scheduled_at) : 'Not scheduled'}
+              </span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-gray-500">Emails sent</span>
+              <span className="font-medium text-gray-900">{campaign.emails_sent}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-gray-500">Status</span>
+              <StatusBadge status={campaign.status} />
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+              Send activity ({historyTotal})
+            </p>
+            {historyLoading ? (
+              <div className="py-10 flex justify-center">
+                <LoadingSpinner />
+              </div>
+            ) : historyLogs.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-8">No sends recorded for this campaign yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {historyLogs.map((log) => (
+                  <div key={log.id} className="rounded-lg border border-gray-100 px-3 py-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {log.recipient_name || `Prospect #${log.recipient_id}`}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">{log.recipient_email}</p>
+                      </div>
+                      <StatusBadge status={log.status} />
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">{formatDateTime(log.sent_at)}</p>
+                    {log.error_message ? (
+                      <p className="text-xs text-red-600 mt-1">{log.error_message}</p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </SlideOver>
     </div>
   );
 }

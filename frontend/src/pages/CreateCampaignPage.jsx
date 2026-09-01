@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { FiArrowLeft, FiArrowRight, FiCheck, FiSave, FiBookOpen } from 'react-icons/fi';
-import { campaignService, templateService, mailerService, customFieldService } from '../services/services';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { FiArrowLeft, FiArrowRight, FiCheck, FiFileText, FiSave, FiBookOpen, FiTarget } from 'react-icons/fi';
+import { campaignService, offeringsService, templateService, mailerService, customFieldService, userService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import { generateCampaignId, extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
@@ -10,18 +10,52 @@ import LoadingSpinner from '../components/ui/LoadingSpinner';
 import TemplateEditor from '../components/TemplateEditor';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Button from '../components/ui/Button';
+import CampaignWizardStepper from '../components/campaigns/CampaignWizardStepper';
+import CampaignFormFields from '../components/campaigns/CampaignFormFields';
 
-const TABS = [
-  { id: 'campaign', label: 'Campaign' },
-  { id: 'template', label: 'Template' },
-];
+const OFFERING_SEND_KEY = 'leadsense_offering_send_offer';
+
+function buildDefaultForm(user) {
+  return {
+    campaign_name: '',
+    campaign_id: generateCampaignId(),
+    description: '',
+    owner: user?.name || '',
+    department: user?.department || 'Sales',
+    target_audience: '',
+  };
+}
+
+function buildOfferingEmailDraft(offeringName, offeringDescription) {
+  const desc = offeringDescription?.trim() || 'our solution';
+  return {
+    subject: `Introducing ${offeringName}`,
+    body: `<p>Hi {{name}},</p><p>I wanted to reach out about <strong>${offeringName}</strong>.</p><p>${desc}</p><p>Would you be open to a quick conversation to see if this is a fit for {{company}}?</p>`,
+    closing: 'Best regards,',
+    cta: 'Book a call',
+  };
+}
+
+function readOfferingSendOffer(locationState) {
+  if (locationState?.offeringSendOffer) return locationState.offeringSendOffer;
+  try {
+    const raw = sessionStorage.getItem(OFFERING_SEND_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function CreateCampaignPage() {
   const { user } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams();
   const isEditMode = Boolean(id);
+  const offeringPrefillApplied = useRef(false);
+  const [offeringSendOffer, setOfferingSendOffer] = useState(null);
   const [activeTab, setActiveTab] = useState('campaign');
   const [loading, setLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -52,9 +86,50 @@ export default function CreateCampaignPage() {
   const [customFields, setCustomFields] = useState([]);
   const [unknownFields, setUnknownFields] = useState(null);
 
+  const [campaignSource, setCampaignSource] = useState('create');
+  const [offerings, setOfferings] = useState([]);
+  const [selectedOfferingId, setSelectedOfferingId] = useState('');
+  const [selectedSmartOpsId, setSelectedSmartOpsId] = useState('');
+  const [loadingSource, setLoadingSource] = useState(false);
+  const [users, setUsers] = useState([]);
+
   useEffect(() => {
     customFieldService.getAll().then(({ data }) => setCustomFields(data)).catch(() => {});
+    userService.getAll().then(({ data }) => setUsers(data)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (isEditMode) return;
+    offeringsService.list({ limit: 100 })
+      .then((data) => setOfferings(data.items || []))
+      .catch(() => {});
+  }, [isEditMode]);
+
+  useEffect(() => {
+    if (isEditMode || offeringPrefillApplied.current) return;
+    const payload = readOfferingSendOffer(location.state);
+    if (!payload?.offeringId) return;
+    const matchCount = payload.matchIds?.length || 0;
+    const icpCount = payload.icpRecordIds?.length || 0;
+    if (matchCount + icpCount === 0) return;
+
+    offeringPrefillApplied.current = true;
+    setOfferingSendOffer(payload);
+    setCampaignSource('offering');
+    setSelectedOfferingId(String(payload.offeringId));
+    setForm({
+      campaign_name: `Offer: ${payload.offeringName}`,
+      campaign_id: generateCampaignId(),
+      description: payload.offeringDescription || `Outreach for ${payload.offeringName}`,
+      owner: user?.name || '',
+      department: user?.department || 'Sales',
+      target_audience: `Selected prospects (${payload.prospectCount || matchCount + icpCount})`,
+    });
+    setEmailContent(buildOfferingEmailDraft(payload.offeringName, payload.offeringDescription));
+    setActiveTab('template');
+    toast.info(`${payload.prospectCount || matchCount + icpCount} prospect(s) ready — compose your offer email and create the campaign`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditMode, location.state]);
 
   useEffect(() => {
     const loadCampaignForEdit = async () => {
@@ -90,6 +165,66 @@ export default function CreateCampaignPage() {
   }, [id, isEditMode, toast, user?.department, user?.name]);
 
   const updateForm = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
+
+  const handleCampaignSourceChange = (source) => {
+    setCampaignSource(source);
+    setSelectedOfferingId('');
+    setSelectedSmartOpsId('');
+    if (source === 'create') {
+      setOfferingSendOffer(null);
+      sessionStorage.removeItem(OFFERING_SEND_KEY);
+      setForm(buildDefaultForm(user));
+      setEmailContent({ subject: '', body: '', closing: '', cta: '' });
+      setTemplateType('manual');
+    }
+  };
+
+  const handleOfferingSelect = async (offeringId) => {
+    setSelectedOfferingId(offeringId);
+    if (!offeringId) return;
+
+    setLoadingSource(true);
+    try {
+      const offering = await offeringsService.get(offeringId);
+      setOfferingSendOffer(null);
+      sessionStorage.removeItem(OFFERING_SEND_KEY);
+      setForm((prev) => ({
+        ...prev,
+        campaign_name: `Offer: ${offering.name}`,
+        description: offering.description || offering.short_description || `Outreach for ${offering.name}`,
+        target_audience: prev.target_audience || offering.target_industries?.join(', ') || '',
+      }));
+      setEmailContent(buildOfferingEmailDraft(offering.name, offering.description || offering.short_description));
+      toast.success(`Loaded offering "${offering.name}"`);
+    } catch {
+      toast.error('Failed to load offering');
+      setSelectedOfferingId('');
+    } finally {
+      setLoadingSource(false);
+    }
+  };
+
+  const handleSmartOpsSelect = (mailerId) => {
+    setSelectedSmartOpsId(mailerId);
+    if (!mailerId) return;
+
+    const mailer = mailers.find((m) => String(m.id) === mailerId);
+    if (!mailer) return;
+
+    setTemplateType(mailer.type);
+    setEmailContent({
+      subject: mailer.subject,
+      body: mailer.type === 'manual' ? ensureManualBodyIsHtml(mailer.body) : mailer.body,
+      closing: mailer.closing || '',
+      cta: mailer.cta || '',
+    });
+    setForm((prev) => ({
+      ...prev,
+      campaign_name: prev.campaign_name || mailer.name,
+      description: prev.description || `Campaign from Smart Ops mailer: ${mailer.name}`,
+    }));
+    toast.success(`Loaded Smart Ops mailer "${mailer.name}"`);
+  };
 
   const loadPlaceholderTemplates = async () => {
     if (placeholderTemplates.length > 0) return;
@@ -206,6 +341,11 @@ export default function CreateCampaignPage() {
 
     const hasSubject = emailContent.subject.trim().length > 0;
     const hasBody = !isTemplateBodyEmpty(emailContent.body, templateType);
+    if (offeringSendOffer && (!hasSubject || !hasBody)) {
+      toast.error('Subject and body are required to send an offer');
+      setActiveTab('template');
+      return;
+    }
     if (hasSubject !== hasBody) {
       toast.error('Complete both Subject and Body for the template, or leave both empty');
       setActiveTab('template');
@@ -272,8 +412,33 @@ export default function CreateCampaignPage() {
         });
       }
 
+      let preselectedContactIds = null;
+      if (offeringSendOffer && ((offeringSendOffer.matchIds?.length || 0) + (offeringSendOffer.icpRecordIds?.length || 0) > 0)) {
+        const result = await offeringsService.prepareCampaignRecipients(offeringSendOffer.offeringId, {
+          match_ids: offeringSendOffer.matchIds || [],
+          icp_record_ids: offeringSendOffer.icpRecordIds || [],
+          campaign_id: newCampaignId,
+          group_name: offeringSendOffer.offeringName,
+        });
+        preselectedContactIds = result.recipient_ids || [];
+        sessionStorage.removeItem(OFFERING_SEND_KEY);
+
+        if (result.skipped?.length) {
+          toast.warning(
+            `${result.skipped.length} candidate(s) skipped — no email on file. Add emails in your prospect sheet and try again.`,
+          );
+        }
+        if (preselectedContactIds.length) {
+          toast.success(`${preselectedContactIds.length} prospect(s) added to this campaign`);
+        } else if (!result.skipped?.length) {
+          toast.warning('No prospects could be added — check that selected candidates have email addresses');
+        }
+      }
+
       toast.success(isEditMode ? 'Campaign updated' : 'Campaign created');
-      navigate(`/campaigns/${newCampaignId}`);
+      navigate(`/campaigns/${newCampaignId}`, {
+        state: preselectedContactIds?.length ? { preselectedContactIds } : undefined,
+      });
     } catch (err) {
       const detail = err.response?.data?.detail;
       const message = typeof detail === 'string' && detail
@@ -287,85 +452,95 @@ export default function CreateCampaignPage() {
     }
   };
 
+  const wizardStep = activeTab === 'campaign' ? 'campaign' : 'template';
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
+    <div className="max-w-5xl mx-auto space-y-8 animate-fade-in pb-10">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">{isEditMode ? 'Edit Campaign' : 'Create Campaign'}</h1>
-          <p className="text-gray-500 mt-1">Step {activeTab === 'campaign' ? '1' : '2'} of 2</p>
+          <h1 className="text-2xl font-bold text-slate-900">{isEditMode ? 'Edit Campaign' : 'Create Campaign'}</h1>
+          <p className="text-slate-500 mt-1 text-sm">
+            {isEditMode ? 'Update your campaign details and email template' : 'Set up your outreach campaign in a few steps'}
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {activeTab === 'campaign' ? (
-            <button onClick={() => navigate('/campaigns')} className="btn-secondary flex items-center gap-2">
-              <FiArrowLeft size={16} /> Cancel
-            </button>
-          ) : (
-            <button onClick={() => setActiveTab('campaign')} className="btn-secondary flex items-center gap-2">
-              <FiArrowLeft size={16} /> Back
-            </button>
-          )}
-        </div>
+        {activeTab === 'campaign' ? (
+          <button onClick={() => navigate('/campaigns')} className="btn-secondary flex items-center gap-2">
+            <FiArrowLeft size={16} /> Cancel
+          </button>
+        ) : (
+          <button onClick={() => setActiveTab('campaign')} className="btn-secondary flex items-center gap-2">
+            <FiArrowLeft size={16} /> Back
+          </button>
+        )}
       </div>
 
-      {/* Tabs — same pattern as the campaign detail page: freely switchable, no locking */}
-      <div className="border-b border-gray-200">
-        <nav className="flex gap-6">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === tab.id
-                  ? 'border-primary-600 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </div>
+      <CampaignWizardStepper activeStep={wizardStep} />
 
-      <div className="card">
+      {offeringSendOffer ? (
+        <div className="rounded-xl border border-primary-200 bg-primary-50 px-4 py-3 text-sm text-primary-900">
+          Sending offer for <strong>{offeringSendOffer.offeringName}</strong> to{' '}
+          <strong>{offeringSendOffer.prospectCount || (offeringSendOffer.matchIds?.length || 0) + (offeringSendOffer.icpRecordIds?.length || 0)}</strong>{' '}
+          selected prospect
+          {(offeringSendOffer.prospectCount || 0) === 1 ? '' : 's'}
+          {offeringSendOffer.icpRecordIds?.length ? (
+            <> ({offeringSendOffer.icpRecordIds.length} from ICP database)</>
+          ) : null}
+          . Compose your template, then create the campaign to preview and send.
+        </div>
+      ) : null}
+
+      <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-6 sm:p-8 shadow-card">
+        <div className="pointer-events-none absolute -right-8 -top-8 hidden sm:block">
+          <div className="flex h-32 w-32 items-center justify-center rounded-2xl border border-slate-100 bg-slate-50/80 rotate-12">
+            <FiTarget size={48} className="text-primary-200" />
+          </div>
+        </div>
+
         {activeTab === 'campaign' && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold">Campaign Information</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="label">Campaign Name *</label>
-                <input className="input-field" value={form.campaign_name} onChange={(e) => updateForm('campaign_name', e.target.value)} placeholder="Q1 Product Launch" />
+          <div className="relative space-y-6">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-100 text-primary-600">
+                <FiTarget size={22} />
               </div>
               <div>
-                <label className="label">Campaign ID *</label>
-                <input className="input-field font-mono text-sm" value={form.campaign_id} onChange={(e) => updateForm('campaign_id', e.target.value)} />
-              </div>
-              <div className="md:col-span-2">
-                <label className="label">Description</label>
-                <textarea className="input-field" rows={3} value={form.description} onChange={(e) => updateForm('description', e.target.value)} placeholder="Describe the campaign purpose..." />
-              </div>
-              <div>
-                <label className="label">Owner</label>
-                <input className="input-field" value={form.owner} onChange={(e) => updateForm('owner', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Department</label>
-                <input className="input-field" value={form.department} onChange={(e) => updateForm('department', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Target Audience</label>
-                <input className="input-field" value={form.target_audience} onChange={(e) => updateForm('target_audience', e.target.value)} placeholder="B2B Decision Makers" />
+                <h2 className="text-xl font-bold text-slate-900">Campaign Information</h2>
+                <p className="text-sm text-slate-500 mt-0.5">Provide the basic details about your campaign.</p>
               </div>
             </div>
+
+            <CampaignFormFields
+              form={form}
+              updateForm={updateForm}
+              isEditMode={isEditMode}
+              campaignSource={campaignSource}
+              onCampaignSourceChange={handleCampaignSourceChange}
+              offerings={offerings}
+              mailers={mailers}
+              selectedOfferingId={selectedOfferingId}
+              selectedSmartOpsId={selectedSmartOpsId}
+              onOfferingSelect={handleOfferingSelect}
+              onSmartOpsSelect={handleSmartOpsSelect}
+              loadingSource={loadingSource}
+              users={users}
+            />
           </div>
         )}
 
         {activeTab === 'template' && (
-          <div className="space-y-6">
+          <div className="relative space-y-6">
             <div className="flex items-start justify-between gap-4 flex-wrap">
-              <h2 className="text-lg font-semibold">Choose Email Template</h2>
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600">
+                  <FiFileText size={22} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">Email Template</h2>
+                  <p className="text-sm text-slate-500 mt-0.5">Compose or load the email your prospects will receive.</p>
+                </div>
+              </div>
               <div className="flex items-center gap-2">
                 <select
-                  className="input-field w-auto text-sm"
+                  className="campaign-field-select w-auto text-sm"
                   value=""
                   onChange={(e) => e.target.value && handleSelectMailer(e.target.value)}
                 >
@@ -402,18 +577,17 @@ export default function CreateCampaignPage() {
             />
           </div>
         )}
-
       </div>
 
       <div className="flex justify-end">
         {activeTab === 'campaign' ? (
-          <button onClick={handleNext} className="btn-primary flex items-center gap-2">
-            Next <FiArrowRight size={16} />
-          </button>
+          <Button onClick={handleNext} icon={FiArrowRight} iconPosition="right" size="lg">
+            Next
+          </Button>
         ) : (
-          <button onClick={handleSubmit} disabled={loading} className="btn-primary flex items-center gap-2">
-            {loading ? <LoadingSpinner size="sm" /> : <>{isEditMode ? 'Save Changes' : 'Create Campaign'} <FiCheck size={16} /></>}
-          </button>
+          <Button onClick={handleSubmit} disabled={loading} loading={loading} icon={FiCheck} size="lg">
+            {offeringSendOffer ? 'Create & Send Offer' : isEditMode ? 'Save Changes' : 'Create Campaign'}
+          </Button>
         )}
       </div>
 

@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# Playwright base image includes Chromium + OS deps for session validation.
+FROM mcr.microsoft.com/playwright/python:v1.49.1-jammy
 
 WORKDIR /app
 
@@ -11,9 +12,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN useradd --create-home --uid 1000 appuser \
-    && chown -R appuser:appuser /app
-USER appuser
+# Image already has uid 1000 (pwuser); reuse it instead of creating another.
+RUN mkdir -p /app/outputs/salesnav /app/app/linkedin/outputs /app/app/salesnav/outputs /app/app/profile_extractor/outputs \
+    && chown -R pwuser:pwuser /app
+USER pwuser
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 EXPOSE 8000
 
