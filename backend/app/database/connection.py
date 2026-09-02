@@ -267,7 +267,6 @@ def _ensure_offerings_recommendation_schema() -> None:
         if "icp_records" in tables:
             cols = {c["name"] for c in inspector.get_columns("icp_records")}
             icp_adds = {
-                "email": "VARCHAR(255)",
                 "embedding": json_type,
                 "embedding_model": "VARCHAR(100)",
             }
@@ -284,8 +283,6 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "embedding": json_type,
                 "embedding_model": "VARCHAR(100)",
                 "profile_text": "TEXT",
-                "vouchers": json_type,
-                "email_template": json_type,
             }
             for name, ddl in offering_adds.items():
                 if name not in cols:

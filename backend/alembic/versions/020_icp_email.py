@@ -4,10 +4,15 @@ Revision ID: 020
 Revises: 019
 Create Date: 2026-09-02 00:00:00.000000
 """
+import sys
+from pathlib import Path
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from column_utils import add_column_if_missing
 
 revision: str = "020"
 down_revision: Union[str, None] = "019"
@@ -16,7 +21,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("icp_records", sa.Column("email", sa.String(length=255), nullable=True))
+    add_column_if_missing(
+        "icp_records",
+        sa.Column("email", sa.String(length=255), nullable=True),
+    )
 
 
 def downgrade() -> None:
