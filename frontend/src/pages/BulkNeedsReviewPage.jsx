@@ -8,7 +8,6 @@ import { useToast } from '../hooks/useToast';
 import { linkedinProfileService } from '../services/services';
 import {
   EmptyState,
-  ExtractorNav,
   LoadingAnnouncement,
   MetricCard,
   SkeletonCards,
@@ -140,9 +139,7 @@ export default function BulkNeedsReviewPage() {
         eyebrow="Quality queue"
         title="Resolve exceptions with confidence"
         description="Review only the fields that changed, choose the trusted value, and keep a complete audit trail before records reach your ICP database."
-      >
-        <ExtractorNav />
-      </WorkspaceHeader>
+      />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <MetricCard label="Jobs in queue" value={jobs.length} hint="Require attention" tone="amber" icon={FiLayers} />

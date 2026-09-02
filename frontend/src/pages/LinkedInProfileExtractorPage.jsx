@@ -16,7 +16,8 @@ import { downloadBlob } from '../utils/helpers';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import GitDiffCompare, { buildDiff } from '../components/bulk/GitDiffCompare';
 import ExtractionReviewPanel from '../components/bulk/ExtractionReviewPanel';
-import { ExtractorNav, WorkspaceHeader } from '../components/ui/GrowthWorkspace';
+import { WorkspaceHeader } from '../components/ui/GrowthWorkspace';
+import WorkflowStepper from '../components/ui/WorkflowStepper';
 
 const PROFILE_STORE = 'leadsense.linkedin.savedProfiles';
 
@@ -58,17 +59,18 @@ function Field({ label, value }) {
   );
 }
 
-const STAGES = [
-  { id: 'uploading', label: 'Uploading' },
-  { id: 'extracting', label: 'Extracting' },
-  { id: 'comparing', label: 'Comparing' },
+const BULK_STEPS = [
+  { id: 'upload', label: 'Upload' },
+  { id: 'extract', label: 'Extract' },
   { id: 'review', label: 'Review' },
   { id: 'completed', label: 'Completed' },
 ];
 
-function stageIndex(phase) {
-  const idx = STAGES.findIndex((s) => s.id === phase);
-  return idx < 0 ? 0 : idx;
+function bulkStepFromPhase(phase, jobStatus) {
+  if (phase === 'completed' || jobStatus === 'done') return 'completed';
+  if (phase === 'review') return 'review';
+  if (phase === 'extracting' || phase === 'comparing') return 'extract';
+  return 'upload';
 }
 
 export default function LinkedInProfileExtractorPage() {
@@ -352,7 +354,7 @@ export default function LinkedInProfileExtractorPage() {
   const bulkProgress =
     bulkJob && bulkJob.total ? Math.round((bulkProcessed / bulkJob.total) * 100) : 0;
   const phase = bulkJob?.phase || (bulkProcessing ? 'uploading' : 'uploading');
-  const activeStage = stageIndex(phase);
+  const bulkStep = bulkStepFromPhase(phase, bulkJob?.status);
   const showBulkProgress = bulkJob && (bulkProcessing || ['done', 'failed'].includes(bulkJob.status));
 
   return (
@@ -361,9 +363,7 @@ export default function LinkedInProfileExtractorPage() {
         eyebrow="Prospect intelligence"
         title={<>Turn profile links into clean, actionable records.</>}
         description="Extract one public profile or process an entire sheet. LeadSense compares every result, highlights meaningful changes, and keeps your ICP database trustworthy."
-      >
-        <ExtractorNav />
-      </WorkspaceHeader>
+      />
 
       <div className="surface-card min-h-[560px] overflow-hidden flex flex-col animate-rise-in">
         <div className="flex items-center justify-between gap-4 px-6 lg:px-8 pt-4 border-b border-slate-100 bg-slate-50/70">
@@ -476,6 +476,8 @@ export default function LinkedInProfileExtractorPage() {
       ) : (
         <div className="flex-1 flex flex-col p-6 sm:p-8 lg:p-10">
           <div className="flex-1 flex flex-col max-w-5xl w-full mx-auto space-y-6">
+          <WorkflowStepper steps={BULK_STEPS} activeStepId={bulkStep} />
+
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -488,8 +490,9 @@ export default function LinkedInProfileExtractorPage() {
               </div>
               <p className="mt-3 text-2xl font-semibold text-primary-700">Upload Excel or CSV</p>
               <p className="text-sm text-gray-500 mt-1 max-w-2xl">
-                Columns such as Name, LinkedIn URL, Designation, Company, Person Location, and Company Location are detected
-                automatically. Original rows are kept in the result file.
+                Columns such as First Name, Last Name, Email, Person LinkedIn URL, Title, Company Name, Industry, and
+                Location are detected automatically. Emails from your sheet are saved to Contacts on upload. Original rows
+                are kept in the result file.
               </p>
             </div>
           </div>
@@ -562,29 +565,6 @@ export default function LinkedInProfileExtractorPage() {
 
           {showBulkProgress && (
             <div className="space-y-5">
-              <ol className="grid grid-cols-2 sm:grid-cols-5 gap-2" aria-label="Extraction progress">
-                {STAGES.map((stage, idx) => {
-                  const done = idx < activeStage || phase === 'completed';
-                  const current = stage.id === phase || (phase === 'completed' && idx === 3);
-                  return (
-                    <li
-                      key={stage.id}
-                      aria-current={current ? 'step' : undefined}
-                      className={`rounded-xl px-3 py-2 text-center text-xs font-medium border ${
-                        current
-                          ? 'border-primary-500 bg-primary-50 text-primary-800'
-                          : done
-                            ? 'border-green-200 bg-green-50 text-green-800'
-                            : 'border-gray-100 bg-gray-50 text-gray-400'
-                      }`}
-                    >
-                      {done && !current ? '✓ ' : ''}
-                      {stage.label}
-                    </li>
-                  );
-                })}
-              </ol>
-
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="rounded-xl border border-gray-100 p-4">
                   <p className="text-xs uppercase tracking-wide text-gray-400">Extraction</p>

@@ -267,6 +267,7 @@ def _ensure_offerings_recommendation_schema() -> None:
         if "icp_records" in tables:
             cols = {c["name"] for c in inspector.get_columns("icp_records")}
             icp_adds = {
+                "email": "VARCHAR(255)",
                 "embedding": json_type,
                 "embedding_model": "VARCHAR(100)",
             }
@@ -283,6 +284,8 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "embedding": json_type,
                 "embedding_model": "VARCHAR(100)",
                 "profile_text": "TEXT",
+                "vouchers": json_type,
+                "email_template": json_type,
             }
             for name, ddl in offering_adds.items():
                 if name not in cols:
@@ -311,6 +314,33 @@ def _ensure_offerings_recommendation_schema() -> None:
             pass
 
 
+def _ensure_app_settings_schema() -> None:
+    """Patch app_settings columns for runtime preferences. create_all does not ALTER."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "app_settings" not in tables:
+        return
+
+    dialect = engine.dialect.name
+    bool_type = "BOOLEAN DEFAULT FALSE" if dialect != "sqlite" else "INTEGER DEFAULT 0"
+    cols = {c["name"] for c in inspector.get_columns("app_settings")}
+    adds = {
+        "business_hours_start": "INTEGER DEFAULT 9",
+        "business_hours_end": "INTEGER DEFAULT 18",
+        "default_page_size": "INTEGER DEFAULT 10",
+        "default_ai_tone": "VARCHAR(32) DEFAULT 'formal'",
+        "default_use_recipient_timezone": bool_type,
+    }
+
+    with engine.begin() as conn:
+        for name, ddl in adds.items():
+            if name not in cols:
+                conn.execute(text(f"ALTER TABLE app_settings ADD COLUMN {name} {ddl}"))
+                logger.info("Added app_settings.%s", name)
+
+
 def init_db() -> None:
     """Create all tables, seed dummy data if empty, and provision named users."""
     from app.models import Campaign, EmailLog, Recipient, Template, User
@@ -324,6 +354,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_linkedin_bulk_schema()
     _ensure_offerings_recommendation_schema()
+    _ensure_app_settings_schema()
 
     db = SessionLocal()
     try:

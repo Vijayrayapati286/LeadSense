@@ -7,6 +7,23 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class OfferingVoucherMeta(BaseModel):
+    file_id: int
+    filename: str
+    file_size: int = 0
+    mime_type: str | None = None
+    uploaded_at: str | None = None
+
+
+class OfferingEmailTemplateMeta(BaseModel):
+    name: str = "Introduction Outreach"
+    subject: str
+    body: str
+    source_filename: str | None = None
+    uploaded_at: str | None = None
+    source: str | None = None  # ai_generated | upload
+
+
 class OfferingCreate(BaseModel):
     name: str
     short_description: str | None = None
@@ -40,6 +57,8 @@ class OfferingCreate(BaseModel):
     exclusion_rules: list[str] | None = None
     positive_keywords: list[str] | None = None
     negative_keywords: list[str] | None = None
+    vouchers: list[OfferingVoucherMeta] | None = None
+    email_template: OfferingEmailTemplateMeta | None = None
     status: str | None = "active"
 
 
@@ -83,6 +102,8 @@ class OfferingResponse(BaseModel):
     exclusion_rules: list[Any] = Field(default_factory=list)
     positive_keywords: list[Any] = Field(default_factory=list)
     negative_keywords: list[Any] = Field(default_factory=list)
+    vouchers: list[OfferingVoucherMeta] = Field(default_factory=list)
+    email_template: OfferingEmailTemplateMeta | None = None
     status: str
     definition_version: int
     definition_hash: str | None = None
@@ -104,6 +125,41 @@ class OfferingListResponse(BaseModel):
 
 class GenerateIcpRequest(BaseModel):
     description: str = Field(..., min_length=10)
+
+
+class GenerateOfferingEmailRequest(BaseModel):
+    """Offering context used to generate outreach email variants."""
+
+    name: str = Field(..., min_length=1)
+    short_description: str | None = None
+    description: str | None = None
+    product_type: str | None = None
+    target_industries: list[str] = Field(default_factory=list)
+    target_job_titles: list[str] = Field(default_factory=list)
+    target_geographies: list[str] = Field(default_factory=list)
+    company_size_label: str | None = None
+    pain_points: list[str] = Field(default_factory=list)
+    use_cases: list[str] = Field(default_factory=list)
+    benefits: list[str] = Field(default_factory=list)
+    desired_outcomes: list[str] = Field(default_factory=list)
+    decision_maker_types: list[str] = Field(default_factory=list)
+    buying_roles: list[str] = Field(default_factory=list)
+    tone: str = "formal"
+    additional_context: str | None = None
+    count: int = Field(default=3, ge=2, le=3)
+
+
+class OfferingEmailVersion(BaseModel):
+    angle: str
+    subject: str
+    body: str
+    closing: str = ""
+    cta: str = ""
+
+
+class GenerateOfferingEmailResponse(BaseModel):
+    versions: list[OfferingEmailVersion]
+    is_mock: bool = False
 
 
 class CompanySizeHint(BaseModel):

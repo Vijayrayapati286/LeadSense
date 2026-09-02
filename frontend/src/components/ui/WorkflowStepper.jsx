@@ -1,16 +1,10 @@
-const STEPS = [
-  { id: 'campaign', label: 'Campaign Information' },
-  { id: 'template', label: 'Audience & Targeting' },
-  { id: 'review', label: 'Review & Launch' },
-];
-
-export default function CampaignWizardStepper({ activeStep }) {
-  const activeIndex = STEPS.findIndex((s) => s.id === activeStep);
+export default function WorkflowStepper({ steps, activeStepId }) {
+  const activeIndex = steps.findIndex((s) => s.id === activeStepId);
 
   return (
-    <nav aria-label="Campaign creation progress" className="w-full max-w-3xl mx-auto">
+    <nav aria-label="Progress" className="w-full max-w-3xl mx-auto">
       <ol className="flex">
-        {STEPS.map((step, index) => {
+        {steps.map((step, index) => {
           const isComplete = index < activeIndex;
           const isActive = index === activeIndex;
           const isUpcoming = index > activeIndex;
@@ -18,7 +12,7 @@ export default function CampaignWizardStepper({ activeStep }) {
           return (
             <li
               key={step.id}
-              className={`flex flex-col items-center ${index < STEPS.length - 1 ? 'flex-1' : 'shrink-0'}`}
+              className={`flex flex-col items-center ${index < steps.length - 1 ? 'flex-1' : 'shrink-0'}`}
             >
               <div className="flex w-full items-center">
                 <div
@@ -33,7 +27,7 @@ export default function CampaignWizardStepper({ activeStep }) {
                   {isComplete ? '✓' : index + 1}
                 </div>
 
-                {index < STEPS.length - 1 ? (
+                {index < steps.length - 1 ? (
                   <div
                     className={`mx-2 h-0.5 min-w-[1rem] flex-1 rounded-full sm:mx-3 ${
                       index < activeIndex ? 'bg-primary-300' : 'bg-slate-200'

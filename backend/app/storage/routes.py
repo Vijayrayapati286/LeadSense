@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from app.storage.file_service import (
     build_download_payload,
     get_file_for_user,
     list_batch_files,
+    store_offering_voucher_upload,
     store_original_upload,
 )
 from app.storage.models import (
@@ -89,6 +90,7 @@ def _stored_out(f: dict | StoredFileRow) -> StoredFileOut:
 async def upload_file(
     file: UploadFile = File(...),
     batch_id: str | None = None,
+    purpose: str | None = Query(None, description="Set to offering_voucher for PDF/PPT/Excel collateral"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -97,8 +99,9 @@ async def upload_file(
     filename = file.filename or "upload.xlsx"
     content = await file.read()
     bid = (batch_id or "").strip() or str(uuid.uuid4())
+    upload_fn = store_offering_voucher_upload if purpose == "offering_voucher" else store_original_upload
     try:
-        row = store_original_upload(
+        row = upload_fn(
             db,
             user_id=user_id,
             batch_id=bid,

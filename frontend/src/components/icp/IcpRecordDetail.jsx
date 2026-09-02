@@ -61,6 +61,7 @@ export default function IcpRecordDetail({ record, isOpen, onClose, onSaved, focu
     setEditing(false);
     setForm({
       name: record.name || '',
+      email: record.email || '',
       company_name: record.company_name || '',
       designation: record.designation || '',
       about: record.about || '',
@@ -239,6 +240,7 @@ export default function IcpRecordDetail({ record, isOpen, onClose, onSaved, focu
 
             <Section title="Person">
               <Field label="Name" value={record.name} />
+              <Field label="Email" value={record.email} />
               <Field label="Designation" value={record.designation} />
             </Section>
             <Section title="Company">
@@ -303,6 +305,7 @@ export default function IcpRecordDetail({ record, isOpen, onClose, onSaved, focu
           <div className="space-y-3">
             {[
               ['name', 'Name'],
+              ['email', 'Email'],
               ['company_name', 'Company'],
               ['designation', 'Designation'],
               ['industry', 'Industry'],

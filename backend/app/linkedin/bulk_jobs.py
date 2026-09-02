@@ -294,6 +294,12 @@ def create_job_with_items(
                 first_by_url[normalized] = item
 
         refresh_job_counters(db, job)
+        try:
+            from app.icp.service import sync_sheet_fields_for_job
+
+            sync_sheet_fields_for_job(db, job.id, user_id=user_id)
+        except Exception:
+            logger.exception("Sheet field sync failed for job=%s", job.id)
         db.commit()
         db.refresh(job)
         return job

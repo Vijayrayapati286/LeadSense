@@ -17,14 +17,16 @@ export default function MetricCard({
   const toneClass = METRIC_TONES[tone] || METRIC_TONES.blue;
 
   const body = (
-    <>
-      <div className={`mb-4 flex h-9 w-9 items-center justify-center rounded-xl ${toneClass}`}>
-        {Icon ? <Icon size={17} /> : null}
+    <div className="flex min-h-[64px] items-center justify-between gap-4">
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
+        <p className="mt-1 text-2xl font-bold tracking-tight text-slate-950">{value ?? 0}</p>
+        {note ? <p className="mt-0.5 truncate text-xs font-medium text-slate-500">{note}</p> : null}
       </div>
-      <p className="truncate text-caption text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-bold tracking-tight text-slate-950">{value ?? 0}</p>
-      {note ? <p className="mt-1 truncate text-micro font-medium text-slate-400">{note}</p> : null}
-    </>
+      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${toneClass}`}>
+        {Icon ? <Icon size={19} /> : null}
+      </div>
+    </div>
   );
 
   const classes = `stagger-item min-w-0 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card transition duration-200 ${

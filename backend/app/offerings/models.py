@@ -123,6 +123,8 @@ class OfferingRow(Base):
     embedding: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     profile_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vouchers: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    email_template: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=OFFERING_STATUS_ACTIVE)
     definition_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

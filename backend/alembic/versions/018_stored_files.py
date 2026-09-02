@@ -17,6 +17,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    timestamp_default = sa.text("(CURRENT_TIMESTAMP)") if bind.dialect.name == "sqlite" else sa.text("now()")
+
     op.create_table(
         "stored_files",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -31,8 +34,8 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=32), nullable=False, server_default="uploaded"),
         sa.Column("content_version", sa.String(length=128), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=timestamp_default, nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=timestamp_default, nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )

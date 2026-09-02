@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiPlus, FiSearch, FiTrash2 } from 'react-icons/fi';
+import { FiCheckCircle, FiMail, FiPackage, FiPlus, FiSearch, FiTrash2 } from 'react-icons/fi';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Pagination from '../components/ui/Pagination';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
 import SearchInput from '../components/ui/SearchInput';
+import SurfaceCard from '../components/ui/SurfaceCard';
+import { MetricCard } from '../components/ui/GrowthWorkspace';
 import { useToast } from '../hooks/useToast';
 import { offeringsService } from '../services/services';
 import { debounce } from '../utils/helpers';
@@ -73,32 +77,42 @@ export default function OfferingsPage() {
     }
   }
 
+  const activeCount = items.filter((item) => (item.status || '').toLowerCase() === 'active').length;
+  const withEmailCount = items.filter((item) => item.email_template?.subject && item.email_template?.body).length;
+
   return (
-    <div className="max-w-7xl mx-auto space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Offerings</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Define what you sell and match it against your ICP Database.
-          </p>
-        </div>
+    <PageShell maxWidth="max-w-[1440px]">
+      <PageHeader
+        eyebrow="Offering studio"
+        title="Offerings"
+        subtitle="Define what you sell and match it against your ICP Database."
+        actions={
         <button
           type="button"
           onClick={() => navigate('/offerings/new')}
-          className="inline-flex items-center gap-2 rounded-lg bg-primary-600 text-white px-4 py-2 text-sm font-medium hover:bg-primary-700"
+          className="btn-primary inline-flex items-center gap-2 shadow-lg shadow-primary-200/60"
         >
           <FiPlus size={16} /> Create Offering
         </button>
+        }
+      />
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricCard label="Total offerings" value={(total || 0).toLocaleString()} hint="In your workspace" icon={FiPackage} />
+        <MetricCard label="Active this page" value={activeCount} hint="Ready to match" tone="green" icon={FiCheckCircle} />
+        <MetricCard label="Email ready" value={withEmailCount} hint="With outreach template" tone="amber" icon={FiMail} />
       </div>
 
-      <SearchInput
-        value={searchInput}
-        placeholder="Search offerings..."
-        onChange={(val) => {
-          setSearchInput(val);
-          debouncedSearch(val);
-        }}
-      />
+      <SurfaceCard variant="filter">
+        <SearchInput
+          value={searchInput}
+          placeholder="Search offerings..."
+          onChange={(val) => {
+            setSearchInput(val);
+            debouncedSearch(val);
+          }}
+        />
+      </SurfaceCard>
 
       {loading ? (
         <div className="flex justify-center py-16">
@@ -195,6 +209,6 @@ export default function OfferingsPage() {
         message={`This will permanently remove "${deleteTarget?.name || 'this offering'}" and all its match data.`}
         confirmText={deleting ? 'Deleting…' : 'Delete offering'}
       />
-    </div>
+    </PageShell>
   );
 }

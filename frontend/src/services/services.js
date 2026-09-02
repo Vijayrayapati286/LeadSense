@@ -23,6 +23,7 @@ export const authService = {
   devLogin: (data) => api.post('/auth/dev-login', data),
   passwordLogin: (email, password) => api.post('/auth/login', { email, password }),
   getMe: () => api.get('/auth/me'),
+  updateMe: (data) => api.put('/auth/me', data),
   logout: () => api.post('/auth/logout'),
 };
 
@@ -94,7 +95,7 @@ export const recipientGroupService = {
 };
 
 export const templateService = {
-  getPlaceholderTemplates: () => api.get('/templates/placeholder-templates'),
+  getPlaceholderTemplates: (params = {}) => api.get('/templates/placeholder-templates', { params }).then((r) => r.data),
   generateAI: (data) => api.post('/templates/generate-ai-template', data),
 };
 
@@ -190,10 +191,29 @@ export const linkedinProfileService = {
 
 export const icpService = {
   list: (params = {}) => api.get('/icp', { params }).then((r) => r.data),
+  listAccounts: (params = {}) => api.get('/icp/accounts', { params }).then((r) => r.data),
   get: (id) => api.get(`/icp/${id}`).then((r) => r.data),
   create: (payload) => api.post('/icp', payload).then((r) => r.data),
   update: (id, payload) => api.put(`/icp/${id}`, payload).then((r) => r.data),
   remove: (id) => api.delete(`/icp/${id}`).then((r) => r.data),
+};
+
+export const filesService = {
+  uploadVoucher: (file, batchId) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const params = { purpose: 'offering_voucher' };
+    if (batchId) params.batch_id = batchId;
+    return api
+      .post('/files/upload', formData, {
+        params,
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120_000,
+      })
+      .then((r) => r.data);
+  },
+  downloadContent: (fileId) =>
+    api.get(`/files/${fileId}/content`, { responseType: 'blob', timeout: 120_000 }).then((r) => r.data),
 };
 
 export const offeringsService = {
@@ -201,9 +221,21 @@ export const offeringsService = {
   get: (id) => api.get(`/offerings/${id}`).then((r) => r.data),
   create: (payload) => api.post('/offerings', payload).then((r) => r.data),
   update: (id, payload) => api.put(`/offerings/${id}`, payload).then((r) => r.data),
+  parseEmailTemplate: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api
+      .post('/offerings/parse-email-template', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 60_000,
+      })
+      .then((r) => r.data);
+  },
   remove: (id) => api.delete(`/offerings/${id}`).then((r) => r.data),
   generateIcp: (description) =>
     api.post('/offerings/generate-icp', { description }, { timeout: 120_000 }).then((r) => r.data),
+  generateEmailTemplates: (payload) =>
+    api.post('/offerings/generate-email-templates', payload, { timeout: 120_000 }).then((r) => r.data),
   stats: (id) => api.get(`/offerings/${id}/stats`).then((r) => r.data),
   startMatch: (id, force = false, verifiedOnly = true) =>
     api.post(`/offerings/${id}/match`, null, { params: { force, verified_only: verifiedOnly } }).then((r) => r.data),

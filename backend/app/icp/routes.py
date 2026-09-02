@@ -8,12 +8,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
-from app.icp.schemas import IcpListResponse, IcpRecordCreate, IcpRecordResponse, IcpRecordUpdate
+from app.icp.schemas import (
+    IcpAccountListResponse,
+    IcpListResponse,
+    IcpRecordCreate,
+    IcpRecordResponse,
+    IcpRecordUpdate,
+)
 from app.icp.service import (
     count_icp_records,
     create_icp_record,
     delete_icp_record,
     get_icp_record,
+    list_accounts_summary,
     list_icp_records,
     serialize_icp,
     update_icp_record,
@@ -84,6 +91,27 @@ def list_icp(
         page_size=size,
     )
     return result
+
+
+@router.get("/accounts", response_model=IcpAccountListResponse)
+def list_accounts(
+    search: str = Query(""),
+    industry: str = Query(""),
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=500),
+    page_size: int | None = Query(None, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    size = page_size or limit
+    return list_accounts_summary(
+        db,
+        user_id=getattr(current_user, "id", None),
+        search=search or None,
+        industry=industry or None,
+        page=page,
+        page_size=size,
+    )
 
 
 @router.get("/count")

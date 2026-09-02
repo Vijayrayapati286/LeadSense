@@ -1,5 +1,7 @@
 /** Shared helpers for offering forms. */
 
+import { getDefaultAiTone } from '../../utils/workspaceDefaults';
+
 export const EMPTY_OFFERING = {
   name: '',
   short_description: '',
@@ -30,6 +32,8 @@ export const EMPTY_OFFERING = {
   exclusion_rules: [],
   positive_keywords: [],
   negative_keywords: [],
+  vouchers: [],
+  email_template: null,
 };
 
 export function listToText(value) {
@@ -44,6 +48,11 @@ export function textToList(value) {
     .split(/[\n,]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+function asList(value) {
+  if (Array.isArray(value)) return value;
+  return textToList(value);
 }
 
 export function applyGeneratedIcp(form, generated) {
@@ -114,12 +123,39 @@ export function formToPayload(form) {
     positive_keywords: asList(form.positive_keywords),
     negative_keywords: asList(form.negative_keywords),
     pricing_range: form.pricing_range?.trim() || null,
+    vouchers: Array.isArray(form.vouchers) ? form.vouchers : [],
+    email_template: form.email_template || null,
     status: form.status || 'active',
   };
 }
 
-function asList(value) {
-  return Array.isArray(value) ? value : textToList(value);
+export function offeringEmailTemplateName(offeringName, existingName) {
+  const stored = (existingName || '').trim();
+  if (stored && stored !== 'Introduction Outreach') return stored;
+  const base = (offeringName || '').trim();
+  return base ? `${base} — Outreach` : 'Introduction Outreach';
+}
+
+export function formToEmailContext(form) {
+  const asArr = (value) => (Array.isArray(value) ? value : textToList(value));
+  return {
+    name: form.name?.trim() || 'Untitled offering',
+    short_description: form.short_description?.trim() || null,
+    description: form.description?.trim() || null,
+    product_type: form.product_type?.trim() || null,
+    target_industries: asArr(form.target_industries),
+    target_job_titles: asArr(form.target_job_titles),
+    target_geographies: asArr(form.target_geographies),
+    company_size_label: form.company_size_label?.trim() || null,
+    pain_points: asArr(form.pain_points),
+    use_cases: asArr(form.use_cases),
+    benefits: asArr(form.benefits),
+    desired_outcomes: asArr(form.desired_outcomes),
+    decision_maker_types: asArr(form.decision_maker_types),
+    buying_roles: asArr(form.buying_roles),
+    tone: getDefaultAiTone(),
+    count: 3,
+  };
 }
 
 export function ListField({ label, value, onChange, hint }) {

@@ -16,6 +16,7 @@ from app.linkedin.validator import normalize_profile_url
 
 EXISTING_URL = "https://www.linkedin.com/in/existing-user/"
 NEW_URL = "https://www.linkedin.com/in/brand-new/"
+EMAIL_SYNC_URL = "https://www.linkedin.com/in/josh-hailey-b3392064/"
 
 
 @pytest.fixture(autouse=True)
@@ -38,13 +39,21 @@ def _wait_bulk_job(client, job_id: str, *, timeout_s: float = 15.0):
 def _seed_icp_with_linkedin(*, linkedin_url: str, name: str = "Existing User") -> int:
     db = SessionLocal()
     try:
+        normalized = normalize_profile_url(linkedin_url)
+        existing = (
+            db.query(IcpRecordRow)
+            .filter(IcpRecordRow.user_id == 1, IcpRecordRow.linkedin_url == normalized)
+            .first()
+        )
+        if existing:
+            return existing.id
         row = IcpRecordRow(
             user_id=1,
             name=name,
             company_name="Known Co",
             designation="Director",
             about="Already verified",
-            linkedin_url=normalize_profile_url(linkedin_url),
+            linkedin_url=normalized,
             location="Boston",
             verification_status="VERIFIED",
             verified_at=datetime.now(timezone.utc),
@@ -54,6 +63,120 @@ def _seed_icp_with_linkedin(*, linkedin_url: str, name: str = "Existing User") -
         db.commit()
         db.refresh(row)
         return row.id
+    finally:
+        db.close()
+
+
+def test_sheet_email_synced_on_upload(client, monkeypatch):
+    """Email column from spreadsheet is saved to ICP/Contacts immediately on upload."""
+    from app.linkedin import routes as linkedin_routes
+    from app.linkedin.apify_extractor import RichBatchOutcome
+
+    def mock_run_rich_batch(profile_urls):
+        return RichBatchOutcome(
+            results_by_url={
+                url: {
+                    "status": "ok",
+                    "data": {
+                        "name": "Josh Hailey",
+                        "headline": "VP",
+                        "company": "BankFirst Financial Services",
+                        "job_title": "VP, Director of Technology",
+                        "location": "Macon, Mississippi",
+                        "summary": "About",
+                        "followers": 10,
+                        "connections": 20,
+                        "profile_url": url,
+                    },
+                    "error": None,
+                }
+                for url in profile_urls
+            },
+            actor_run_id="mock-run",
+        )
+
+    monkeypatch.setattr(
+        linkedin_routes.bulk_extract_service._runner.apify,
+        "run_rich_batch",
+        mock_run_rich_batch,
+    )
+
+    buffer = io.BytesIO()
+    pd.DataFrame(
+        {
+            "FIRST NAME": ["Josh"],
+            "LAST NAME": ["Hailey"],
+            "EMAIL": ["jhailey@bankfirstfs.com"],
+            "TITLE": ["VP, Director of Technology"],
+            "COMPANY NAME": ["BankFirst Financial Services"],
+            "PERSON LINKEDIN URL": [EMAIL_SYNC_URL],
+            "INDUSTRY": ["banking"],
+        }
+    ).to_excel(buffer, index=False, engine="openpyxl")
+
+    resp = client.post(
+        "/api/linkedin/bulk-extract",
+        files={"file": ("contacts.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.sheet")},
+    )
+    assert resp.status_code == 200, resp.text
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(IcpRecordRow)
+            .filter(IcpRecordRow.linkedin_url == normalize_profile_url(EMAIL_SYNC_URL))
+            .first()
+        )
+        assert row is not None, "ICP record should be created from sheet on upload"
+        assert row.email == "jhailey@bankfirstfs.com"
+        assert row.name == "Josh Hailey"
+        assert row.company_name == "BankFirst Financial Services"
+        assert row.industry == "banking"
+    finally:
+        db.close()
+
+
+def test_sheet_email_updates_existing_icp_on_reupload(client, monkeypatch):
+    """Re-uploading a sheet with email updates an existing ICP record that had no email."""
+    from app.linkedin import routes as linkedin_routes
+    from app.linkedin.apify_extractor import RichBatchOutcome
+
+    _seed_icp_with_linkedin(linkedin_url=EXISTING_URL)
+
+    def mock_run_rich_batch(profile_urls):
+        return RichBatchOutcome(results_by_url={}, actor_run_id="mock-run")
+
+    monkeypatch.setattr(
+        linkedin_routes.bulk_extract_service._runner.apify,
+        "run_rich_batch",
+        mock_run_rich_batch,
+    )
+
+    buffer = io.BytesIO()
+    pd.DataFrame(
+        {
+            "FIRST NAME": ["Existing"],
+            "LAST NAME": ["User"],
+            "EMAIL": ["existing.user@example.com"],
+            "PERSON LINKEDIN URL": [EXISTING_URL],
+        }
+    ).to_excel(buffer, index=False, engine="openpyxl")
+
+    resp = client.post(
+        "/api/linkedin/bulk-extract",
+        files={"file": ("update.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.sheet")},
+    )
+    assert resp.status_code == 200, resp.text
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(IcpRecordRow)
+            .filter(IcpRecordRow.linkedin_url == normalize_profile_url(EXISTING_URL))
+            .first()
+        )
+        assert row is not None
+        assert row.email == "existing.user@example.com"
     finally:
         db.close()
 

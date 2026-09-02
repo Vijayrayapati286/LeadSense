@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { FiShield, FiRotateCcw } from 'react-icons/fi';
+import { FiFilter, FiMail, FiRotateCcw, FiShield } from 'react-icons/fi';
 import { blacklistService } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import SearchInput from '../components/ui/SearchInput';
@@ -7,6 +7,9 @@ import Pagination from '../components/ui/Pagination';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
+import { MetricCard } from '../components/ui/GrowthWorkspace';
 import { formatDateTime, debounce } from '../utils/helpers';
 
 export default function BlacklistPage() {
@@ -49,19 +52,20 @@ export default function BlacklistPage() {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <FiShield size={22} /> Blacklisted Emails
-        </h1>
-        <p className="text-gray-500 mt-1">
-          Addresses automatically suppressed after a permanent (hard) bounce, a complaint, or too many
-          temporary (soft) bounces in a row. Excluded from all future campaigns and follow-ups until an
-          admin explicitly overrides the entry below.
-        </p>
+    <PageShell maxWidth="max-w-[1440px]">
+      <PageHeader
+        eyebrow="Deliverability"
+        title="Blacklisted emails"
+        subtitle="Addresses suppressed after bounces or complaints. Override an entry only after resolving the delivery issue."
+      />
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricCard label="Suppressed emails" value={total} hint="Excluded from sends" tone="red" icon={FiShield} />
+        <MetricCard label="On this page" value={entries.length} hint="Current results" icon={FiMail} />
+        <MetricCard label="Filters applied" value={search ? 1 : 0} hint="Search criteria" tone="amber" icon={FiFilter} />
       </div>
 
-      <div className="card">
+      <div className="surface-card p-4">
         <SearchInput
           onChange={debouncedSearch}
           placeholder="Search by email or company..."
@@ -69,15 +73,15 @@ export default function BlacklistPage() {
         />
       </div>
 
-      <div className="card overflow-hidden p-0">
+      <div className="surface-card overflow-hidden">
         {loading ? (
           <div className="flex justify-center py-12"><LoadingSpinner size="lg" /></div>
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b">
-                  <tr className="text-left text-gray-500">
+              <table className="data-table min-w-[1050px]">
+                <thead className="sticky top-0 z-[1] border-b border-slate-200 bg-slate-50/95">
+                  <tr>
                     <th className="px-4 py-3 font-medium">Email</th>
                     <th className="px-4 py-3 font-medium">Company</th>
                     <th className="px-4 py-3 font-medium">Reason</th>
@@ -90,7 +94,7 @@ export default function BlacklistPage() {
                 </thead>
                 <tbody>
                   {entries.map((entry) => (
-                    <tr key={entry.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                    <tr key={entry.id}>
                       <td className="px-4 py-3 font-medium text-gray-900">{entry.email}</td>
                       <td className="px-4 py-3 text-gray-600">{entry.company || '—'}</td>
                       <td className="px-4 py-3"><StatusBadge status={entry.reason} /></td>
@@ -138,6 +142,6 @@ export default function BlacklistPage() {
         confirmText="Override & Un-suppress"
         variant="primary"
       />
-    </div>
+    </PageShell>
   );
 }

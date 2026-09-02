@@ -26,6 +26,7 @@ from app.storage.keys import (
 )
 from app.storage.models import (
     FILE_FINAL_EXPORT,
+    FILE_OFFERING_VOUCHER,
     FILE_ORIGINAL_UPLOAD,
     FILE_VERIFIED_RESULT,
     STATUS_FAILED,
@@ -39,6 +40,18 @@ from app.storage.s3_service import get_s3_service
 logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".xlsm", ".csv", ".ods"}
+VOUCHER_EXTENSIONS = {
+    ".pdf",
+    ".ppt",
+    ".pptx",
+    ".xlsx",
+    ".xls",
+    ".xlsm",
+    ".csv",
+    ".ods",
+    ".doc",
+    ".docx",
+}
 ALLOWED_MIME_PREFIXES = (
     "application/vnd.openxmlformats",
     "application/vnd.ms-excel",
@@ -46,6 +59,11 @@ ALLOWED_MIME_PREFIXES = (
     "text/csv",
     "application/csv",
     "application/octet-stream",
+)
+VOUCHER_MIME_PREFIXES = ALLOWED_MIME_PREFIXES + (
+    "application/pdf",
+    "application/msword",
+    "application/vnd.ms-powerpoint",
 )
 
 
@@ -72,6 +90,35 @@ def validate_upload(
     mime = (content_type or "").split(";")[0].strip().lower()
     if mime and not any(mime.startswith(p) for p in ALLOWED_MIME_PREFIXES):
         # Extension already validated; only reject clearly wrong types (e.g. image/*).
+        if mime.startswith(("image/", "audio/", "video/", "text/html")):
+            raise FileValidationError(f"Unsupported content type: {mime}")
+    if not mime:
+        mime = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+    return safe_name, mime
+
+
+def validate_offering_voucher_upload(
+    *,
+    filename: str,
+    content: bytes,
+    content_type: str | None = None,
+) -> tuple[str, str]:
+    settings = get_settings()
+    max_bytes = int(getattr(settings, "max_upload_file_bytes", 25 * 1024 * 1024) or 25 * 1024 * 1024)
+    if not content:
+        raise FileValidationError("Uploaded file is empty")
+    if len(content) > max_bytes:
+        raise FileValidationError(f"File exceeds maximum size of {max_bytes} bytes")
+
+    safe_name = sanitize_filename(filename, default="voucher.pdf")
+    ext = PurePosixPath(safe_name).suffix.lower()
+    if ext not in VOUCHER_EXTENSIONS:
+        raise FileValidationError(
+            f"Invalid file type '{ext or 'unknown'}'. Allowed: {', '.join(sorted(VOUCHER_EXTENSIONS))}"
+        )
+
+    mime = (content_type or "").split(";")[0].strip().lower()
+    if mime and not any(mime.startswith(p) for p in VOUCHER_MIME_PREFIXES):
         if mime.startswith(("image/", "audio/", "video/", "text/html")):
             raise FileValidationError(f"Unsupported content type: {mime}")
     if not mime:
@@ -259,6 +306,29 @@ def store_original_upload(
         user_id=user_id,
         batch_id=batch_id,
         file_type=FILE_ORIGINAL_UPLOAD,
+        filename=safe_name,
+        content=content,
+        mime_type=mime,
+    )
+
+
+def store_offering_voucher_upload(
+    db: Session,
+    *,
+    user_id: int | None,
+    batch_id: str,
+    filename: str,
+    content: bytes,
+    content_type: str | None = None,
+) -> StoredFileRow:
+    safe_name, mime = validate_offering_voucher_upload(
+        filename=filename, content=content, content_type=content_type
+    )
+    return store_bytes(
+        db,
+        user_id=user_id,
+        batch_id=batch_id,
+        file_type=FILE_OFFERING_VOUCHER,
         filename=safe_name,
         content=content,
         mime_type=mime,

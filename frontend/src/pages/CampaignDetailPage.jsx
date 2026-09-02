@@ -45,6 +45,8 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import SlideOver from '../components/ui/SlideOver';
 import UploadErrorModal from '../components/ui/UploadErrorModal';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
 import EmailPreview from '../components/EmailPreview';
 import FilterBuilder from '../components/FilterBuilder';
 import TemplateEditor from '../components/TemplateEditor';
@@ -297,7 +299,7 @@ export default function CampaignDetailPage() {
   const loadPlaceholderTemplates = async () => {
     if (placeholderTemplates.length > 0) return;
     try {
-      const { data } = await templateService.getPlaceholderTemplates();
+      const data = await templateService.getPlaceholderTemplates();
       setPlaceholderTemplates(data);
     } catch {
       toast.error('Failed to load templates');
@@ -906,21 +908,21 @@ export default function CampaignDetailPage() {
   }
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
+    <PageShell maxWidth="max-w-[1440px]">
+      <PageHeader
+        eyebrow="Campaign"
+        title={
+          <span className="inline-flex flex-wrap items-center gap-2">
+            {campaign.campaign_name}
+            <StatusBadge status={campaign.status} />
+          </span>
+        }
+        subtitle={campaign.campaign_id}
+        actions={
+        <div className="flex items-center gap-2">
           <button onClick={() => navigate('/campaigns')} className="btn-secondary flex items-center gap-2">
             <FiArrowLeft size={16} /> Back
           </button>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-2xl font-bold text-gray-900">{campaign.campaign_name}</h1>
-              <StatusBadge status={campaign.status} />
-            </div>
-            <p className="text-gray-500 mt-1">{campaign.campaign_id}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
           <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="btn-secondary flex items-center gap-2">
             <FiEdit2 size={16} /> Edit Campaign
           </button>
@@ -934,7 +936,8 @@ export default function CampaignDetailPage() {
             )}
           </button>
         </div>
-      </div>
+        }
+      />
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
@@ -2046,6 +2049,6 @@ export default function CampaignDetailPage() {
           </div>
         </div>
       </SlideOver>
-    </div>
+    </PageShell>
   );
 }

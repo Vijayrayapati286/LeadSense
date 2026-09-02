@@ -267,6 +267,16 @@ DESIGNATION_ALIASES = {
     "role",
     "job",
 }
+EMAIL_ALIASES = {
+    "email",
+    "emailaddress",
+    "email_address",
+    "workemail",
+    "work_email",
+    "contactemail",
+    "contact_email",
+    "e_mail",
+}
 COMPANY_ALIASES = {
     "company",
     "organization",
@@ -453,6 +463,7 @@ def _company_location_from_row(source_row: dict[str, Any] | None) -> str | None:
 def original_fields(source_row: dict[str, Any] | None) -> dict[str, str | None]:
     fields = {
         "name": _pick_from_row(source_row, NAME_ALIASES),
+        "email": _pick_from_row(source_row, EMAIL_ALIASES),
         "designation": _pick_from_row(source_row, DESIGNATION_ALIASES),
         "company": _pick_from_row(source_row, COMPANY_ALIASES),
         "location": _person_location_from_row(source_row),

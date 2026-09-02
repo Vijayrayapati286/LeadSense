@@ -5,7 +5,6 @@ import HistoryJobCard from '../components/bulk/HistoryJobCard';
 import Pagination from '../components/ui/Pagination';
 import {
   EmptyState,
-  ExtractorNav,
   LoadingAnnouncement,
   MetricCard,
   SkeletonCards,
@@ -155,9 +154,7 @@ export default function BulkHistoryPage() {
             <FiPlus size={16} /> New extraction
           </Link>
         }
-      >
-        <ExtractorNav />
-      </WorkspaceHeader>
+      />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard

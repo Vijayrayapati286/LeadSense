@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -21,9 +22,12 @@ from app.offerings.matching_service import (
 from app.offerings.schemas import (
     GenerateIcpRequest,
     GeneratedIcpPayload,
+    GenerateOfferingEmailRequest,
+    GenerateOfferingEmailResponse,
     MatchingJobStatusResponse,
     MatchStatusUpdate,
     OfferingCreate,
+    OfferingEmailTemplateMeta,
     OfferingListResponse,
     OfferingMatchListResponse,
     OfferingMatchResponse,
@@ -44,6 +48,8 @@ from app.offerings.service import (
     serialize_offering,
     update_offering,
 )
+from app.offerings.email_template_parser import parse_email_template_file
+from app.storage.exceptions import FileValidationError
 
 router = APIRouter(prefix="/offerings", tags=["Offerings"])
 
@@ -81,6 +87,17 @@ def create_offering_route(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        msg = str(getattr(exc, "orig", exc))
+        if "email_template" in msg or "vouchers" in msg:
+            detail = (
+                "Database schema is out of date (missing offering email columns). "
+                "Restart the backend server to apply migrations."
+            )
+        else:
+            detail = f"Database error while saving offering: {msg}"
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail) from exc
     db.commit()
     db.refresh(row)
     return serialize_offering(row)
@@ -93,6 +110,31 @@ def generate_icp_route(
 ):
     _ = current_user
     return offering_ai_service.generate_icp(body.description)
+
+
+@router.post("/generate-email-templates", response_model=GenerateOfferingEmailResponse)
+def generate_email_templates_route(
+    body: GenerateOfferingEmailRequest,
+    current_user: User = Depends(get_current_user),
+):
+    _ = current_user
+    result = offering_ai_service.generate_email_templates(body)
+    return GenerateOfferingEmailResponse(**result)
+
+
+@router.post("/parse-email-template", response_model=OfferingEmailTemplateMeta)
+async def parse_email_template_route(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    _ = current_user
+    filename = file.filename or "template.txt"
+    content = await file.read()
+    try:
+        parsed = parse_email_template_file(filename=filename, content=content)
+    except FileValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return OfferingEmailTemplateMeta(**parsed)
 
 
 @router.get("/by-icp/{icp_record_id}")
@@ -211,8 +253,20 @@ def update_offering_route(
     row = get_offering(db, offering_id, user_id=getattr(current_user, "id", None))
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offering not found")
-    update_offering(db, row, body.model_dump(exclude_unset=True))
-    db.commit()
+    try:
+        update_offering(db, row, body.model_dump(exclude_unset=True))
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        msg = str(getattr(exc, "orig", exc))
+        if "email_template" in msg or "vouchers" in msg:
+            detail = (
+                "Database schema is out of date (missing offering email columns). "
+                "Restart the backend server to apply migrations."
+            )
+        else:
+            detail = f"Database error while saving offering: {msg}"
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail) from exc
     db.refresh(row)
     return serialize_offering(row)
 
