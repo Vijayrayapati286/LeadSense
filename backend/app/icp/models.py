@@ -30,6 +30,7 @@ class IcpRecordRow(Base):
     user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True, index=True)
 
     name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     designation: Mapped[str | None] = mapped_column(String(500), nullable=True)
     about: Mapped[str | None] = mapped_column(Text, nullable=True)

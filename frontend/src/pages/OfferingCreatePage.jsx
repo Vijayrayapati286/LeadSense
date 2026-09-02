@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { FiArrowLeft, FiArrowRight, FiBriefcase, FiCheck, FiTarget, FiUsers, FiZap } from 'react-icons/fi';
+import { FiArrowLeft, FiArrowRight, FiBriefcase, FiCheck, FiMail, FiTarget, FiUsers, FiZap } from 'react-icons/fi';
 import {
   applyGeneratedIcp,
   AreaField,
   EMPTY_OFFERING,
   formToPayload,
   ListField,
+  offeringEmailTemplateName,
   TextField,
 } from '../components/offerings/offeringFormUtils';
+import OfferingVouchersSection from '../components/offerings/OfferingVouchersSection';
+import OfferingEmailWizardStep from '../components/offerings/OfferingEmailWizardStep';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import { useToast } from '../hooks/useToast';
 import { offeringsService } from '../services/services';
@@ -18,6 +21,7 @@ const STEPS = [
   { label: 'Offering', hint: 'What you sell', icon: FiBriefcase },
   { label: 'Companies', hint: 'Who it fits', icon: FiTarget },
   { label: 'Buyers', hint: 'Who decides', icon: FiUsers },
+  { label: 'Email', hint: 'Outreach template', icon: FiMail },
   { label: 'Review', hint: 'Confirm & match', icon: FiCheck },
 ];
 
@@ -126,6 +130,9 @@ export default function OfferingCreatePage() {
   const [loading, setLoading] = useState(isEdit);
   const [runMatch, setRunMatch] = useState(true);
   const [step, setStep] = useState(0);
+  const voucherBatchId = useRef(
+    id ? `offering-voucher-${id}` : `offering-voucher-${crypto.randomUUID()}`,
+  );
 
   function setField(key, value) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -156,6 +163,8 @@ export default function OfferingCreatePage() {
             revenue_min: data.revenue_min ?? '',
             revenue_max: data.revenue_max ?? '',
             status: data.status || 'active',
+            vouchers: Array.isArray(data.vouchers) ? data.vouchers : [],
+            email_template: data.email_template || null,
           });
           setAiPrompt(data.description || data.short_description || '');
           setGenerated(true);
@@ -229,7 +238,16 @@ export default function OfferingCreatePage() {
       }
       navigate(`/offerings/${offeringId}?tab=matching`);
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to save offering');
+      const detail = err?.response?.data?.detail;
+      let message = 'Failed to save offering';
+      if (Array.isArray(detail)) {
+        message = detail.map((d) => d.msg || JSON.stringify(d)).join('; ');
+      } else if (typeof detail === 'string' && detail.trim()) {
+        message = detail;
+      } else if (err?.message) {
+        message = err.response ? err.message : `Save failed — ${err.message}`;
+      }
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -313,6 +331,12 @@ export default function OfferingCreatePage() {
                   <TextField label="Pricing range" value={form.pricing_range} onChange={(v) => setField('pricing_range', v)} />
                 </div>
               </section>
+
+              <OfferingVouchersSection
+                vouchers={form.vouchers}
+                batchId={voucherBatchId.current}
+                onChange={(vouchers) => setField('vouchers', vouchers)}
+              />
             </div>
           ) : null}
 
@@ -360,6 +384,14 @@ export default function OfferingCreatePage() {
           ) : null}
 
           {step === 3 ? (
+            <OfferingEmailWizardStep
+              form={form}
+              emailTemplate={form.email_template}
+              onChange={(emailTemplate) => setField('email_template', emailTemplate)}
+            />
+          ) : null}
+
+          {step === 4 ? (
             <div className="space-y-5 animate-rise-in">
               <section className="surface-card p-5 sm:p-6">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -370,6 +402,23 @@ export default function OfferingCreatePage() {
                 </div>
               </section>
               <IcpSummaryCard form={form} />
+              {form.email_template?.subject && form.email_template?.body ? (
+                <section className="rounded-2xl border border-primary-200 bg-primary-50/30 p-5 space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-primary-700">Email template</p>
+                  <p className="text-sm font-semibold text-slate-900">{offeringEmailTemplateName(form.name, form.email_template.name)}</p>
+                  {form.email_template.source === 'upload' ? (
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-primary-600">Uploaded</p>
+                  ) : form.email_template.source === 'ai_generated' ? (
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-primary-600">AI generated</p>
+                  ) : null}
+                  <p className="text-sm text-slate-600">{form.email_template.subject}</p>
+                  <p className="text-xs text-slate-500 line-clamp-2 whitespace-pre-wrap">{form.email_template.body}</p>
+                </section>
+              ) : (
+                <section className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-4">
+                  <p className="text-sm text-slate-500">No email template — you can add one later from the offering edit flow.</p>
+                </section>
+              )}
               <label className="surface-card flex cursor-pointer items-start gap-3 p-5">
                 <input type="checkbox" className="mt-1 h-4 w-4 rounded border-slate-300 text-primary-600" checked={runMatch} onChange={(e) => setRunMatch(e.target.checked)} />
                 <span><span className="block text-sm font-semibold text-slate-900">Recommend matching contacts after save</span><span className="mt-0.5 block text-xs text-slate-500">Search verified ICP records immediately and rank the strongest opportunities.</span></span>

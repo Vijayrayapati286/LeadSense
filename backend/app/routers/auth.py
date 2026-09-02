@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import User
-from app.schemas.schemas import AuthCallbackResponse, DevLoginRequest, PasswordLoginRequest, UserResponse
+from app.schemas.schemas import AuthCallbackResponse, DevLoginRequest, PasswordLoginRequest, UserProfileUpdate, UserResponse
 from app.services.auth_service import AuthService
 
 logger = logging.getLogger(__name__)
@@ -88,6 +88,20 @@ def password_login(data: PasswordLoginRequest, db: Session = Depends(get_db)):
 def get_me(current_user: User = Depends(get_current_user)):
     """Get current authenticated user profile."""
     return UserResponse.model_validate(current_user)
+
+
+@router.put("/me", response_model=UserResponse)
+def update_me(
+    data: UserProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update the signed-in user's profile."""
+    try:
+        user = auth_service.update_profile(db, current_user, data.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return UserResponse.model_validate(user)
 
 
 @router.post("/logout")

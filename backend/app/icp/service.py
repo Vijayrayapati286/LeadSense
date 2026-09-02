@@ -41,6 +41,7 @@ COMPANY_SIZE_ALIASES = {
 }
 WEBSITE_ALIASES = {"website", "companywebsite", "company_website", "companyurl", "web"}
 TAGS_ALIASES = {"tags", "tag", "labels"}
+EMAIL_ALIASES = {"email", "emailaddress", "email_address", "workemail", "work_email", "contactemail", "contact_email", "e_mail"}
 
 
 def _pick_from_row(source: dict[str, Any] | None, aliases: set[str]) -> str | None:
@@ -91,6 +92,56 @@ def _prefer(*values: Any) -> str | None:
     return None
 
 
+def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] | None:
+    """Map uploaded spreadsheet columns to ICP fields (no extracted LinkedIn data)."""
+    source_row = item.source_row_json if isinstance(item.source_row_json, dict) else {}
+    if not source_row:
+        return None
+
+    originals = original_fields(source_row)
+    name = _clean(originals.get("name"))
+    email = _clean(originals.get("email") or _pick_from_row(source_row, EMAIL_ALIASES))
+    company = _clean(originals.get("company"))
+    designation = _clean(originals.get("designation"))
+    location = _clean(originals.get("location"))
+    linkedin_url = _normalize_linkedin(item.normalized_url or item.profile_url)
+
+    if not email and not linkedin_url and not name:
+        return None
+
+    industry = _pick_from_row(source_row, INDUSTRY_ALIASES)
+    company_size = _pick_from_row(source_row, COMPANY_SIZE_ALIASES)
+    company_website = _pick_from_row(source_row, WEBSITE_ALIASES)
+
+    tags_raw = _pick_from_row(source_row, TAGS_ALIASES)
+    tags: list[str] | None = None
+    if tags_raw:
+        tags = [t.strip() for t in tags_raw.replace(";", ",").split(",") if t.strip()]
+
+    now = datetime.now(timezone.utc)
+    return {
+        "name": name,
+        "email": email,
+        "company_name": company,
+        "designation": designation,
+        "about": None,
+        "linkedin_url": linkedin_url,
+        "industry": industry,
+        "company_size": _clean(company_size),
+        "location": location,
+        "company_website": _clean(company_website),
+        "icp_status": ICP_STATUS_VERIFIED,
+        "icp_score": None,
+        "tags": tags,
+        "verification_status": VERIFY_VERIFIED,
+        "verified_at": now,
+        "source": SOURCE_LINKEDIN_BULK,
+        "source_record_id": item.id,
+        "source_job_id": item.job_id,
+        "dedupe_key": _dedupe_key(name, company),
+    }
+
+
 def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
     """Map verified bulk item fields to ICP columns. Never invent values."""
     originals = original_fields(item.source_row_json if isinstance(item.source_row_json, dict) else {})
@@ -104,6 +155,7 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
     location = _prefer(
         getattr(item, "resolved_location", None), item.location, originals.get("location")
     )
+    email = originals.get("email") or _pick_from_row(source_row, EMAIL_ALIASES)
     about = _prefer(item.about, item.headline)
     linkedin_url = _normalize_linkedin(item.normalized_url or item.profile_url)
 
@@ -123,6 +175,7 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
 
     return {
         "name": name,
+        "email": _clean(email),
         "company_name": company,
         "designation": designation,
         "about": about,
@@ -197,6 +250,58 @@ def _apply_payload(row: IcpRecordRow, payload: dict[str, Any], *, create: bool) 
     row.updated_at = datetime.now(timezone.utc)
 
 
+def upsert_icp_sheet_fields_from_bulk_item(
+    db: Session,
+    item: BulkJobItemRow,
+    *,
+    user_id: int | None,
+) -> IcpRecordRow | None:
+    """Upsert sheet-sourced fields (email, name, company, etc.) without waiting for LinkedIn extraction."""
+    payload = build_sheet_payload_from_bulk_item(item)
+    if not payload:
+        return None
+
+    existing = _find_existing(
+        db,
+        user_id=user_id,
+        linkedin_url=payload.get("linkedin_url"),
+        dedupe_key=payload.get("dedupe_key"),
+        source_record_id=item.id,
+    )
+
+    if existing:
+        payload.pop("source_job_id", None)
+        payload.pop("source_record_id", None)
+        _apply_payload(existing, payload, create=False)
+        existing.user_id = user_id if user_id is not None else existing.user_id
+        db.flush()
+        logger.info("ICP sheet fields updated id=%s from bulk item=%s", existing.id, item.id)
+        return existing
+
+    row = IcpRecordRow(user_id=user_id, **payload)
+    db.add(row)
+    db.flush()
+    logger.info("ICP created from sheet id=%s bulk item=%s", row.id, item.id)
+    return row
+
+
+def sync_sheet_fields_for_job(db: Session, job_id: str, *, user_id: int | None) -> int:
+    """Persist spreadsheet fields (especially email) for every row in a bulk upload job."""
+    items = (
+        db.query(BulkJobItemRow)
+        .filter(
+            BulkJobItemRow.job_id == job_id,
+            BulkJobItemRow.dedupe_of_id.is_(None),
+        )
+        .all()
+    )
+    synced = 0
+    for item in items:
+        if upsert_icp_sheet_fields_from_bulk_item(db, item, user_id=user_id):
+            synced += 1
+    return synced
+
+
 def upsert_icp_from_bulk_item(
     db: Session,
     item: BulkJobItemRow,
@@ -253,6 +358,7 @@ def serialize_icp(row: IcpRecordRow) -> dict[str, Any]:
         "id": row.id,
         "user_id": row.user_id,
         "name": row.name,
+        "email": row.email,
         "company_name": row.company_name,
         "designation": row.designation,
         "about": row.about,
@@ -308,6 +414,7 @@ def list_icp_records(
                 IcpRecordRow.industry.ilike(like),
                 IcpRecordRow.about.ilike(like),
                 IcpRecordRow.location.ilike(like),
+                IcpRecordRow.email.ilike(like),
                 IcpRecordRow.linkedin_url.ilike(like),
             )
         )
@@ -378,6 +485,7 @@ def create_icp_record(
     linkedin_url = _normalize_linkedin(data.get("linkedin_url"))
     payload = {
         "name": name,
+        "email": _clean(data.get("email")),
         "company_name": company,
         "designation": _clean(data.get("designation")),
         "about": _clean(data.get("about")),
@@ -421,6 +529,7 @@ def update_icp_record(
 ) -> IcpRecordRow:
     fields = (
         "name",
+        "email",
         "company_name",
         "designation",
         "about",
@@ -498,6 +607,9 @@ def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | No
     from app.linkedin.bulk_jobs import copy_canonical_results_to_duplicates, get_job_row, refresh_job_counters
     from app.linkedin.bulk_models import CLAIMABLE_ITEM_STATUSES, BulkJobItemRow
 
+    job = get_job_row(db, job_id)
+    job_created_at = getattr(job, "created_at", None) if job else None
+
     items = (
         db.query(BulkJobItemRow)
         .filter(
@@ -522,15 +634,18 @@ def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | No
         icp = icp_map.get(item.normalized_url)
         if not icp:
             continue
-        _apply_icp_record_to_bulk_item(item, icp, now=now)
-        skipped += 1
-        logger.info(
-            "ICP skip job=%s item=%s url=%s icp_id=%s",
-            job_id,
-            item.id,
-            item.normalized_url,
-            icp.id,
-        )
+        upsert_icp_sheet_fields_from_bulk_item(db, item, user_id=user_id)
+        # Only skip LinkedIn extraction when the profile was already in ICP before this upload.
+        if job_created_at and icp.created_at and icp.created_at < job_created_at:
+            _apply_icp_record_to_bulk_item(item, icp, now=now)
+            skipped += 1
+            logger.info(
+                "ICP skip job=%s item=%s url=%s icp_id=%s",
+                job_id,
+                item.id,
+                item.normalized_url,
+                icp.id,
+            )
 
     if skipped:
         copy_canonical_results_to_duplicates(db, job_id)
@@ -538,3 +653,74 @@ def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | No
         if job:
             refresh_job_counters(db, job)
     return skipped
+
+
+def list_accounts_summary(
+    db: Session,
+    *,
+    user_id: int | None,
+    search: str | None = None,
+    industry: str | None = None,
+    page: int = 1,
+    page_size: int = 25,
+) -> dict[str, Any]:
+    """Group existing ICP contacts by company — no separate accounts table."""
+    base = db.query(IcpRecordRow).filter(
+        IcpRecordRow.company_name.isnot(None),
+        IcpRecordRow.company_name != "",
+    )
+    if user_id is not None:
+        base = base.filter(IcpRecordRow.user_id == user_id)
+
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        base = base.filter(
+            or_(
+                IcpRecordRow.company_name.ilike(like),
+                IcpRecordRow.industry.ilike(like),
+                IcpRecordRow.company_website.ilike(like),
+                IcpRecordRow.location.ilike(like),
+            )
+        )
+    if industry and industry.strip():
+        base = base.filter(IcpRecordRow.industry.ilike(f"%{industry.strip()}%"))
+
+    grouped = (
+        base.with_entities(
+            IcpRecordRow.company_name,
+            func.count(IcpRecordRow.id).label("contact_count"),
+            func.max(IcpRecordRow.industry).label("industry"),
+            func.max(IcpRecordRow.company_size).label("company_size"),
+            func.max(IcpRecordRow.location).label("location"),
+            func.max(IcpRecordRow.company_website).label("company_website"),
+        )
+        .group_by(IcpRecordRow.company_name)
+        .order_by(IcpRecordRow.company_name.asc())
+    )
+
+    subq = grouped.subquery()
+    total = db.query(func.count()).select_from(subq).scalar() or 0
+
+    page = max(int(page), 1)
+    page_size = min(max(int(page_size), 1), 100)
+    rows = grouped.offset((page - 1) * page_size).limit(page_size).all()
+
+    items = [
+        {
+            "company_name": row.company_name,
+            "industry": row.industry,
+            "company_size": row.company_size,
+            "location": row.location,
+            "company_website": row.company_website,
+            "contact_count": int(row.contact_count or 0),
+            "status": "active",
+        }
+        for row in rows
+    ]
+
+    return {
+        "items": items,
+        "total": int(total),
+        "page": page,
+        "page_size": page_size,
+    }

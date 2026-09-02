@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FiArchive, FiDownload, FiShield, FiUpload } from 'react-icons/fi';
-import { EmptyState, ExtractorNav, SkeletonCards, WorkspaceHeader } from '../components/ui/GrowthWorkspace';
+import { EmptyState, SkeletonCards, WorkspaceHeader } from '../components/ui/GrowthWorkspace';
 import { useToast } from '../hooks/useToast';
 import { linkedinProfileService } from '../services/services';
 import { downloadBlob, formatDateTime } from '../utils/helpers';
@@ -81,9 +81,7 @@ export default function BulkBackupsPage() {
           </button>
           </div>
         }
-      >
-        <ExtractorNav />
-      </WorkspaceHeader>
+      />
 
       {loading ? (
         <SkeletonCards count={3} className="h-24" />

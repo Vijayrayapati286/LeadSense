@@ -12,12 +12,13 @@ import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
 import SettingsPage from './pages/SettingsPage';
 import BlacklistPage from './pages/BlacklistPage';
+import AccountsPage from './pages/AccountsPage';
+import ContactsPage from './pages/ContactsPage';
 import LinkedInProfileExtractorPage from './pages/LinkedInProfileExtractorPage';
 import BulkHistoryPage from './pages/BulkHistoryPage';
 import BulkJobDetailPage from './pages/BulkJobDetailPage';
 import BulkNeedsReviewPage from './pages/BulkNeedsReviewPage';
 import BulkBackupsPage from './pages/BulkBackupsPage';
-import IcpDatabasePage from './pages/IcpDatabasePage';
 import OfferingsPage from './pages/OfferingsPage';
 import OfferingCreatePage from './pages/OfferingCreatePage';
 import OfferingDetailPage from './pages/OfferingDetailPage';
@@ -36,18 +37,20 @@ export default function App() {
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
           <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />
           <Route path="/recipients" element={<RecipientsPage />} />
-          <Route path="/blacklist" element={<BlacklistPage />} />
           <Route path="/recipient-groups" element={<Navigate to="/recipients" replace />} />
           <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/logs" element={<EmailLogsPage />} />
+          <Route path="/blacklist" element={<BlacklistPage />} />
+          <Route path="/icp-accounts" element={<AccountsPage />} />
+          <Route path="/icp-contacts" element={<ContactsPage />} />
+          <Route path="/icp-database" element={<Navigate to="/icp-contacts" replace />} />
           <Route path="/salesnav" element={<Navigate to="/linkedin-extractor" replace />} />
           <Route path="/linkedin-extractor" element={<LinkedInProfileExtractorPage />} />
           <Route path="/linkedin-history" element={<BulkHistoryPage />} />
           <Route path="/linkedin-history/:jobId" element={<BulkJobDetailPage />} />
           <Route path="/linkedin-needs-review" element={<BulkNeedsReviewPage />} />
           <Route path="/linkedin-backups" element={<BulkBackupsPage />} />
-          <Route path="/icp-database" element={<IcpDatabasePage />} />
           <Route path="/offerings" element={<OfferingsPage />} />
           <Route path="/offerings/new" element={<OfferingCreatePage />} />
           <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />

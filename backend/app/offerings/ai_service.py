@@ -9,7 +9,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.config import get_settings
-from app.offerings.schemas import GeneratedIcpPayload, SemanticMatchEvidence
+from app.offerings.schemas import (
+    GeneratedIcpPayload,
+    GenerateOfferingEmailRequest,
+    OfferingEmailVersion,
+    SemanticMatchEvidence,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -24,6 +29,12 @@ SEMANTIC_SYSTEM = (
     "You are a B2B ICP matching analyst. Compare an offering against one candidate. "
     "Return JSON only with scores that MUST stay within the stated maximums. "
     "Do not invent facts not present in the candidate text."
+)
+
+EMAIL_SYSTEM = (
+    "You are an elite B2B sales email copywriter. Write punchy, executive-level cold "
+    "outreach emails with clear structure: short paragraphs, bold emphasis, and scannable "
+    "bullet lists. Always respond with valid JSON only."
 )
 
 
@@ -52,6 +63,29 @@ class OfferingAIService:
         payload = self._mock_generate(description)
         payload.is_mock = True
         return payload
+
+    def generate_email_templates(self, data: GenerateOfferingEmailRequest) -> dict:
+        """Generate 2–3 distinct outreach email variants from offering context."""
+        if self.settings.use_mock_groq or not self.settings.groq_api_key:
+            return self._mock_email_templates(data)
+
+        last_err: Exception | None = None
+        for attempt in range(2):
+            try:
+                raw = self._groq_json(
+                    system=EMAIL_SYSTEM,
+                    user=self._email_prompt(data),
+                    temperature=0.75,
+                    max_tokens=2000,
+                )
+                return self._validate_email_templates(raw, data.count)
+            except Exception as exc:
+                last_err = exc
+                logger.warning("Offering email generate attempt %s failed: %s", attempt + 1, exc)
+        logger.warning("Falling back to mock email templates: %s", last_err)
+        result = self._mock_email_templates(data)
+        result["is_mock"] = True
+        return result
 
     def semantic_evidence(self, offering: Any, icp: Any) -> SemanticMatchEvidence:
         if self.settings.use_mock_groq or not self.settings.groq_api_key:
@@ -131,6 +165,112 @@ class OfferingAIService:
 
     def _validate_semantic(self, raw: dict) -> SemanticMatchEvidence:
         return SemanticMatchEvidence.model_validate(raw)
+
+    def _email_prompt(self, data: GenerateOfferingEmailRequest) -> str:
+        def join(items: list[str]) -> str:
+            return ", ".join(items) if items else "N/A"
+
+        return f"""Generate exactly {data.count} different B2B cold outreach emails for this offering.
+
+Offering: {data.name}
+Description: {data.description or data.short_description or 'N/A'}
+Product type: {data.product_type or 'N/A'}
+Target industries: {join(data.target_industries)}
+Target job titles: {join(data.target_job_titles)}
+Geographies: {join(data.target_geographies)}
+Company size: {data.company_size_label or 'N/A'}
+Pain points: {join(data.pain_points)}
+Use cases: {join(data.use_cases)}
+Benefits: {join(data.benefits)}
+Desired outcomes: {join(data.desired_outcomes)}
+Decision makers: {join(data.decision_maker_types)}
+Buying roles: {join(data.buying_roles)}
+Tone: {data.tone}
+Additional context: {data.additional_context or 'None'}
+
+Return JSON with key "versions" — an array of exactly {data.count} objects, each with:
+- angle: one of "pain_led", "benefit_led", "direct"
+- subject: under 80 chars, provocative hook (not generic)
+- body: plain text with markdown (**bold**, "- " bullets). Start with "Hi {{{{Name}}}}," then blank line.
+  Use {{{{Name}}}}, {{{{Company}}}}, {{{{Designation}}}}, {{{{Industry}}}} placeholders.
+  Under ~160 words excluding bullets. Include one 3-5 item benefit bullet list in benefit_led version.
+- closing: sign-off line
+- cta: soft call-to-action question
+
+Each version must use a distinctly different opening angle."""
+
+    def _validate_email_templates(self, raw: dict, count: int) -> dict:
+        versions_raw = raw.get("versions") or []
+        if not isinstance(versions_raw, list):
+            raise ValueError("AI response missing versions array")
+        versions: list[OfferingEmailVersion] = []
+        for item in versions_raw[:count]:
+            if not isinstance(item, dict):
+                continue
+            versions.append(
+                OfferingEmailVersion(
+                    angle=str(item.get("angle") or "direct"),
+                    subject=str(item.get("subject") or "").strip(),
+                    body=str(item.get("body") or "").strip(),
+                    closing=str(item.get("closing") or "").strip(),
+                    cta=str(item.get("cta") or "").strip(),
+                )
+            )
+        if len(versions) < 2:
+            raise ValueError("AI returned fewer than 2 email versions")
+        return {"versions": [v.model_dump() for v in versions], "is_mock": False}
+
+    def _mock_email_templates(self, data: GenerateOfferingEmailRequest) -> dict:
+        name = data.name or "Your Product"
+        industry = (data.target_industries or ["your industry"])[0]
+        pain = (data.pain_points or ["manual workflows"])[0]
+        benefit = (data.benefits or ["faster results"])[0]
+        use_case = (data.use_cases or ["workflow automation"])[0]
+
+        versions = [
+            OfferingEmailVersion(
+                angle="pain_led",
+                subject=f"Hidden cost of {pain.lower()} at {{{{Company}}}}",
+                body=(
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"Most {{{{Designation}}}}s at {{{{Industry}}}} companies face **{pain.lower()}** — "
+                    f"and it rarely shows up on the dashboard until it hurts the pipeline.\n\n"
+                    f"**{name}** was built for teams like {{{{Company}}}} dealing with exactly this.\n\n"
+                    f"Worth a quick 15-minute look?"
+                ),
+                closing="Best regards,",
+                cta="Open to a brief call this week?",
+            ),
+            OfferingEmailVersion(
+                angle="benefit_led",
+                subject=f"{benefit} for {{{{Company}}}} — {name}",
+                body=(
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"Teams in {industry} use **{name}** to unlock:\n\n"
+                    f"- **{benefit}** through {use_case.lower()}\n"
+                    f"- **Better visibility** for {{{{Designation}}}}s managing growth\n"
+                    f"- **Faster outcomes** without adding headcount\n\n"
+                    f"Given your role at {{{{Company}}}}, I thought this might resonate. "
+                    f"Can I share a quick overview?"
+                ),
+                closing="Best regards,",
+                cta="Would a 15-minute demo work?",
+            ),
+            OfferingEmailVersion(
+                angle="direct",
+                subject=f"Quick intro — {name} for {{{{Company}}}}",
+                body=(
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"I help {{{{Designation}}}}s at {industry} companies with **{name}** — "
+                    f"{data.short_description or data.description or use_case.lower()}.\n\n"
+                    f"Open to a short conversation to see if it's a fit for {{{{Company}}}}?"
+                ),
+                closing="Best regards,",
+                cta="Worth 15 minutes?",
+            ),
+        ]
+        selected = versions[: data.count]
+        return {"versions": [v.model_dump() for v in selected], "is_mock": True}
 
     def _generate_prompt(self, description: str) -> str:
         return f"""Analyze this offering and return JSON with exactly these keys:

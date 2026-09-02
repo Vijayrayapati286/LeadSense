@@ -1,10 +1,14 @@
 import { useEffect, useState, useCallback } from 'react';
+import { FiActivity, FiFilter, FiMail } from 'react-icons/fi';
 import { logService, userService, campaignService, recipientGroupService } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import StatusBadge from '../components/ui/StatusBadge';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
+import { MetricCard } from '../components/ui/GrowthWorkspace';
 import { formatDateTime, debounce } from '../utils/helpers';
 
 const EMPTY_FILTERS = { userId: '', campaignId: '', groupId: '', dateFrom: '', dateTo: '' };
@@ -70,13 +74,26 @@ export default function EmailLogsPage() {
   const hasActiveFilters = statusFilter || Object.values(filters).some(Boolean);
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Email Logs</h1>
-        <p className="text-gray-500 mt-1">Track all sent, failed, and pending emails</p>
+    <PageShell maxWidth="max-w-[1440px]">
+      <PageHeader
+        eyebrow="Lead generation"
+        title="Email logs"
+        subtitle="Track all sent, failed, and pending emails."
+      />
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricCard label="Total emails" value={total} hint="Matching current view" icon={FiMail} />
+        <MetricCard label="On this page" value={logs.length} hint="Loaded activity" tone="green" icon={FiActivity} />
+        <MetricCard
+          label="Filters applied"
+          value={(statusFilter ? 1 : 0) + Object.values(filters).filter(Boolean).length}
+          hint="Narrowing results"
+          tone="amber"
+          icon={FiFilter}
+        />
       </div>
 
-      <div className="card space-y-3">
+      <div className="surface-card space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-4">
           <SearchInput
             onChange={debouncedSearch}
@@ -161,15 +178,15 @@ export default function EmailLogsPage() {
         </div>
       </div>
 
-      <div className="card overflow-hidden p-0">
+      <div className="surface-card overflow-hidden">
         {loading ? (
           <div className="flex justify-center py-12"><LoadingSpinner size="lg" /></div>
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b">
-                  <tr className="text-left text-gray-500">
+              <table className="data-table min-w-[900px]">
+                <thead className="sticky top-0 z-[1] border-b border-slate-200 bg-slate-50/95">
+                  <tr>
                     <th className="px-6 py-3 font-medium">Prospect</th>
                     <th className="px-6 py-3 font-medium">Campaign</th>
                     <th className="px-6 py-3 font-medium">Sent By</th>
@@ -180,7 +197,7 @@ export default function EmailLogsPage() {
                 </thead>
                 <tbody>
                   {logs.map((log) => (
-                    <tr key={log.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                    <tr key={log.id}>
                       <td className="px-6 py-4">
                         <p className="font-medium text-gray-900">{log.recipient_name || `Prospect #${log.recipient_id}`}</p>
                         <p className="text-xs text-gray-500">{log.recipient_email}</p>
@@ -209,6 +226,6 @@ export default function EmailLogsPage() {
           </>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

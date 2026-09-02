@@ -17,6 +17,12 @@ class UserResponse(BaseModel):
     department: str
 
 
+class UserProfileUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    email: EmailStr | None = None
+    department: str | None = Field(None, min_length=1, max_length=255)
+
+
 class AuthCallbackResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -196,12 +202,22 @@ class AppSettingResponse(BaseModel):
     soft_bounce_threshold: int
     send_interval_seconds: int
     suppress_on_tags: list[str]
+    business_hours_start: int
+    business_hours_end: int
+    default_page_size: int
+    default_ai_tone: str
+    default_use_recipient_timezone: bool
 
 
 class AppSettingUpdate(BaseModel):
     soft_bounce_threshold: int | None = Field(None, ge=1)
     send_interval_seconds: int | None = Field(None, ge=1)
     suppress_on_tags: list[str] | None = None
+    business_hours_start: int | None = Field(None, ge=0, le=23)
+    business_hours_end: int | None = Field(None, ge=1, le=24)
+    default_page_size: int | None = Field(None, ge=5, le=100)
+    default_ai_tone: str | None = None
+    default_use_recipient_timezone: bool | None = None
 
 
 class AITemplateRequest(BaseModel):

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FiArrowLeft, FiArrowRight, FiCheck, FiFileText, FiSave, FiBookOpen, FiTarget } from 'react-icons/fi';
 import { campaignService, offeringsService, templateService, mailerService, customFieldService, userService } from '../services/services';
+import { getWorkspaceDefaults } from '../utils/workspaceDefaults';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import { generateCampaignId, extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
@@ -11,6 +12,8 @@ import TemplateEditor from '../components/TemplateEditor';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Button from '../components/ui/Button';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
 import CampaignWizardStepper from '../components/campaigns/CampaignWizardStepper';
 import CampaignFormFields from '../components/campaigns/CampaignFormFields';
 
@@ -69,6 +72,7 @@ export default function CreateCampaignPage() {
     owner: user?.name || '',
     department: user?.department || 'Sales',
     target_audience: '',
+    use_recipient_timezone: !!getWorkspaceDefaults().default_use_recipient_timezone,
   });
 
   // Template tab
@@ -127,6 +131,12 @@ export default function CreateCampaignPage() {
     });
     setEmailContent(buildOfferingEmailDraft(payload.offeringName, payload.offeringDescription));
     setActiveTab('template');
+    offeringsService.get(payload.offeringId).then(async (offering) => {
+      await loadPlaceholderTemplates(payload.offeringId);
+      if (!offering.email_template?.subject || !offering.email_template?.body) {
+        setEmailContent(buildOfferingEmailDraft(payload.offeringName, payload.offeringDescription));
+      }
+    }).catch(() => {});
     toast.info(`${payload.prospectCount || matchCount + icpCount} prospect(s) ready — compose your offer email and create the campaign`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditMode, location.state]);
@@ -194,8 +204,18 @@ export default function CreateCampaignPage() {
         description: offering.description || offering.short_description || `Outreach for ${offering.name}`,
         target_audience: prev.target_audience || offering.target_industries?.join(', ') || '',
       }));
-      setEmailContent(buildOfferingEmailDraft(offering.name, offering.description || offering.short_description));
-      toast.success(`Loaded offering "${offering.name}"`);
+
+      await loadPlaceholderTemplates(offeringId);
+      if (!offering.email_template?.subject || !offering.email_template?.body) {
+        setEmailContent(buildOfferingEmailDraft(offering.name, offering.description || offering.short_description));
+      } else {
+        setActiveTab('template');
+      }
+      toast.success(
+        offering.email_template?.subject
+          ? `Loaded "${offering.name}" — outreach email ready on Template step`
+          : `Loaded offering "${offering.name}"`,
+      );
     } catch {
       toast.error('Failed to load offering');
       setSelectedOfferingId('');
@@ -226,11 +246,16 @@ export default function CreateCampaignPage() {
     toast.success(`Loaded Smart Ops mailer "${mailer.name}"`);
   };
 
-  const loadPlaceholderTemplates = async () => {
-    if (placeholderTemplates.length > 0) return;
+  const loadPlaceholderTemplates = async (offeringId) => {
     try {
-      const { data } = await templateService.getPlaceholderTemplates();
+      const params = offeringId ? { offering_id: offeringId } : {};
+      const data = await templateService.getPlaceholderTemplates(params);
       setPlaceholderTemplates(data);
+      const offeringTemplate = data.find((t) => t.source === 'offering') || data[0];
+      if (offeringTemplate) {
+        setTemplateType('placeholder');
+        handleSelectPlaceholderTemplate(offeringTemplate);
+      }
     } catch {
       toast.error('Failed to load templates');
     }
@@ -238,7 +263,7 @@ export default function CreateCampaignPage() {
 
   const handleTemplateTypeChange = (type) => {
     setTemplateType(type);
-    if (type === 'placeholder') loadPlaceholderTemplates();
+    if (type === 'placeholder') loadPlaceholderTemplates(selectedOfferingId || undefined);
   };
 
   const handleSelectPlaceholderTemplate = (template) => {
@@ -455,15 +480,12 @@ export default function CreateCampaignPage() {
   const wizardStep = activeTab === 'campaign' ? 'campaign' : 'template';
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8 animate-fade-in pb-10">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">{isEditMode ? 'Edit Campaign' : 'Create Campaign'}</h1>
-          <p className="text-slate-500 mt-1 text-sm">
-            {isEditMode ? 'Update your campaign details and email template' : 'Set up your outreach campaign in a few steps'}
-          </p>
-        </div>
-        {activeTab === 'campaign' ? (
+    <PageShell maxWidth="max-w-5xl">
+      <PageHeader
+        eyebrow="Lead generation"
+        title={isEditMode ? 'Edit campaign' : 'Create campaign'}
+        subtitle={isEditMode ? 'Update your campaign details and email template.' : 'Set up your outreach campaign in a few steps.'}
+        actions={activeTab === 'campaign' ? (
           <button onClick={() => navigate('/campaigns')} className="btn-secondary flex items-center gap-2">
             <FiArrowLeft size={16} /> Cancel
           </button>
@@ -472,7 +494,7 @@ export default function CreateCampaignPage() {
             <FiArrowLeft size={16} /> Back
           </button>
         )}
-      </div>
+      />
 
       <CampaignWizardStepper activeStep={wizardStep} />
 
@@ -629,6 +651,6 @@ export default function CreateCampaignPage() {
         confirmText="Proceed Anyway"
         cancelText="Go Back & Edit"
       />
-    </div>
+    </PageShell>
   );
 }

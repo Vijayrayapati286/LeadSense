@@ -236,6 +236,7 @@ class BulkExcelService:
 
         columns = [
             "Original Name",
+            "Original Email",
             "Original LinkedIn URL",
             "Original Designation",
             "Original Company",
@@ -305,6 +306,7 @@ class BulkExcelService:
             for col in extra_original:
                 row[col] = source.get(col)
             row["Original Name"] = originals.get("name")
+            row["Original Email"] = originals.get("email")
             row["Original LinkedIn URL"] = getattr(item, "normalized_url", None) or getattr(
                 item, "profile_url", None
             )

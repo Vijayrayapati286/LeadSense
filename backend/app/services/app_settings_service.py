@@ -19,6 +19,11 @@ class AppSettingsService:
                 soft_bounce_threshold=settings.soft_bounce_threshold,
                 send_interval_seconds=12,
                 suppress_on_tags="[]",
+                business_hours_start=9,
+                business_hours_end=18,
+                default_page_size=10,
+                default_ai_tone="formal",
+                default_use_recipient_timezone=False,
             )
             db.add(row)
             db.commit()

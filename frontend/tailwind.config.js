@@ -17,8 +17,8 @@ export default {
           900: '#1e3a8a',
         },
         sidebar: {
-          DEFAULT: '#1e293b',
-          hover: '#334155',
+          DEFAULT: '#0b1220',
+          hover: 'rgba(255,255,255,0.06)',
           active: '#3b82f6',
         },
         surface: {

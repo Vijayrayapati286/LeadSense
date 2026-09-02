@@ -171,3 +171,17 @@ class AuthService:
         if not payload:
             return None
         return db.query(User).filter(User.id == int(payload["sub"])).first()
+
+    def update_profile(self, db: Session, user: User, update_data: dict) -> User:
+        if update_data.get("email") and update_data["email"] != user.email:
+            existing = db.query(User).filter(User.email == update_data["email"], User.id != user.id).first()
+            if existing:
+                raise ValueError("That email is already in use")
+            user.email = update_data["email"]
+        if update_data.get("name"):
+            user.name = update_data["name"]
+        if update_data.get("department"):
+            user.department = update_data["department"]
+        db.commit()
+        db.refresh(user)
+        return user

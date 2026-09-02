@@ -131,17 +131,22 @@
   .campaign-field-input,
   .campaign-field-select,
   .campaign-field-textarea {
-    @apply w-full rounded-xl border border-slate-200 bg-white py-2.5 text-sm text-slate-900 shadow-sm outline-none transition
+    @apply w-full rounded-xl border border-slate-200 bg-white text-sm text-slate-900 shadow-sm outline-none transition
            placeholder:text-slate-400 focus:border-primary-400 focus:ring-4 focus:ring-primary-50 disabled:bg-slate-50 disabled:text-slate-400;
   }
 
   .campaign-field-input,
   .campaign-field-select {
-    @apply px-3.5;
+    @apply h-11 px-3.5;
+  }
+
+  .campaign-field-trigger {
+    @apply flex h-11 w-full items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 text-left text-sm shadow-sm outline-none transition
+           hover:border-slate-300 focus:border-primary-400 focus:ring-4 focus:ring-primary-50;
   }
 
   .campaign-field-textarea {
-    @apply px-3.5 pb-8 resize-none;
+    @apply px-3.5 py-2.5 pb-8 resize-none;
   }
 
   .field-label {

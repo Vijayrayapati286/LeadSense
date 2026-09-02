@@ -72,7 +72,10 @@ LIST_FIELDS = (
     "exclusion_rules",
     "positive_keywords",
     "negative_keywords",
+    "vouchers",
 )
+
+NULLABLE_JSON_FIELDS = ("email_template",)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -134,6 +137,8 @@ def serialize_offering(row: OfferingRow, *, stats: dict[str, int] | None = None)
         "pricing_range": row.pricing_range,
         "hard_filter_rules": row.hard_filter_rules or {},
         "profile_text": row.profile_text,
+        "vouchers": _list_or_empty(row.vouchers),
+        "email_template": row.email_template,
         "status": row.status,
         "definition_version": row.definition_version or 1,
         "definition_hash": row.definition_hash,
@@ -257,7 +262,11 @@ def _apply_fields(row: OfferingRow, data: dict[str, Any]) -> None:
 
 
 def create_offering(db: Session, *, user_id: int | None, data: dict[str, Any]) -> OfferingRow:
-    payload = {k: v for k, v in data.items() if v is not None}
+    payload = {
+        k: v
+        for k, v in data.items()
+        if v is not None or k in LIST_FIELDS or k in NULLABLE_JSON_FIELDS
+    }
     if not payload.get("name"):
         raise ValueError("name is required")
     row = OfferingRow(user_id=user_id, definition_version=1)
@@ -271,7 +280,7 @@ def create_offering(db: Session, *, user_id: int | None, data: dict[str, Any]) -
 
 def update_offering(db: Session, row: OfferingRow, data: dict[str, Any]) -> OfferingRow:
     before = compute_definition_hash(serialize_offering(row))
-    payload = {k: v for k, v in data.items() if v is not None or k in LIST_FIELDS}
+    payload = {k: v for k, v in data.items() if v is not None or k in LIST_FIELDS or k in NULLABLE_JSON_FIELDS}
     _apply_fields(row, payload)
     after = compute_definition_hash(serialize_offering(row))
     row.definition_hash = after

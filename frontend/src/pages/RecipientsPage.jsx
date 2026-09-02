@@ -13,6 +13,9 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import StatusBadge from '../components/ui/StatusBadge';
 import UploadErrorModal from '../components/ui/UploadErrorModal';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
+import { MetricCard } from '../components/ui/GrowthWorkspace';
 import FilterBuilder, { RESPONSE_TAGS } from '../components/FilterBuilder';
 import { debounce, getMissingUploadColumns, buildDuplicateUploadMessage } from '../utils/helpers';
 
@@ -279,17 +282,15 @@ export default function RecipientsPage() {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Prospects</h1>
-          <p className="text-gray-500 mt-1">
-            Search, filter, and organize every prospect — individually, by group, by tag, or with any combination of filters.
-          </p>
-        </div>
+    <PageShell maxWidth="max-w-[1440px]">
+      <PageHeader
+        eyebrow="Lead generation"
+        title="Prospects"
+        subtitle="Search, filter, and organize every prospect — individually, by group, by tag, or with any combination of filters."
+        actions={
         <div className="flex items-center gap-2">
           <input
-            className="input-field w-48"
+            className="control w-48"
             placeholder="List name *"
             title="Required — names this list so it's identifiable and reusable in future campaigns"
             value={uploadGroupName}
@@ -304,9 +305,16 @@ export default function RecipientsPage() {
             <FiSettings size={16} />
           </button>
         </div>
+        }
+      />
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricCard label="Matching prospects" value={total} hint="Current result set" icon={FiUserPlus} />
+        <MetricCard label="Selected" value={selectedIds.size} hint="Ready for bulk action" tone="green" icon={FiCheckSquare} />
+        <MetricCard label="Filters applied" value={activeFieldKeys.length} hint="Narrowing results" tone="amber" icon={FiTag} />
       </div>
 
-      <div className="card space-y-4">
+      <div className="surface-card space-y-4 p-4">
         <div className="flex flex-wrap items-center gap-3">
           <SearchInput
             onChange={debouncedSearch}
@@ -400,15 +408,15 @@ export default function RecipientsPage() {
         </button>
       </div>
 
-      <div className="card overflow-hidden p-0">
+      <div className="surface-card overflow-hidden">
         {loading ? (
           <div className="flex justify-center py-12"><LoadingSpinner size="lg" /></div>
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b">
-                  <tr className="text-left text-gray-500">
+              <table className="data-table min-w-[1050px]">
+                <thead className="sticky top-0 z-[1] border-b border-slate-200 bg-slate-50/95">
+                  <tr>
                     <th className="px-4 py-3 w-10"></th>
                     <th className="px-4 py-3 font-medium">Name</th>
                     <th className="px-4 py-3 font-medium">Email</th>
@@ -424,8 +432,8 @@ export default function RecipientsPage() {
                   {results.map((r) => (
                     <tr
                       key={r.id}
-                      className={`border-b border-gray-50 ${
-                        r.is_suppressed ? 'bg-gray-50 text-gray-400' : `hover:bg-gray-50/50 ${selectedIds.has(r.id) ? 'bg-primary-50/30' : ''}`
+                      className={`${
+                        r.is_suppressed ? 'bg-slate-50 text-slate-400' : `${selectedIds.has(r.id) ? 'bg-primary-50/30' : ''}`
                       }`}
                     >
                       <td className="px-4 py-3">
@@ -626,6 +634,6 @@ export default function RecipientsPage() {
         }
         confirmText="Import Anyway"
       />
-    </div>
+    </PageShell>
   );
 }

@@ -1,11 +1,10 @@
 import { Link, NavLink } from 'react-router-dom';
-import { FiAlertCircle, FiArchive, FiClock, FiDatabase, FiPlus, FiUser } from 'react-icons/fi';
+import { FiAlertCircle, FiClock, FiDatabase, FiPlus, FiUser } from 'react-icons/fi';
 
 const EXTRACTOR_TABS = [
   { to: '/linkedin-extractor', label: 'Extract', icon: FiUser, accent: 'blue' },
   { to: '/linkedin-history', label: 'History', icon: FiClock, accent: 'violet' },
   { to: '/linkedin-needs-review', label: 'Needs review', icon: FiAlertCircle, accent: 'amber' },
-  { to: '/linkedin-backups', label: 'Backups', icon: FiArchive, accent: 'emerald' },
 ];
 
 /* Each tab keeps the accent its content uses elsewhere — amber for review work,
@@ -86,12 +85,12 @@ export function StatusBadge({ status, kind = 'job', label, tone, className = '' 
 
 export function WorkspaceHeader({ eyebrow, title, description, actions, children }) {
   return (
-    <header className="workspace-hero animate-rise-in">
-      <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+    <header className="animate-rise-in">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="max-w-3xl">
-          {eyebrow ? <p className="workspace-eyebrow">{eyebrow}</p> : null}
-          <h1 className="workspace-title">{title}</h1>
-          {description ? <p className="workspace-description">{description}</p> : null}
+          {eyebrow ? <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-primary-600">{eyebrow}</p> : null}
+          <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-slate-950">{title}</h1>
+          {description ? <p className="mt-1 max-w-2xl text-sm text-slate-500">{description}</p> : null}
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
@@ -136,13 +135,13 @@ export function MetricCard({ label, value, hint, tone = 'blue', icon: Icon, onCl
   const interactive = Boolean(onClick || to);
   const body = (
     <>
-      <div className={`metric-icon metric-icon-${tone} transition-transform duration-200 group-hover:scale-110`}>
-        {Icon ? <Icon size={18} /> : <FiDatabase size={18} />}
-      </div>
       <div className="min-w-0 text-left">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">{label}</p>
-        <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
+        <p className="truncate text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
+        <p className="mt-1 text-2xl font-bold tracking-tight text-slate-950">{value}</p>
         {hint ? <p className="mt-0.5 text-xs text-slate-500">{hint}</p> : null}
+      </div>
+      <div className={`metric-icon metric-icon-${tone} ml-auto transition-transform duration-200 group-hover:scale-110`}>
+        {Icon ? <Icon size={18} /> : <FiDatabase size={18} />}
       </div>
     </>
   );

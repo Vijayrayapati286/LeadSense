@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 class IcpRecordCreate(BaseModel):
     name: str | None = None
+    email: str | None = None
     company_name: str | None = None
     designation: str | None = None
     about: str | None = None
@@ -25,6 +26,7 @@ class IcpRecordCreate(BaseModel):
 
 class IcpRecordUpdate(BaseModel):
     name: str | None = None
+    email: str | None = None
     company_name: str | None = None
     company: str | None = None
     designation: str | None = None
@@ -43,6 +45,7 @@ class IcpRecordResponse(BaseModel):
     id: int
     user_id: int | None = None
     name: str | None = None
+    email: str | None = None
     company_name: str | None = None
     designation: str | None = None
     about: str | None = None
@@ -65,6 +68,23 @@ class IcpRecordResponse(BaseModel):
 
 class IcpListResponse(BaseModel):
     items: list[IcpRecordResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class IcpAccountSummary(BaseModel):
+    company_name: str
+    industry: str | None = None
+    company_size: str | None = None
+    location: str | None = None
+    company_website: str | None = None
+    contact_count: int
+    status: str = "active"
+
+
+class IcpAccountListResponse(BaseModel):
+    items: list[IcpAccountSummary]
     total: int
     page: int
     page_size: int

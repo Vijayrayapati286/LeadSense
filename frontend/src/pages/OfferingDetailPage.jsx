@@ -10,7 +10,10 @@ import {
 } from 'react-icons/fi';
 import MatchCandidatePanel from '../components/offerings/MatchCandidatePanel';
 import IcpDatabasePicker from '../components/offerings/IcpDatabasePicker';
+import OfferingEmailSummary from '../components/offerings/OfferingEmailSummary';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
 import Pagination from '../components/ui/Pagination';
 import SearchInput from '../components/ui/SearchInput';
 import { useToast } from '../hooks/useToast';
@@ -300,23 +303,19 @@ export default function OfferingDetailPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto space-y-5 pb-10">
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-        <div className="flex items-start gap-3 min-w-0">
-          <Link to="/offerings" className="mt-1 text-gray-500 hover:text-gray-800">
-            <FiArrowLeft size={20} />
-          </Link>
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold text-gray-900">{offering.name}</h1>
-            <p className="text-sm text-gray-500 mt-1">
-              {offering.short_description || offering.description || 'No description'}
-            </p>
-          </div>
-        </div>
+    <PageShell maxWidth="max-w-7xl">
+      <PageHeader
+        eyebrow="Offering studio"
+        title={offering.name}
+        subtitle={offering.short_description || offering.description || 'No description'}
+        actions={
         <div className="flex flex-wrap gap-2">
+          <Link to="/offerings" className="btn-secondary inline-flex items-center gap-2">
+            <FiArrowLeft size={16} /> Back
+          </Link>
           <Link
             to={`/offerings/${id}/edit`}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="btn-secondary"
           >
             Edit
           </Link>
@@ -330,7 +329,8 @@ export default function OfferingDetailPage() {
             {isMatching ? 'Matching…' : 'Find Best Candidates'}
           </button>
         </div>
-      </div>
+        }
+      />
 
       {stats ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -342,9 +342,9 @@ export default function OfferingDetailPage() {
             ['Pending Review', stats.pending_review],
             ['Rejected', stats.rejected],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-xl border border-gray-200 bg-white px-3 py-3">
-              <p className="text-xs text-gray-500">{label}</p>
-              <p className="text-xl font-semibold text-gray-900 mt-1">{(value || 0).toLocaleString()}</p>
+            <div key={label} className="min-h-[88px] rounded-2xl border border-slate-200/80 bg-white px-4 py-3 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">{label}</p>
+              <p className="mt-1 text-2xl font-bold text-slate-950">{(value || 0).toLocaleString()}</p>
             </div>
           ))}
         </div>
@@ -422,6 +422,7 @@ export default function OfferingDetailPage() {
               />
             </div>
           </div>
+          <OfferingEmailSummary offering={offering} />
           <div className="grid sm:grid-cols-3 gap-4 text-sm border-t border-gray-100 pt-4">
             <div>
               <p className="text-xs text-gray-400 uppercase">Company size</p>
@@ -650,7 +651,7 @@ export default function OfferingDetailPage() {
           }
         }}
       />
-    </div>
+    </PageShell>
   );
 }
 

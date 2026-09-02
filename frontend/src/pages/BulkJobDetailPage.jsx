@@ -7,7 +7,6 @@ import Pagination from '../components/ui/Pagination';
 import SlideOver from '../components/ui/SlideOver';
 import {
   EmptyState,
-  ExtractorNav,
   MetricCard,
   SkeletonRows,
   StatusBadge,
@@ -199,7 +198,6 @@ export default function BulkJobDetailPage() {
           </>
         }
       >
-        <ExtractorNav />
         <div className="relative z-10 mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
           <Link to="/linkedin-history" className="font-semibold text-primary-600 hover:text-primary-700">← All history</Link>
           <StatusBadge status={(job.needs_review || 0) > 0 && job.status === 'done' ? 'needs_review' : job.status} />

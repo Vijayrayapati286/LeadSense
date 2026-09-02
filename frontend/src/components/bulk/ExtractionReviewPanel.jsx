@@ -44,10 +44,7 @@ function fieldsClearedByLinkedIn(item) {
 function PendingRow({ item, selected, checked, exiting, onOpen, onToggle, busy, selectable }) {
   const hasIssue = itemHasConflict(item);
   const diffKeys = conflictFieldKeys(item);
-  const linkedInName = item?.extracted?.name || '—';
-  const sheetName = item?.uploaded?.name || '—';
-  const namesDiffer = linkedInName !== sheetName;
-  const context = item?.extracted?.company || item?.uploaded?.company;
+  const displayName = itemDisplayName(item);
   const wrapRef = useRef(null);
   const [exitStyle, setExitStyle] = useState(null);
 
@@ -91,7 +88,7 @@ function PendingRow({ item, selected, checked, exiting, onOpen, onToggle, busy, 
               checked={checked}
               onChange={onToggle}
               disabled={exiting || busy}
-              aria-label={`Select ${linkedInName}`}
+              aria-label={`Select ${displayName}`}
               className="h-4 w-4 cursor-pointer rounded border-slate-300 text-primary-600 focus:ring-primary-400"
             />
           </label>
@@ -112,16 +109,7 @@ function PendingRow({ item, selected, checked, exiting, onOpen, onToggle, busy, 
 
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-slate-900">
-              {linkedInName}
-            </span>
-            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
-              {namesDiffer ? (
-                <span className="truncate">
-                  Sheet: <span className="text-slate-700">{sheetName}</span>
-                </span>
-              ) : null}
-              {context ? <span className="truncate">{context}</span> : null}
-              <span className="text-slate-400">Row {item.source_row_number}</span>
+              {displayName}
             </span>
           </span>
 
@@ -152,7 +140,7 @@ function PendingRow({ item, selected, checked, exiting, onOpen, onToggle, busy, 
 }
 
 function ProgressRow({ item }) {
-  const uploadedName = item?.uploaded?.name || item?.url || `Row ${item?.source_row_number}`;
+  const displayName = itemDisplayName(item);
   const failed = isFailed(item);
   return (
     <div className="flex animate-slide-up-in items-center gap-3 border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
@@ -163,7 +151,7 @@ function ProgressRow({ item }) {
           <FiLoader className="animate-spin" size={12} /> Extracting…
         </span>
       )}
-      <span className="min-w-0 truncate text-sm text-slate-500">{uploadedName}</span>
+      <span className="min-w-0 truncate text-sm font-medium text-slate-900">{displayName}</span>
     </div>
   );
 }

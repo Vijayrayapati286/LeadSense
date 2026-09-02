@@ -15,23 +15,54 @@ const DESCRIPTION_MAX = 500;
 
 function FieldLabel({ children, required }) {
   return (
-    <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+    <label className="mb-1.5 block text-sm font-semibold text-slate-800">
       {children}
-      {required ? <span className="text-primary-600 ml-0.5">*</span> : null}
+      {required ? <span className="ml-0.5 text-primary-600">*</span> : null}
     </label>
   );
 }
 
-function IconField({ icon: Icon, iconClass, iconBg, children, trailing }) {
+function FieldHint({ children }) {
+  return (
+    <p className="mt-1.5 h-4 truncate text-xs text-slate-500">
+      {children || '\u00A0'}
+    </p>
+  );
+}
+
+function IconField({ icon: Icon, iconClass, iconBg, children, trailing, avatar }) {
   return (
     <div className="relative">
-      <span className={`absolute left-3 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-md ${iconBg}`}>
-        <Icon size={14} className={iconClass} />
-      </span>
+      {avatar ? (
+        <span className="pointer-events-none absolute left-3 top-1/2 z-10 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-primary-100 text-[10px] font-bold text-primary-700">
+          {avatar}
+        </span>
+      ) : (
+        <span className={`absolute left-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md ${iconBg}`}>
+          <Icon size={14} className={iconClass} />
+        </span>
+      )}
       {children}
       {trailing ? (
-        <span className="absolute right-3 top-1/2 -translate-y-1/2">{trailing}</span>
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">{trailing}</span>
       ) : null}
+    </div>
+  );
+}
+
+function SelectField({ icon, iconBg, iconClass, avatar, value, onChange, children }) {
+  return (
+    <div className="relative">
+      <IconField icon={icon} iconBg={iconBg} iconClass={iconClass} avatar={avatar}>
+        <select
+          className="campaign-field-select pl-12 pr-10 appearance-none"
+          value={value}
+          onChange={onChange}
+        >
+          {children}
+        </select>
+      </IconField>
+      <FiChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
     </div>
   );
 }
@@ -65,21 +96,21 @@ export default function CampaignFormFields({
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {!isEditMode ? (
-          <CampaignSourcePicker
-            value={campaignSource}
-            onChange={onCampaignSourceChange}
-            offerings={offerings}
-            mailers={mailers}
-            selectedOfferingId={selectedOfferingId}
-            selectedSmartOpsId={selectedSmartOpsId}
-            onOfferingSelect={onOfferingSelect}
-            onSmartOpsSelect={onSmartOpsSelect}
-            loadingSource={loadingSource}
-          />
-        ) : null}
+      {!isEditMode ? (
+        <CampaignSourcePicker
+          value={campaignSource}
+          onChange={onCampaignSourceChange}
+          offerings={offerings}
+          mailers={mailers}
+          selectedOfferingId={selectedOfferingId}
+          selectedSmartOpsId={selectedSmartOpsId}
+          onOfferingSelect={onOfferingSelect}
+          onSmartOpsSelect={onSmartOpsSelect}
+          loadingSource={loadingSource}
+        />
+      ) : null}
 
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <FieldLabel required>Campaign Name</FieldLabel>
           <IconField icon={FiEdit3} iconBg="bg-violet-50" iconClass="text-violet-600">
@@ -92,7 +123,7 @@ export default function CampaignFormFields({
           </IconField>
         </div>
 
-        <div className={isEditMode ? 'md:col-span-2' : ''}>
+        <div>
           <FieldLabel required>Campaign ID</FieldLabel>
           <IconField
             icon={FiCreditCard}
@@ -126,73 +157,61 @@ export default function CampaignFormFields({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div>
           <FieldLabel>Owner</FieldLabel>
-          <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-xs font-bold text-primary-700 z-10 pointer-events-none">
-              {getInitials(selectedUser?.name || form.owner)}
-            </span>
-            <select
-              className="campaign-field-select pl-14 pr-10 appearance-none"
-              value={form.owner}
-              onChange={(e) => updateForm('owner', e.target.value)}
-            >
-              {users.length > 0 ? (
-                users.map((u) => (
-                  <option key={u.id} value={u.name}>
-                    {u.name}
-                  </option>
-                ))
-              ) : (
-                <option value={form.owner}>{form.owner || 'Select owner'}</option>
-              )}
-            </select>
-            <FiChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-          </div>
-          {selectedUser?.email ? (
-            <p className="mt-1 text-xs text-slate-500 pl-1">{selectedUser.email}</p>
-          ) : null}
+          <SelectField
+            avatar={getInitials(selectedUser?.name || form.owner)}
+            value={form.owner}
+            onChange={(e) => updateForm('owner', e.target.value)}
+          >
+            {users.length > 0 ? (
+              users.map((u) => (
+                <option key={u.id} value={u.name}>
+                  {u.name}
+                </option>
+              ))
+            ) : (
+              <option value={form.owner}>{form.owner || 'Select owner'}</option>
+            )}
+          </SelectField>
+          <FieldHint>{selectedUser?.email}</FieldHint>
         </div>
 
         <div>
           <FieldLabel>Department</FieldLabel>
-          <div className="relative">
-            <IconField icon={FiHome} iconBg="bg-amber-50" iconClass="text-amber-600">
-              <select
-                className="campaign-field-select pl-12 pr-10 appearance-none"
-                value={form.department}
-                onChange={(e) => updateForm('department', e.target.value)}
-              >
-                {DEPARTMENTS.map((dept) => (
-                  <option key={dept} value={dept}>{dept}</option>
-                ))}
-              </select>
-            </IconField>
-            <FiChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-          </div>
+          <SelectField
+            icon={FiHome}
+            iconBg="bg-amber-50"
+            iconClass="text-amber-600"
+            value={form.department}
+            onChange={(e) => updateForm('department', e.target.value)}
+          >
+            {DEPARTMENTS.map((dept) => (
+              <option key={dept} value={dept}>{dept}</option>
+            ))}
+          </SelectField>
+          <FieldHint />
         </div>
 
         <div>
           <FieldLabel>Target Audience</FieldLabel>
-          <div className="relative">
-            <IconField icon={FiUsers} iconBg="bg-violet-50" iconClass="text-violet-600">
-              <select
-                className="campaign-field-select pl-12 pr-10 appearance-none"
-                value={form.target_audience}
-                onChange={(e) => updateForm('target_audience', e.target.value)}
-              >
-                <option value="">Select audience...</option>
-                {form.target_audience && !TARGET_AUDIENCES.includes(form.target_audience) ? (
-                  <option value={form.target_audience}>{form.target_audience}</option>
-                ) : null}
-                {TARGET_AUDIENCES.map((audience) => (
-                  <option key={audience} value={audience}>{audience}</option>
-                ))}
-              </select>
-            </IconField>
-            <FiChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-          </div>
+          <SelectField
+            icon={FiUsers}
+            iconBg="bg-violet-50"
+            iconClass="text-violet-600"
+            value={form.target_audience}
+            onChange={(e) => updateForm('target_audience', e.target.value)}
+          >
+            <option value="">Select audience...</option>
+            {form.target_audience && !TARGET_AUDIENCES.includes(form.target_audience) ? (
+              <option value={form.target_audience}>{form.target_audience}</option>
+            ) : null}
+            {TARGET_AUDIENCES.map((audience) => (
+              <option key={audience} value={audience}>{audience}</option>
+            ))}
+          </SelectField>
+          <FieldHint />
         </div>
       </div>
     </div>

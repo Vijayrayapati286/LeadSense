@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FiPlus, FiEdit2, FiTrash2, FiBookOpen } from 'react-icons/fi';
+import { FiBookOpen, FiEdit2, FiFileText, FiPlus, FiTrash2, FiZap } from 'react-icons/fi';
 import { mailerService, templateService } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
@@ -9,6 +9,10 @@ import SearchInput from '../components/ui/SearchInput';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import TemplateEditor from '../components/TemplateEditor';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
+import SurfaceCard from '../components/ui/SurfaceCard';
+import { MetricCard } from '../components/ui/GrowthWorkspace';
 
 const EMPTY_CONTENT = { subject: '', body: '', closing: '', cta: '' };
 
@@ -51,7 +55,7 @@ export default function TemplatesPage() {
   const loadPlaceholderTemplates = async () => {
     if (placeholderTemplates.length > 0) return;
     try {
-      const { data } = await templateService.getPlaceholderTemplates();
+      const data = await templateService.getPlaceholderTemplates();
       setPlaceholderTemplates(data);
     } catch {
       toast.error('Failed to load placeholder templates');
@@ -167,19 +171,31 @@ export default function TemplatesPage() {
     }
   };
 
+  const manualCount = mailers.filter((mailer) => mailer.type === 'manual').length;
+  const aiCount = mailers.filter((mailer) => mailer.type === 'ai').length;
+
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Mailers</h1>
-          <p className="text-gray-500 mt-1">Your reusable email templates — save once, find and reuse across campaigns.</p>
-        </div>
+    <PageShell maxWidth="max-w-[1440px]">
+      <PageHeader
+        eyebrow="Lead generation"
+        title="Mailers"
+        subtitle="Your reusable email templates — save once, find and reuse across campaigns."
+        actions={
         <button onClick={openNewMailer} className="btn-primary flex items-center gap-2">
           <FiPlus size={16} /> New Mailer
         </button>
+        }
+      />
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricCard label="Total mailers" value={mailers.length} hint="Reusable templates" icon={FiBookOpen} />
+        <MetricCard label="Manual" value={manualCount} hint="Written by your team" tone="green" icon={FiFileText} />
+        <MetricCard label="AI generated" value={aiCount} hint="Created with AI" tone="amber" icon={FiZap} />
       </div>
 
-      <SearchInput value={search} onChange={setSearch} placeholder="Search mailers by name..." className="max-w-md" />
+      <SurfaceCard variant="filter">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search mailers by name..." className="max-w-md" />
+      </SurfaceCard>
 
       {loading ? (
         <div className="flex items-center justify-center h-64">
@@ -262,6 +278,6 @@ export default function TemplatesPage() {
         message={`Delete "${deleteTarget?.name}"? This cannot be undone.`}
         confirmText="Delete"
       />
-    </div>
+    </PageShell>
   );
 }
