@@ -26,14 +26,18 @@ EMBEDDING_MODEL_LOCAL = "local-hash-v1"
 def build_offering_profile_text(offering: Any) -> str:
     parts = [
         getattr(offering, "name", None) or "",
+        getattr(offering, "product_type", None) or "",
         getattr(offering, "short_description", None) or "",
         getattr(offering, "description", None) or "",
+        getattr(offering, "target_customer", None) or "",
         "Industries: " + ", ".join(_as_list(getattr(offering, "target_industries", None))),
         "Roles: " + ", ".join(_as_list(getattr(offering, "target_job_titles", None))),
         "Problems: " + ", ".join(_as_list(getattr(offering, "pain_points", None))),
         "Problems: " + ", ".join(_as_list(getattr(offering, "business_problems", None))),
+        "Challenges: " + ", ".join(_as_list(getattr(offering, "current_challenges", None))),
         "Use cases: " + ", ".join(_as_list(getattr(offering, "use_cases", None))),
         "Benefits: " + ", ".join(_as_list(getattr(offering, "benefits", None))),
+        "Selling points: " + ", ".join(_as_list(getattr(offering, "selling_points", None))),
         "Keywords: " + ", ".join(_as_list(getattr(offering, "positive_keywords", None))),
         "Buying: " + ", ".join(_as_list(getattr(offering, "buying_roles", None))),
     ]

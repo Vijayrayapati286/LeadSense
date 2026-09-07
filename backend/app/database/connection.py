@@ -131,6 +131,7 @@ def _ensure_linkedin_bulk_schema() -> None:
         "resolution_summary": "VARCHAR(64)",
         "resolved_by": "INTEGER",
         "resolved_at": "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME",
+        "image": "TEXT",
     }
 
     for name, ddl in job_adds.items():
@@ -269,6 +270,7 @@ def _ensure_offerings_recommendation_schema() -> None:
             icp_adds = {
                 "embedding": json_type,
                 "embedding_model": "VARCHAR(100)",
+                "image": "TEXT",
             }
             for name, ddl in icp_adds.items():
                 if name not in cols:
@@ -283,6 +285,9 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "embedding": json_type,
                 "embedding_model": "VARCHAR(100)",
                 "profile_text": "TEXT",
+                "target_customer": "TEXT",
+                "target_company_size": json_type,
+                "selling_points": json_type,
             }
             for name, ddl in offering_adds.items():
                 if name not in cols:

@@ -16,12 +16,14 @@ from app.icp.schemas import (
     IcpRecordUpdate,
 )
 from app.icp.service import (
-    count_icp_records,
+    backfill_icp_from_extracted_items,
     create_icp_record,
     delete_icp_record,
     get_icp_record,
+    icp_counts_summary,
     list_accounts_summary,
     list_icp_records,
+    purge_empty_icp_records,
     serialize_icp,
     update_icp_record,
     upsert_icp_from_bulk_item,
@@ -58,6 +60,8 @@ def list_icp(
     designation: str = Query(""),
     location: str = Query(""),
     icp_status: str = Query(""),
+    without_company: bool = Query(False),
+    require_name: bool = Query(True),
     created_from: str = Query(""),
     created_to: str = Query(""),
     verified_from: str = Query(""),
@@ -71,9 +75,13 @@ def list_icp(
     current_user: User = Depends(get_current_user),
 ):
     size = page_size or limit
+    user_id = getattr(current_user, "id", None)
+    # Fill Contacts from any already-extracted LinkedIn profiles, then drop hollow shells.
+    backfill_icp_from_extracted_items(db, user_id=user_id)
+    purge_empty_icp_records(db, user_id=user_id)
     result = list_icp_records(
         db,
-        user_id=getattr(current_user, "id", None),
+        user_id=user_id,
         search=search or None,
         industry=industry or None,
         company=company or company_name or None,
@@ -81,6 +89,8 @@ def list_icp(
         designation=designation or None,
         location=location or None,
         icp_status=icp_status or None,
+        without_company=without_company,
+        require_name=require_name,
         created_from=_parse_date(created_from or None),
         created_to=_parse_date(created_to or None),
         verified_from=_parse_date(verified_from or None),
@@ -90,6 +100,8 @@ def list_icp(
         page=page,
         page_size=size,
     )
+    # Persist any status repairs (e.g. hollow rows wrongly marked verified).
+    db.commit()
     return result
 
 
@@ -119,7 +131,9 @@ def icp_count(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return {"total": count_icp_records(db, user_id=getattr(current_user, "id", None))}
+    summary = icp_counts_summary(db, user_id=getattr(current_user, "id", None))
+    db.commit()
+    return summary
 
 
 @router.get("/{record_id}", response_model=IcpRecordResponse)

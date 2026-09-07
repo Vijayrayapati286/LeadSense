@@ -213,16 +213,30 @@ export default function ReviewCompareModal({
     });
   }
 
-  async function approve() {
+  /** Reject = keep spreadsheet values for every field in play and resolve. */
+  function buildRejectPayload() {
+    const fields = hasConflicts ? conflicts : FIELDS.map((f) => ({ field: f.key }));
+    return fields.map((c) => ({ field: c.field, resolution: SHEET }));
+  }
+
+  async function submitResolve(payload) {
     setSaving(true);
     try {
-      await onResolve(buildPayload());
+      await onResolve(payload);
       // When the parent walks a queue it decides what opens next, so closing
       // here would fight that; otherwise the dialog dismisses itself.
       if (!autoAdvance) onClose();
     } finally {
       setSaving(false);
     }
+  }
+
+  async function approve() {
+    await submitResolve(buildPayload());
+  }
+
+  async function reject() {
+    await submitResolve(buildRejectPayload());
   }
 
   useEffect(() => {
@@ -672,21 +686,36 @@ export default function ReviewCompareModal({
             ) : null}
           </div>
           {canResolve ? (
-            <button
-              type="button"
-              onClick={approve}
-              disabled={isBusy || !ready}
-              className="btn-primary inline-flex items-center gap-2 px-5 py-2.5"
-            >
-              <FiCheck size={16} />
-              {isBusy
-                ? 'Saving…'
-                : hasConflicts
-                  ? autoAdvance && position?.total > 1
-                    ? 'Approve & next'
-                    : 'Approve'
-                  : 'Verify'}
-            </button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={reject}
+                disabled={isBusy}
+                className="btn-secondary inline-flex items-center gap-2 px-5 py-2.5 text-rose-700 hover:bg-rose-50 hover:border-rose-200"
+              >
+                <FiX size={16} />
+                {isBusy
+                  ? 'Saving…'
+                  : autoAdvance && position?.total > 1
+                    ? 'Reject & next'
+                    : 'Reject'}
+              </button>
+              <button
+                type="button"
+                onClick={approve}
+                disabled={isBusy || !ready}
+                className="btn-primary inline-flex items-center gap-2 px-5 py-2.5"
+              >
+                <FiCheck size={16} />
+                {isBusy
+                  ? 'Saving…'
+                  : hasConflicts
+                    ? autoAdvance && position?.total > 1
+                      ? 'Approve & next'
+                      : 'Approve'
+                    : 'Verify'}
+              </button>
+            </div>
           ) : null}
         </div>
       </div>

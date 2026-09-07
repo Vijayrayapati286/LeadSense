@@ -145,11 +145,17 @@ class LinkedInApifyProfileExtractor:
             except (TypeError, ValueError):
                 return default
 
+        headline = str(item.get("headline") or "").strip()
+        company = str(item.get("companyName") or "").strip()
+        job_title = str(item.get("jobTitle") or "").strip()
+        if not company:
+            company = self._company_from_headline(job_title or headline) or ""
+
         data = {
             "name": name,
-            "headline": str(item.get("headline") or "").strip(),
-            "company": str(item.get("companyName") or "").strip(),
-            "job_title": str(item.get("jobTitle") or "").strip(),
+            "headline": headline,
+            "company": company,
+            "job_title": job_title,
             "location": str(item.get("geoLocationName") or "").strip(),
             "summary": str(item.get("summary") or "").strip(),
             "followers": _as_int(item.get("followerCount")),
@@ -298,7 +304,6 @@ class LinkedInApifyProfileExtractor:
             if not isinstance(raw_item, dict):
                 continue
             data = self._map_rich_item(raw_item)
-            data.pop("image", None)
             profile_url = str(data.get("profile_url") or "").strip()
             if not profile_url:
                 continue
@@ -492,6 +497,7 @@ class LinkedInApifyProfileExtractor:
 
         company = self._first_str(item, ("companyName", "company", "company_name", "current_company")) or ""
         job_title = self._first_str(item, ("jobTitle", "job_title", "title", "occupation")) or ""
+        headline = self._first_str(item, ("headline",)) or ""
         if not company or not job_title:
             default_position = item.get("defaultPosition") or item.get("current_position")
             if isinstance(default_position, dict):
@@ -512,6 +518,9 @@ class LinkedInApifyProfileExtractor:
                         or ""
                     )
 
+        if not company:
+            company = self._company_from_headline(job_title or headline) or ""
+
         profile_url = (
             self._first_str(item, ("inputUrl", "profileUrl", "url", "linkedinUrl"))
             or fallback_url
@@ -520,7 +529,7 @@ class LinkedInApifyProfileExtractor:
 
         return {
             "name": name,
-            "headline": self._first_str(item, ("headline",)) or "",
+            "headline": headline,
             "company": company,
             "job_title": job_title,
             "location": self._first_str(
@@ -625,13 +634,8 @@ class LinkedInApifyProfileExtractor:
 
         about = self._first_str(item, ("about", "summary", "description", "bio"))
 
-        # Derive company from "Title @ Company | ..." headlines when missing.
-        if job_title and not company:
-            at_match = re.search(r"\s@\s([^|•\n]+)", job_title)
-            if at_match:
-                company = at_match.group(1).strip(" .") or None
-            elif " at " in job_title:
-                company = job_title.rsplit(" at ", 1)[-1].split("|")[0].strip(" .") or None
+        if not company:
+            company = self._company_from_headline(job_title)
 
         return {
             "full_name": full_name,
@@ -639,6 +643,19 @@ class LinkedInApifyProfileExtractor:
             "job_title": job_title,
             "about": about,
         }
+
+    @staticmethod
+    def _company_from_headline(headline: str | None) -> str | None:
+        """Derive company from 'Title @ Company' or 'Title at Company' headlines."""
+        text = (headline or "").strip()
+        if not text:
+            return None
+        at_match = re.search(r"\s@\s([^|•\n]+)", text)
+        if at_match:
+            return at_match.group(1).strip(" .") or None
+        if " at " in text:
+            return text.rsplit(" at ", 1)[-1].split("|")[0].strip(" .") or None
+        return None
 
     @staticmethod
     def _first_str(item: dict[str, Any], keys: tuple[str, ...]) -> str | None:

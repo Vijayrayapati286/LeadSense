@@ -127,8 +127,17 @@ export default function InlineConflictReview({ item, onResolve, busy = false }) 
     }
   }
 
+  function buildRejectPayload() {
+    const fields = hasConflicts ? conflicts : FIELDS.map((f) => ({ field: f.key }));
+    return fields.map((c) => ({ field: c.field, resolution: 'KEEP_EXISTING' }));
+  }
+
   async function approve() {
     await submit(buildPayload());
+  }
+
+  async function reject() {
+    await submit(buildRejectPayload());
   }
 
   const primaryLabel = hasConflicts ? 'Approve' : 'Verify';
@@ -323,6 +332,15 @@ export default function InlineConflictReview({ item, onResolve, busy = false }) 
 
       {canResolve ? (
         <div className="flex items-center justify-end gap-2 pt-0.5">
+          <button
+            type="button"
+            onClick={reject}
+            disabled={isBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white text-rose-700 text-sm font-medium px-4 py-2 hover:bg-rose-50 hover:border-rose-200 disabled:opacity-50"
+          >
+            <FiX size={15} />
+            Reject
+          </button>
           <button
             type="button"
             onClick={approve}

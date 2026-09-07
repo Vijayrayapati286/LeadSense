@@ -390,6 +390,7 @@ def copy_canonical_results_to_duplicates(db: Session, job_id: str) -> int:
         item.location = canon.location
         item.followers = canon.followers
         item.connections = canon.connections
+        item.image = getattr(canon, "image", None)
         item.extraction_response = canon.extraction_response
         item.last_error = canon.last_error
         item.attempt_count = int(canon.attempt_count or 0)
@@ -406,10 +407,12 @@ def copy_canonical_results_to_duplicates(db: Session, job_id: str) -> int:
             review_threshold=int(getattr(get_settings(), "verify_review_threshold", 75)),
         )
         try:
-            from app.icp.service import sync_icp_if_eligible
+            from app.icp.service import sync_icp_after_extraction
 
             job = get_job_row(db, item.job_id) if hasattr(item, "job_id") else None
-            sync_icp_if_eligible(db, item, user_id=getattr(job, "user_id", None) if job else None)
+            sync_icp_after_extraction(
+                db, item, user_id=getattr(job, "user_id", None) if job else None
+            )
         except Exception:
             logger.exception("ICP sync failed for duplicate item %s (extraction kept)", item.id)
         copied += 1
@@ -576,6 +579,7 @@ def item_to_result_dict(item: BulkJobItemRow) -> dict[str, Any]:
             "about": item.about,
             "followers": item.followers,
             "connections": item.connections,
+            "image": getattr(item, "image", None),
         },
         "name_match": matches["name"],
         "designation_match": matches["designation"],

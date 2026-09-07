@@ -86,8 +86,10 @@ class OfferingRow(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     website_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    target_customer: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     target_industries: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    target_company_size: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     company_size_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
     company_size_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
     company_size_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -110,6 +112,7 @@ class OfferingRow(Base):
     use_cases: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     desired_outcomes: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     benefits: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    selling_points: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
 
     must_have_rules: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     nice_to_have_rules: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)

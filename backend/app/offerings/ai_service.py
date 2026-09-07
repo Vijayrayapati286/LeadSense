@@ -42,7 +42,13 @@ class OfferingAIService:
     def __init__(self):
         self.settings = settings
 
-    def generate_icp(self, description: str) -> GeneratedIcpPayload:
+    def generate_icp(
+        self,
+        description: str,
+        *,
+        requested_fields: list[str] | None = None,
+        current_values: dict[str, Any] | None = None,
+    ) -> GeneratedIcpPayload:
         if self.settings.use_mock_groq or not self.settings.groq_api_key:
             return self._mock_generate(description)
 
@@ -51,7 +57,11 @@ class OfferingAIService:
             try:
                 raw = self._groq_json(
                     system=GENERATE_SYSTEM,
-                    user=self._generate_prompt(description),
+                    user=self._generate_prompt(
+                        description,
+                        requested_fields=requested_fields,
+                        current_values=current_values,
+                    ),
                     temperature=0.4,
                     max_tokens=1200,
                 )
@@ -136,8 +146,8 @@ class OfferingAIService:
         if isinstance(cs, str):
             raw["company_size"] = {"label": cs}
         try:
-            return GeneratedIcpPayload.model_validate(raw)
-        except ValidationError as exc:
+            payload = GeneratedIcpPayload.model_validate(raw)
+        except ValidationError:
             # coerce common list/string mistakes
             for key in (
                 "industries",
@@ -153,6 +163,7 @@ class OfferingAIService:
                 "use_cases",
                 "desired_outcomes",
                 "benefits",
+                "selling_points",
                 "positive_keywords",
                 "negative_keywords",
                 "must_have_rules",
@@ -161,7 +172,12 @@ class OfferingAIService:
             ):
                 if key in raw and isinstance(raw[key], str):
                     raw[key] = [raw[key]]
-            return GeneratedIcpPayload.model_validate(raw)
+            payload = GeneratedIcpPayload.model_validate(raw)
+        if payload.detailed_description and not payload.description:
+            payload.description = payload.detailed_description
+        if payload.description and not payload.detailed_description:
+            payload.detailed_description = payload.description
+        return payload
 
     def _validate_semantic(self, raw: dict) -> SemanticMatchEvidence:
         return SemanticMatchEvidence.model_validate(raw)
@@ -272,14 +288,27 @@ Each version must use a distinctly different opening angle."""
         selected = versions[: data.count]
         return {"versions": [v.model_dump() for v in selected], "is_mock": True}
 
-    def _generate_prompt(self, description: str) -> str:
+    def _generate_prompt(
+        self,
+        description: str,
+        *,
+        requested_fields: list[str] | None = None,
+        current_values: dict[str, Any] | None = None,
+    ) -> str:
+        requested = ", ".join(requested_fields or []) or "all fields"
+        context = json.dumps(current_values or {}, ensure_ascii=False)[:3000]
         return f"""Analyze this offering and return JSON with exactly these keys:
 industries (array), company_size (object with min, max, label),
 departments, job_titles, seniority, geographies, business_models,
 decision_maker_types, buying_roles, pain_points, business_problems,
-use_cases, desired_outcomes, benefits, positive_keywords, negative_keywords,
+use_cases, desired_outcomes, benefits, selling_points, positive_keywords, negative_keywords,
 must_have_rules, nice_to_have_rules, exclusion_rules,
-suggested_name, short_description, product_type.
+suggested_name, short_description, detailed_description, description, product_type,
+target_customer, pricing_range.
+
+Requested fields: {requested}
+Current offering context (keep suggestions coherent, but do not merely copy it):
+{context}
 
 Offering description:
 {description.strip()}
@@ -292,9 +321,17 @@ buying_signal_reason, job_title_boost, job_title_reason.
 
 Offering name: {getattr(offering, 'name', '')}
 Offering description: {getattr(offering, 'short_description', '') or getattr(offering, 'description', '')}
+Product/service type: {getattr(offering, 'product_type', '')}
+Target customer: {getattr(offering, 'target_customer', '')}
+Target industries: {getattr(offering, 'target_industries', [])}
 Pain points: {getattr(offering, 'pain_points', [])}
+Current challenges: {getattr(offering, 'current_challenges', [])}
 Use cases: {getattr(offering, 'use_cases', [])}
+Benefits: {getattr(offering, 'benefits', [])}
+Selling points: {getattr(offering, 'selling_points', [])}
 Target titles: {getattr(offering, 'target_job_titles', [])}
+Target departments: {getattr(offering, 'target_departments', [])}
+Target seniority: {getattr(offering, 'target_seniority', [])}
 
 Candidate name: {getattr(icp, 'name', '')}
 Title: {getattr(icp, 'designation', '')}
@@ -305,6 +342,67 @@ About: {(getattr(icp, 'about', '') or '')[:800]}
 
     def _mock_generate(self, description: str) -> GeneratedIcpPayload:
         lower = description.lower()
+        is_banking = any(
+            phrase in lower
+            for phrase in ("commercial banking", "commercial lending", "working capital", "equipment financing")
+        )
+        if is_banking:
+            detailed = description.strip()
+            return GeneratedIcpPayload(
+                industries=["Banking", "Financial Services", "Commercial Lending"],
+                company_size={"min": 200, "max": 10000, "label": "200-10000 employees"},
+                departments=["Commercial Banking", "Business Banking", "Lending"],
+                job_titles=[
+                    "Commercial Banker",
+                    "Commercial Banking Relationship Manager",
+                    "Business Banking Manager",
+                    "Corporate Banking Manager",
+                    "Commercial Lending Manager",
+                ],
+                seniority=["Manager", "Director", "VP"],
+                business_models=["B2B", "Financial Services"],
+                decision_maker_types=["Relationship manager", "Commercial banking leader"],
+                buying_roles=["Decision maker", "Advisor"],
+                pain_points=[
+                    "Difficulty identifying suitable financing products",
+                    "Complex business financing requirements",
+                    "Customer retention challenges",
+                    "Limited visibility into customer financing needs",
+                ],
+                business_problems=["Complex financing decisions", "Limited portfolio growth"],
+                use_cases=[
+                    "Working capital financing",
+                    "Business expansion",
+                    "Equipment financing",
+                    "Commercial lending",
+                    "Portfolio growth",
+                ],
+                desired_outcomes=["More lending opportunities", "Stronger customer relationships"],
+                benefits=[
+                    "Personalized financing solutions",
+                    "Improved customer relationships",
+                    "Increased lending opportunities",
+                    "Stronger commercial banking portfolios",
+                ],
+                selling_points=[
+                    "Flexible financing options",
+                    "Customized lending recommendations",
+                    "Relationship-led portfolio growth",
+                ],
+                positive_keywords=["commercial banking", "lending", "working capital", "portfolio growth"],
+                negative_keywords=["consumer banking", "personal loans"],
+                suggested_name="Commercial Business Growth & Lending Solutions",
+                short_description=(
+                    "Flexible commercial lending solutions for businesses seeking financing "
+                    "for growth and working capital."
+                ),
+                description=detailed,
+                detailed_description=detailed,
+                product_type="Financial Services",
+                target_customer="Commercial banks, business banking teams and financial institutions.",
+                pricing_range="Contact sales",
+                is_mock=True,
+            )
         is_call = any(w in lower for w in ("call", "contact center", "bpo", "coaching", "qa"))
         industries = ["BPO", "Contact Centers", "SaaS", "Telecom"] if is_call else ["SaaS", "Technology", "Enterprise Software"]
         titles = (
@@ -339,16 +437,17 @@ About: {(getattr(icp, 'about', '') or '')[:800]}
             ),
             desired_outcomes=["Higher CSAT", "Faster ramp", "Lower QA cost"] if is_call else ["Higher win rates", "Faster deals"],
             benefits=["AI coaching", "Automated evaluation", "Manager dashboards"],
+            selling_points=["Fast implementation", "Actionable team insights", "Scalable workflows"],
             positive_keywords=["call quality", "contact center", "agent performance", "QA"] if is_call else ["sales", "revenue", "pipeline"],
             negative_keywords=["student", "intern", "freelancer"],
             must_have_rules=["Operations or sales leadership"],
             nice_to_have_rules=["Existing QA or coaching program"],
             exclusion_rules=["Individual contributor only", "Unrelated industry"],
-            suggested_name="AI Call Copilot" if is_call else "AI Sales Platform",
+            suggested_name="AI Call Copilot" if is_call else "Revenue Workflow Intelligence",
             short_description=(
                 "AI-powered call coaching and conversation intelligence"
                 if is_call
-                else "AI-powered platform for B2B sales teams"
+                else "Workflow intelligence for modern B2B revenue teams"
             ),
             description=(
                 "An AI platform that analyzes customer calls, provides real-time coaching, "
@@ -356,7 +455,18 @@ About: {(getattr(icp, 'about', '') or '')[:800]}
                 if is_call
                 else "An AI platform that helps B2B sales teams improve conversion and pipeline visibility."
             ),
+            detailed_description=(
+                "An AI platform that analyzes customer calls, provides real-time coaching, "
+                "and evaluates agent performance for contact centers and BPOs."
+                if is_call
+                else description.strip()
+            ),
             product_type="SaaS",
+            target_customer=(
+                "Contact center and BPO operations teams"
+                if is_call
+                else "B2B revenue teams seeking better workflow visibility"
+            ),
             pricing_range="Contact sales",
             is_mock=True,
         )

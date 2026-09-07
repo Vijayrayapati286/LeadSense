@@ -46,6 +46,7 @@ OUTPUT_COLUMNS = (
     "Summary",
     "Followers",
     "Connections",
+    "Image",
     "Status",
     "Error",
 )
@@ -177,6 +178,7 @@ class BulkExcelService:
                     "Summary": self._cell(data.get("summary")),
                     "Followers": data.get("followers") if data.get("followers") is not None else "",
                     "Connections": data.get("connections") if data.get("connections") is not None else "",
+                    "Image": self._cell(data.get("image")),
                     "Status": status,
                     "Error": error or None,
                 }
@@ -247,6 +249,10 @@ class BulkExcelService:
             "Extracted Company",
             "Extracted Location",
             "Extracted About",
+            "Extracted Headline",
+            "Extracted Followers",
+            "Extracted Connections",
+            "Extracted Image",
             "Extraction Status",
             "Extraction Attempts",
             "Name Match",
@@ -319,6 +325,10 @@ class BulkExcelService:
             row["Extracted Company"] = getattr(item, "company", None)
             row["Extracted Location"] = getattr(item, "location", None)
             row["Extracted About"] = getattr(item, "about", None)
+            row["Extracted Headline"] = getattr(item, "headline", None)
+            row["Extracted Followers"] = getattr(item, "followers", None)
+            row["Extracted Connections"] = getattr(item, "connections", None)
+            row["Extracted Image"] = getattr(item, "image", None)
             row["Extraction Status"] = getattr(item, "status", "") or ""
             row["Extraction Attempts"] = getattr(item, "attempt_count", 0) or 0
             row["Name Match"] = _match_label(getattr(item, "name_match", None))

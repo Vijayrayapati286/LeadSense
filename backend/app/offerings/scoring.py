@@ -167,8 +167,10 @@ def score_industry_fit(offering: Any, icp: Any) -> DimensionScore:
 def score_role_fit(offering: Any, icp: Any) -> DimensionScore:
     titles = _as_list(getattr(offering, "target_job_titles", None))
     seniority_targets = [_norm(t) for t in _as_list(getattr(offering, "target_seniority", None))]
+    department_targets = _as_list(getattr(offering, "target_departments", None))
     title = getattr(icp, "designation", None) or ""
-    if not titles and not seniority_targets:
+    about = getattr(icp, "about", None) or ""
+    if not titles and not seniority_targets and not department_targets:
         return DimensionScore(30, reason="No target roles defined", matched=False)
     if not title:
         return DimensionScore(0, reason="Candidate title unknown", matched=False)
@@ -202,7 +204,17 @@ def score_role_fit(offering: Any, icp: Any) -> DimensionScore:
     elif detected:
         seniority_pts = 15
 
-    total = min(100, title_pts + seniority_pts)
+    department_pts = 0
+    if department_targets:
+        detected_departments = _detect_department(title, about)
+        for department in detected_departments:
+            hit, term = _contains_any(department, department_targets)
+            if hit:
+                department_pts = 20
+                reasons.append(f"Department matches ({term})")
+                break
+
+    total = min(100, title_pts + seniority_pts + department_pts)
     return DimensionScore(
         total,
         reason="; ".join(reasons) if reasons else f"Role '{title}' not in buyer personas",
@@ -263,10 +275,12 @@ def score_problem_fit(
     keywords = (
         _as_list(getattr(offering, "pain_points", None))
         + _as_list(getattr(offering, "business_problems", None))
+        + _as_list(getattr(offering, "current_challenges", None))
         + _as_list(getattr(offering, "use_cases", None))
         + _as_list(getattr(offering, "positive_keywords", None))
         + _as_list(getattr(offering, "desired_outcomes", None))
         + _as_list(getattr(offering, "benefits", None))
+        + _as_list(getattr(offering, "selling_points", None))
     )
     about = getattr(icp, "about", None) or ""
     title = getattr(icp, "designation", None) or ""

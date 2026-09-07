@@ -109,7 +109,11 @@ def generate_icp_route(
     current_user: User = Depends(get_current_user),
 ):
     _ = current_user
-    return offering_ai_service.generate_icp(body.description)
+    return offering_ai_service.generate_icp(
+        body.description,
+        requested_fields=body.requested_fields,
+        current_values=body.current_values,
+    )
 
 
 @router.post("/generate-email-templates", response_model=GenerateOfferingEmailResponse)
@@ -256,6 +260,9 @@ def update_offering_route(
     try:
         update_offering(db, row, body.model_dump(exclude_unset=True))
         db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         db.rollback()
         msg = str(getattr(exc, "orig", exc))
@@ -295,7 +302,11 @@ def generate_icp_for_offering(
     row = get_offering(db, offering_id, user_id=getattr(current_user, "id", None))
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offering not found")
-    return offering_ai_service.generate_icp(body.description or row.description or "")
+    return offering_ai_service.generate_icp(
+        body.description or row.description or "",
+        requested_fields=body.requested_fields,
+        current_values=body.current_values,
+    )
 
 
 @router.get("/{offering_id}/stats", response_model=OfferingStatsResponse)
@@ -314,7 +325,7 @@ def offering_stats_route(
 def start_matching(
     offering_id: int,
     force: bool = Query(False),
-    verified_only: bool = Query(True),
+    verified_only: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

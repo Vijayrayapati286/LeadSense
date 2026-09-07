@@ -192,6 +192,7 @@ export const linkedinProfileService = {
 export const icpService = {
   list: (params = {}) => api.get('/icp', { params }).then((r) => r.data),
   listAccounts: (params = {}) => api.get('/icp/accounts', { params }).then((r) => r.data),
+  counts: () => api.get('/icp/count').then((r) => r.data),
   get: (id) => api.get(`/icp/${id}`).then((r) => r.data),
   create: (payload) => api.post('/icp', payload).then((r) => r.data),
   update: (id, payload) => api.put(`/icp/${id}`, payload).then((r) => r.data),
@@ -232,12 +233,14 @@ export const offeringsService = {
       .then((r) => r.data);
   },
   remove: (id) => api.delete(`/offerings/${id}`).then((r) => r.data),
-  generateIcp: (description) =>
-    api.post('/offerings/generate-icp', { description }, { timeout: 120_000 }).then((r) => r.data),
+  generateIcp: (input) => {
+    const payload = typeof input === 'string' ? { description: input } : input;
+    return api.post('/offerings/generate-icp', payload, { timeout: 120_000 }).then((r) => r.data);
+  },
   generateEmailTemplates: (payload) =>
     api.post('/offerings/generate-email-templates', payload, { timeout: 120_000 }).then((r) => r.data),
   stats: (id) => api.get(`/offerings/${id}/stats`).then((r) => r.data),
-  startMatch: (id, force = false, verifiedOnly = true) =>
+  startMatch: (id, force = false, verifiedOnly = false) =>
     api.post(`/offerings/${id}/match`, null, { params: { force, verified_only: verifiedOnly } }).then((r) => r.data),
   matchingStatus: (id) => api.get(`/offerings/${id}/matching-status`).then((r) => r.data),
   listMatches: (id, params = {}) =>

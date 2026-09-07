@@ -13,6 +13,7 @@ from app.database.connection import Base
 
 ICP_STATUS_VERIFIED = "verified"
 ICP_STATUS_ACTIVE = "active"
+ICP_STATUS_INCOMPLETE = "incomplete"
 SOURCE_LINKEDIN_BULK = "linkedin_bulk"
 SOURCE_MANUAL = "manual"
 
@@ -35,6 +36,7 @@ class IcpRecordRow(Base):
     designation: Mapped[str | None] = mapped_column(String(500), nullable=True)
     about: Mapped[str | None] = mapped_column(Text, nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
+    image: Mapped[str | None] = mapped_column(Text, nullable=True)
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company_size: Mapped[str | None] = mapped_column(String(100), nullable=True)
     location: Mapped[str | None] = mapped_column(String(500), nullable=True)
