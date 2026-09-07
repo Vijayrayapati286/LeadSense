@@ -1,14 +1,20 @@
 /** Shared helpers for offering forms. */
 
+import { useState } from 'react';
 import { getDefaultAiTone } from '../../utils/workspaceDefaults';
+import { normalizeList, reconcileAiDraft } from './offeringDraftUtils';
 
 export const EMPTY_OFFERING = {
   name: '',
   short_description: '',
   description: '',
+  detailed_description: '',
   product_type: '',
   website_url: '',
+  pricing_range: '',
+  target_customer: '',
   target_industries: [],
+  target_company_size: [],
   company_size_min: '',
   company_size_max: '',
   company_size_label: '',
@@ -27,6 +33,7 @@ export const EMPTY_OFFERING = {
   use_cases: [],
   desired_outcomes: [],
   benefits: [],
+  selling_points: [],
   must_have_rules: [],
   nice_to_have_rules: [],
   exclusion_rules: [],
@@ -43,49 +50,15 @@ export function listToText(value) {
 }
 
 export function textToList(value) {
-  if (!value || !String(value).trim()) return [];
-  return String(value)
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return normalizeList(value);
 }
 
 function asList(value) {
-  if (Array.isArray(value)) return value;
-  return textToList(value);
+  return normalizeList(value);
 }
 
 export function applyGeneratedIcp(form, generated) {
-  const cs = generated.company_size || {};
-  return {
-    ...form,
-    name: form.name || generated.suggested_name || '',
-    short_description: form.short_description || generated.short_description || '',
-    description: generated.description || form.description || '',
-    product_type: form.product_type || generated.product_type || '',
-    pricing_range: generated.pricing_range || form.pricing_range || '',
-    target_industries: generated.industries || [],
-    company_size_min: cs.min ?? '',
-    company_size_max: cs.max ?? '',
-    company_size_label: cs.label || '',
-    target_geographies: generated.geographies || [],
-    business_models: generated.business_models || [],
-    target_departments: generated.departments || [],
-    target_job_titles: generated.job_titles || [],
-    target_seniority: generated.seniority || [],
-    decision_maker_types: generated.decision_maker_types || [],
-    buying_roles: generated.buying_roles || [],
-    pain_points: generated.pain_points || [],
-    business_problems: generated.business_problems || [],
-    use_cases: generated.use_cases || [],
-    desired_outcomes: generated.desired_outcomes || [],
-    benefits: generated.benefits || [],
-    positive_keywords: generated.positive_keywords || [],
-    negative_keywords: generated.negative_keywords || [],
-    must_have_rules: generated.must_have_rules || [],
-    nice_to_have_rules: generated.nice_to_have_rules || [],
-    exclusion_rules: generated.exclusion_rules || [],
-  };
+  return reconcileAiDraft(form, generated).form;
 }
 
 export function formToPayload(form) {
@@ -93,12 +66,15 @@ export function formToPayload(form) {
   return {
     name: form.name?.trim(),
     short_description: form.short_description?.trim() || null,
-    description: form.description?.trim() || null,
+    description: (form.detailed_description || form.description)?.trim() || null,
+    detailed_description: (form.detailed_description || form.description)?.trim() || null,
     product_type: form.product_type?.trim() || null,
     website_url: form.website_url?.trim() || null,
+    target_customer: form.target_customer?.trim() || null,
     target_industries: Array.isArray(form.target_industries)
-      ? form.target_industries
+      ? normalizeList(form.target_industries)
       : textToList(form.target_industries),
+    target_company_size: asList(form.target_company_size),
     company_size_min: num(form.company_size_min),
     company_size_max: num(form.company_size_max),
     company_size_label: form.company_size_label?.trim() || null,
@@ -117,6 +93,7 @@ export function formToPayload(form) {
     use_cases: asList(form.use_cases),
     desired_outcomes: asList(form.desired_outcomes),
     benefits: asList(form.benefits),
+    selling_points: asList(form.selling_points),
     must_have_rules: asList(form.must_have_rules),
     nice_to_have_rules: asList(form.nice_to_have_rules),
     exclusion_rules: asList(form.exclusion_rules),
@@ -158,49 +135,89 @@ export function formToEmailContext(form) {
   };
 }
 
-export function ListField({ label, value, onChange, hint }) {
+export function ListField({ label, value, onChange, hint, generated, onRegenerate, regenerating, error }) {
+  const [draft, setDraft] = useState('');
+  const items = normalizeList(value);
+
+  function addDraft() {
+    const additions = normalizeList(draft);
+    if (!additions.length) return;
+    onChange(normalizeList([...items, ...additions]));
+    setDraft('');
+  }
+
   return (
-    <label className="block space-y-1">
-      <span className="text-sm font-medium text-gray-700">{label}</span>
+    <div className="block space-y-1.5">
+      <FieldLabel label={label} generated={generated} onRegenerate={onRegenerate} regenerating={regenerating} />
       {hint ? <span className="block text-xs text-gray-400">{hint}</span> : null}
-      <textarea
-        rows={3}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
-        value={listToText(value)}
-        onChange={(e) => onChange(textToList(e.target.value))}
-        placeholder="One item per line"
-      />
-    </label>
+      <div className={`control min-h-[46px] h-auto p-2 ${error ? 'border-red-400' : ''}`}>
+        <div className="flex flex-wrap gap-1.5">
+          {items.map((item) => (
+            <span key={item.toLocaleLowerCase()} className="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-800">
+              {item}
+              <button type="button" aria-label={`Remove ${item}`} onClick={() => onChange(items.filter((entry) => entry !== item))} className="text-primary-500 hover:text-primary-900">×</button>
+            </span>
+          ))}
+          <input
+            className="min-w-[150px] flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={addDraft}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ',') {
+                event.preventDefault();
+                addDraft();
+              }
+            }}
+            placeholder={items.length ? 'Add another…' : 'Type and press Enter'}
+          />
+        </div>
+      </div>
+      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+    </div>
   );
 }
 
-export function TextField({ label, value, onChange, required }) {
+function FieldLabel({ label, required, generated, onRegenerate, regenerating }) {
+  return (
+    <span className="flex min-h-6 items-center justify-between gap-2 text-sm font-medium text-gray-700">
+      <span>{label}{required ? ' *' : ''}</span>
+      <span className="flex items-center gap-2">
+        {generated ? <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700">✨ AI generated</span> : null}
+        {onRegenerate ? <button type="button" disabled={regenerating} onClick={onRegenerate} className="text-[11px] font-semibold text-primary-600 hover:text-primary-800 disabled:opacity-50">{regenerating ? 'Generating…' : 'Regenerate'}</button> : null}
+      </span>
+    </span>
+  );
+}
+
+export function TextField({ label, value, onChange, required, generated, onRegenerate, regenerating, error, type = 'text', placeholder }) {
   return (
     <label className="block space-y-1">
-      <span className="text-sm font-medium text-gray-700">
-        {label}
-        {required ? ' *' : ''}
-      </span>
+      <FieldLabel label={label} required={required} generated={generated} onRegenerate={onRegenerate} regenerating={regenerating} />
       <input
-        type="text"
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+        type={type}
+        className={`control ${error ? 'border-red-400 focus:border-red-500' : ''}`}
         value={value || ''}
         onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
       />
+      {error ? <span className="block text-xs text-red-600">{error}</span> : null}
     </label>
   );
 }
 
-export function AreaField({ label, value, onChange, rows = 4 }) {
+export function AreaField({ label, value, onChange, rows = 4, generated, onRegenerate, regenerating, error, placeholder }) {
   return (
     <label className="block space-y-1">
-      <span className="text-sm font-medium text-gray-700">{label}</span>
+      <FieldLabel label={label} generated={generated} onRegenerate={onRegenerate} regenerating={regenerating} />
       <textarea
         rows={rows}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+        className={`control resize-y ${error ? 'border-red-400 focus:border-red-500' : ''}`}
         value={value || ''}
         onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
       />
+      {error ? <span className="block text-xs text-red-600">{error}</span> : null}
     </label>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FiCheck, FiEdit2, FiExternalLink, FiPlus, FiSend, FiX } from 'react-icons/fi';
 import SlideOver from '../ui/SlideOver';
+import AccountLinkPanel from './AccountLinkPanel';
 import { icpService, offeringsService } from '../../services/services';
 import { useToast } from '../../hooks/useToast';
 
@@ -49,7 +50,8 @@ function tierColor(score) {
 
 export default function IcpRecordDetail({ record, isOpen, onClose, onSaved, focusOfferings = false }) {
   const toast = useToast();
-  const offeringsRef = useRef(null);  const [editing, setEditing] = useState(false);
+  const offeringsRef = useRef(null);
+  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({});
   const [offeringMatches, setOfferingMatches] = useState([]);
@@ -145,10 +147,30 @@ export default function IcpRecordDetail({ record, isOpen, onClose, onSaved, focu
           <>
             <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 p-5 text-white">
               <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-300">ICP confidence</p>
-                  <p className="mt-2 text-3xl font-bold">{record.icp_score ?? '—'}{record.icp_score != null ? '%' : ''}</p>
-                  <p className="mt-1 text-sm text-slate-300">{record.icp_status || 'Status not set'}</p>
+                <div className="flex min-w-0 items-center gap-4">
+                  {record.image ? (
+                    <img
+                      src={record.image}
+                      alt={title}
+                      referrerPolicy="no-referrer"
+                      className="h-14 w-14 shrink-0 rounded-full object-cover ring-2 ring-white/20"
+                    />
+                  ) : (
+                    <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-bold text-white">
+                      {(title || '?')
+                        .split(/\s+/)
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .map((part) => part[0])
+                        .join('')
+                        .toUpperCase()}
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-300">ICP confidence</p>
+                    <p className="mt-2 text-3xl font-bold">{record.icp_score ?? '—'}{record.icp_score != null ? '%' : ''}</p>
+                    <p className="mt-1 text-sm text-slate-300">{record.icp_status || 'Status not set'}</p>
+                  </div>
                 </div>
                 <button type="button" onClick={() => setEditing(true)} className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-semibold hover:bg-white/20">
                   <FiEdit2 size={15} /> Edit record
@@ -242,14 +264,18 @@ export default function IcpRecordDetail({ record, isOpen, onClose, onSaved, focu
               <Field label="Name" value={record.name} />
               <Field label="Email" value={record.email} />
               <Field label="Designation" value={record.designation} />
-            </Section>
-            <Section title="Company">
-              <Field label="Company" value={record.company_name} />
-              <Field label="Industry" value={record.industry} />
-              <Field label="Company Size" value={record.company_size} />
               <Field label="Location" value={record.location} />
-              <Field label="Website" value={record.company_website} />
             </Section>
+
+            <AccountLinkPanel record={record} onLinked={(updated) => onSaved?.(updated)} />
+
+            {record.company_name ? (
+              <Section title="Company details">
+                <Field label="Industry" value={record.industry} />
+                <Field label="Company Size" value={record.company_size} />
+                <Field label="Website" value={record.company_website} />
+              </Section>
+            ) : null}
             <Section title="ICP">
               <Field label="ICP Status" value={record.icp_status} />
               <Field label="ICP Score" value={record.icp_score} />

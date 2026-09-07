@@ -63,7 +63,7 @@ def create_match_job(
     offering: OfferingRow,
     user_id: int | None,
     force: bool = False,
-    verified_only: bool = True,
+    verified_only: bool = False,
 ) -> OfferingMatchJobRow:
     # Cancel/ignore other running jobs for this offering by marking failed if still pending
     active = (

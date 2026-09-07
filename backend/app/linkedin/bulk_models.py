@@ -112,6 +112,7 @@ class BulkJobItemRow(Base):
     location: Mapped[str | None] = mapped_column(String(500), nullable=True)
     followers: Mapped[int | None] = mapped_column(Integer, nullable=True)
     connections: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image: Mapped[str | None] = mapped_column(Text, nullable=True)
     extraction_response: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

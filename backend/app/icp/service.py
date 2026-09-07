@@ -6,10 +6,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.icp.models import (
+    ICP_STATUS_ACTIVE,
+    ICP_STATUS_INCOMPLETE,
     ICP_STATUS_VERIFIED,
     SOURCE_LINKEDIN_BULK,
     SOURCE_MANUAL,
@@ -18,6 +20,8 @@ from app.icp.models import (
 from app.linkedin.bulk_models import BulkJobItemRow, ITEM_SUCCESS
 from app.linkedin.validator import is_linkedin_in_profile_url, normalize_profile_url
 from app.linkedin.verification import (
+    VERIFY_ALREADY_EXISTS,
+    VERIFY_NOT_VERIFIED,
     VERIFY_RESOLVED,
     VERIFY_VERIFIED,
     normalize_company,
@@ -92,6 +96,38 @@ def _prefer(*values: Any) -> str | None:
     return None
 
 
+def has_contact_identity(*, name: str | None) -> bool:
+    """A contact is only 'verified' when we at least know who the person is."""
+    return bool(_clean(name))
+
+
+def resolve_icp_status(*, name: str | None, preferred: str | None = None) -> str:
+    """Verified/active only with a real name; otherwise incomplete."""
+    if not has_contact_identity(name=name):
+        return ICP_STATUS_INCOMPLETE
+    pref = (_clean(preferred) or "").lower()
+    if pref in {ICP_STATUS_ACTIVE, ICP_STATUS_VERIFIED, ICP_STATUS_INCOMPLETE}:
+        if pref == ICP_STATUS_INCOMPLETE:
+            return ICP_STATUS_VERIFIED
+        return pref
+    return ICP_STATUS_VERIFIED
+
+
+def effective_icp_status(row: IcpRecordRow) -> str:
+    return resolve_icp_status(name=row.name, preferred=row.icp_status)
+
+
+def repair_icp_status_if_needed(row: IcpRecordRow) -> bool:
+    """Fix misleading verified labels on hollow records. Returns True if changed."""
+    correct = effective_icp_status(row)
+    if (row.icp_status or "").lower() == correct:
+        return False
+    row.icp_status = correct
+    if correct == ICP_STATUS_INCOMPLETE:
+        row.verified_at = None
+    return True
+
+
 def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] | None:
     """Map uploaded spreadsheet columns to ICP fields (no extracted LinkedIn data)."""
     source_row = item.source_row_json if isinstance(item.source_row_json, dict) else {}
@@ -106,6 +142,10 @@ def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] |
     location = _clean(originals.get("location"))
     linkedin_url = _normalize_linkedin(item.normalized_url or item.profile_url)
 
+    if not name:
+        # Do not create hollow ICP rows from URL-only sheet uploads.
+        return None
+
     if not email and not linkedin_url and not name:
         return None
 
@@ -119,6 +159,8 @@ def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] |
         tags = [t.strip() for t in tags_raw.replace(";", ",").split(",") if t.strip()]
 
     now = datetime.now(timezone.utc)
+    icp_status = resolve_icp_status(name=name)
+    complete = icp_status != ICP_STATUS_INCOMPLETE
     return {
         "name": name,
         "email": email,
@@ -130,11 +172,11 @@ def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] |
         "company_size": _clean(company_size),
         "location": location,
         "company_website": _clean(company_website),
-        "icp_status": ICP_STATUS_VERIFIED,
+        "icp_status": icp_status,
         "icp_score": None,
         "tags": tags,
-        "verification_status": VERIFY_VERIFIED,
-        "verified_at": now,
+        "verification_status": VERIFY_VERIFIED if complete else VERIFY_NOT_VERIFIED,
+        "verified_at": now if complete else None,
         "source": SOURCE_LINKEDIN_BULK,
         "source_record_id": item.id,
         "source_job_id": item.job_id,
@@ -158,6 +200,7 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
     email = originals.get("email") or _pick_from_row(source_row, EMAIL_ALIASES)
     about = _prefer(item.about, item.headline)
     linkedin_url = _normalize_linkedin(item.normalized_url or item.profile_url)
+    image = _clean(getattr(item, "image", None))
 
     industry = _pick_from_row(source_row, INDUSTRY_ALIASES)
     company_size = _pick_from_row(source_row, COMPANY_SIZE_ALIASES)
@@ -169,9 +212,20 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
         tags = [t.strip() for t in tags_raw.replace(";", ",").split(",") if t.strip()]
 
     verified_at = getattr(item, "resolved_at", None) or item.completed_at or datetime.now(timezone.utc)
-    status = (item.verification_status or VERIFY_VERIFIED).upper()
-    if status not in ELIGIBLE_STATUSES:
-        status = VERIFY_VERIFIED
+    status = (item.verification_status or VERIFY_NOT_VERIFIED).upper()
+    # Do not upgrade unverified / review rows to VERIFIED just because we sync extracted fields.
+    if status not in ELIGIBLE_STATUSES and status != VERIFY_ALREADY_EXISTS:
+        verified_at = None
+
+    icp_status = resolve_icp_status(name=name)
+    if icp_status == ICP_STATUS_INCOMPLETE:
+        status = VERIFY_NOT_VERIFIED
+        verified_at = None
+    elif status in ELIGIBLE_STATUSES:
+        pass
+    else:
+        # Extracted name is enough for a usable contact; keep bulk verify state separate.
+        verified_at = None
 
     return {
         "name": name,
@@ -180,11 +234,12 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
         "designation": designation,
         "about": about,
         "linkedin_url": linkedin_url,
+        "image": image,
         "industry": industry,
         "company_size": company_size,
         "location": location,
         "company_website": company_website,
-        "icp_status": ICP_STATUS_VERIFIED,
+        "icp_status": icp_status,
         "icp_score": getattr(item, "verification_score", None) or None,
         "tags": tags,
         "verification_status": status,
@@ -200,6 +255,16 @@ def item_eligible_for_icp(item: BulkJobItemRow) -> bool:
     if (item.status or "").upper() != ITEM_SUCCESS:
         return False
     return (item.verification_status or "").upper() in ELIGIBLE_STATUSES
+
+
+def _is_blank(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    if isinstance(value, (list, dict)) and not value:
+        return True
+    return False
 
 
 def _find_existing(
@@ -247,6 +312,17 @@ def _apply_payload(row: IcpRecordRow, payload: dict[str, Any], *, create: bool) 
             # Do not wipe existing ICP fields with missing incoming values
             continue
         setattr(row, key, value)
+    row.updated_at = datetime.now(timezone.utc)
+
+
+def _apply_payload_fill_empty(row: IcpRecordRow, payload: dict[str, Any]) -> None:
+    """Write extracted LinkedIn fields only where the contact is currently blank."""
+    for key, value in payload.items():
+        if value is None:
+            continue
+        if _is_blank(getattr(row, key, None)):
+            setattr(row, key, value)
+    repair_icp_status_if_needed(row)
     row.updated_at = datetime.now(timezone.utc)
 
 
@@ -307,18 +383,29 @@ def upsert_icp_from_bulk_item(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    fill_empty_only: bool = False,
+    require_verified: bool = True,
 ) -> IcpRecordRow:
-    """Create or update an ICP record from a verified/resolved bulk item.
+    """Create or update an ICP record from a bulk item.
 
-    Raises ValueError if the item is not eligible.
+    When require_verified=True (default), only VERIFIED/RESOLVED items are accepted.
+    When fill_empty_only=True, existing contacts keep sheet/user values; blank fields
+    are filled from LinkedIn extraction (name, company, designation, location, about).
     """
-    if not item_eligible_for_icp(item):
+    if require_verified and not item_eligible_for_icp(item):
         raise ValueError(
             f"Item {item.id} is not eligible for ICP "
             f"(status={item.status}, verification={item.verification_status})"
         )
+    if not require_verified and (item.status or "").upper() != ITEM_SUCCESS:
+        raise ValueError(
+            f"Item {item.id} is not eligible for ICP extract sync (status={item.status})"
+        )
 
     payload = build_payload_from_bulk_item(item)
+    if not has_contact_identity(name=payload.get("name")):
+        raise ValueError(f"Item {item.id} has no contact name — skipping hollow ICP create")
+
     existing = _find_existing(
         db,
         user_id=user_id,
@@ -328,10 +415,18 @@ def upsert_icp_from_bulk_item(
     )
 
     if existing:
-        _apply_payload(existing, payload, create=False)
+        if fill_empty_only:
+            _apply_payload_fill_empty(existing, payload)
+        else:
+            _apply_payload(existing, payload, create=False)
         existing.user_id = user_id if user_id is not None else existing.user_id
         db.flush()
-        logger.info("ICP updated id=%s from bulk item=%s", existing.id, item.id)
+        logger.info(
+            "ICP updated id=%s from bulk item=%s fill_empty_only=%s",
+            existing.id,
+            item.id,
+            fill_empty_only,
+        )
         return existing
 
     row = IcpRecordRow(user_id=user_id, **payload)
@@ -347,13 +442,53 @@ def sync_icp_if_eligible(
     *,
     user_id: int | None,
 ) -> IcpRecordRow | None:
-    """Upsert when eligible; return None when not eligible. Propagates upsert errors."""
+    """Upsert when verified/resolved; return None when not eligible."""
     if not item_eligible_for_icp(item):
         return None
-    return upsert_icp_from_bulk_item(db, item, user_id=user_id)
+    try:
+        return upsert_icp_from_bulk_item(db, item, user_id=user_id)
+    except ValueError as exc:
+        if "no contact name" in str(exc).lower():
+            logger.info("ICP sync skipped item_id=%s: %s", item.id, exc)
+            return None
+        raise
+
+
+def sync_icp_after_extraction(
+    db: Session,
+    item: BulkJobItemRow,
+    *,
+    user_id: int | None,
+) -> IcpRecordRow | None:
+    """Push extracted LinkedIn fields into Contacts after a successful extraction.
+
+    - VERIFIED / RESOLVED → full upsert (prefer resolved > extracted > sheet)
+    - Otherwise → create contact or fill only blank fields (never overwrite sheet values)
+    - ALREADY_EXISTS → skip (contact already present from pre-check)
+    """
+    if (item.status or "").upper() != ITEM_SUCCESS:
+        return None
+    vs = (item.verification_status or "").upper()
+    if vs == VERIFY_ALREADY_EXISTS:
+        return None
+    fill_empty_only = vs not in ELIGIBLE_STATUSES
+    try:
+        return upsert_icp_from_bulk_item(
+            db,
+            item,
+            user_id=user_id,
+            fill_empty_only=fill_empty_only,
+            require_verified=False,
+        )
+    except ValueError as exc:
+        if "no contact name" in str(exc).lower() or "not eligible" in str(exc).lower():
+            logger.info("ICP extract sync skipped item_id=%s: %s", item.id, exc)
+            return None
+        raise
 
 
 def serialize_icp(row: IcpRecordRow) -> dict[str, Any]:
+    status = effective_icp_status(row)
     return {
         "id": row.id,
         "user_id": row.user_id,
@@ -363,21 +498,84 @@ def serialize_icp(row: IcpRecordRow) -> dict[str, Any]:
         "designation": row.designation,
         "about": row.about,
         "linkedin_url": row.linkedin_url,
+        "image": getattr(row, "image", None),
         "industry": row.industry,
         "company_size": row.company_size,
         "location": row.location,
         "company_website": row.company_website,
-        "icp_status": row.icp_status,
+        "icp_status": status,
         "icp_score": row.icp_score,
         "tags": row.tags or [],
         "verification_status": row.verification_status,
-        "verified_at": row.verified_at.isoformat() if row.verified_at else None,
+        "verified_at": row.verified_at.isoformat() if row.verified_at and status != ICP_STATUS_INCOMPLETE else None,
         "source": row.source,
         "source_record_id": row.source_record_id,
         "source_job_id": row.source_job_id,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+
+
+def _without_company_filter():
+    return or_(IcpRecordRow.company_name.is_(None), IcpRecordRow.company_name == "")
+
+
+def _missing_name_filter():
+    return or_(IcpRecordRow.name.is_(None), IcpRecordRow.name == "")
+
+
+def _has_name_filter():
+    return and_(IcpRecordRow.name.isnot(None), IcpRecordRow.name != "")
+
+
+def purge_empty_icp_records(db: Session, *, user_id: int | None) -> int:
+    """Delete ICP contacts that have no person name (hollow upload shells)."""
+    q = db.query(IcpRecordRow).filter(_missing_name_filter())
+    if user_id is not None:
+        q = q.filter(IcpRecordRow.user_id == user_id)
+    rows = q.all()
+    deleted = len(rows)
+    for row in rows:
+        db.delete(row)
+    if deleted:
+        db.flush()
+        logger.info("Purged %s empty ICP contact(s) user_id=%s", deleted, user_id)
+    return deleted
+
+
+def backfill_icp_from_extracted_items(
+    db: Session,
+    *,
+    user_id: int | None,
+    limit: int = 500,
+) -> int:
+    """Create/fill Contacts from SUCCESS bulk items that already have LinkedIn extraction data."""
+    from app.linkedin.bulk_models import BulkExtractJobRow
+
+    q = (
+        db.query(BulkJobItemRow)
+        .join(BulkExtractJobRow, BulkExtractJobRow.id == BulkJobItemRow.job_id)
+        .filter(
+            BulkJobItemRow.status == ITEM_SUCCESS,
+            BulkJobItemRow.dedupe_of_id.is_(None),
+            BulkJobItemRow.name.isnot(None),
+            BulkJobItemRow.name != "",
+        )
+        .order_by(BulkJobItemRow.id.desc())
+    )
+    if user_id is not None:
+        q = q.filter(BulkExtractJobRow.user_id == user_id)
+
+    synced = 0
+    for item in q.limit(max(int(limit), 1)).all():
+        try:
+            if sync_icp_after_extraction(db, item, user_id=user_id):
+                synced += 1
+        except Exception:
+            logger.exception("ICP backfill failed for bulk item %s", item.id)
+    if synced:
+        logger.info("ICP backfill synced %s contact(s) user_id=%s", synced, user_id)
+    return synced
 
 
 def list_icp_records(
@@ -391,6 +589,8 @@ def list_icp_records(
     designation: str | None = None,
     location: str | None = None,
     icp_status: str | None = None,
+    without_company: bool = False,
+    require_name: bool = True,
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     verified_from: datetime | None = None,
@@ -403,6 +603,9 @@ def list_icp_records(
     query = db.query(IcpRecordRow)
     if user_id is not None:
         query = query.filter(IcpRecordRow.user_id == user_id)
+
+    if require_name:
+        query = query.filter(_has_name_filter())
 
     if search and search.strip():
         like = f"%{search.strip()}%"
@@ -419,7 +622,9 @@ def list_icp_records(
             )
         )
 
-    if company:
+    if without_company:
+        query = query.filter(_without_company_filter())
+    elif company:
         query = query.filter(IcpRecordRow.company_name.ilike(f"%{company.strip()}%"))
     if industry:
         query = query.filter(IcpRecordRow.industry.ilike(f"%{industry.strip()}%"))
@@ -452,12 +657,23 @@ def list_icp_records(
         "icp_score": IcpRecordRow.icp_score,
     }
     col = sortable.get(sort_by, IcpRecordRow.verified_at)
-    query = query.order_by(col.asc() if sort_order.lower() == "asc" else col.desc())
+    ascending = sort_order.lower() == "asc"
+    try:
+        ordered = col.asc().nullslast() if ascending else col.desc().nullslast()
+    except Exception:
+        ordered = col.asc() if ascending else col.desc()
+    query = query.order_by(ordered)
 
     total = query.count()
     page = max(int(page), 1)
     page_size = min(max(int(page_size), 1), 100)
     rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    repaired = False
+    for row in rows:
+        if repair_icp_status_if_needed(row):
+            repaired = True
+    if repaired:
+        db.flush()
 
     return {
         "items": [serialize_icp(r) for r in rows],
@@ -483,6 +699,7 @@ def create_icp_record(
     name = _clean(data.get("name"))
     company = _clean(data.get("company_name") or data.get("company"))
     linkedin_url = _normalize_linkedin(data.get("linkedin_url"))
+    icp_status = resolve_icp_status(name=name, preferred=data.get("icp_status"))
     payload = {
         "name": name,
         "email": _clean(data.get("email")),
@@ -490,15 +707,24 @@ def create_icp_record(
         "designation": _clean(data.get("designation")),
         "about": _clean(data.get("about")),
         "linkedin_url": linkedin_url,
+        "image": _clean(data.get("image")),
         "industry": _clean(data.get("industry")),
         "company_size": _clean(data.get("company_size")),
         "location": _clean(data.get("location")),
         "company_website": _clean(data.get("company_website")),
-        "icp_status": (_clean(data.get("icp_status")) or ICP_STATUS_VERIFIED).lower(),
+        "icp_status": icp_status,
         "icp_score": data.get("icp_score"),
         "tags": data.get("tags") if isinstance(data.get("tags"), list) else None,
-        "verification_status": (_clean(data.get("verification_status")) or VERIFY_VERIFIED).upper(),
-        "verified_at": data.get("verified_at") or datetime.now(timezone.utc),
+        "verification_status": (
+            (_clean(data.get("verification_status")) or VERIFY_VERIFIED).upper()
+            if icp_status != ICP_STATUS_INCOMPLETE
+            else VERIFY_NOT_VERIFIED
+        ),
+        "verified_at": (
+            None
+            if icp_status == ICP_STATUS_INCOMPLETE
+            else (data.get("verified_at") or datetime.now(timezone.utc))
+        ),
         "source": SOURCE_MANUAL,
         "source_record_id": None,
         "source_job_id": None,
@@ -533,6 +759,7 @@ def update_icp_record(
         "company_name",
         "designation",
         "about",
+        "image",
         "industry",
         "company_size",
         "location",
@@ -550,6 +777,13 @@ def update_icp_record(
     if "company" in data and "company_name" not in data:
         row.company_name = _clean(data["company"])
     row.dedupe_key = _dedupe_key(row.name, row.company_name)
+    row.icp_status = resolve_icp_status(name=row.name, preferred=row.icp_status)
+    if row.icp_status == ICP_STATUS_INCOMPLETE:
+        row.verified_at = None
+        if not row.verification_status or row.verification_status.upper() == VERIFY_VERIFIED:
+            row.verification_status = VERIFY_NOT_VERIFIED
+    elif not row.verified_at:
+        row.verified_at = datetime.now(timezone.utc)
     row.updated_at = datetime.now(timezone.utc)
     db.flush()
     return row
@@ -560,11 +794,32 @@ def delete_icp_record(db: Session, row: IcpRecordRow) -> None:
     db.flush()
 
 
-def count_icp_records(db: Session, *, user_id: int | None) -> int:
+def count_icp_records(
+    db: Session,
+    *,
+    user_id: int | None,
+    without_company: bool = False,
+    require_name: bool = True,
+) -> int:
     q = db.query(func.count(IcpRecordRow.id))
     if user_id is not None:
         q = q.filter(IcpRecordRow.user_id == user_id)
+    if require_name:
+        q = q.filter(_has_name_filter())
+    if without_company:
+        q = q.filter(_without_company_filter())
     return int(q.scalar() or 0)
+
+
+def icp_counts_summary(db: Session, *, user_id: int | None) -> dict[str, int]:
+    purged = purge_empty_icp_records(db, user_id=user_id)
+    return {
+        "total": count_icp_records(db, user_id=user_id, require_name=True),
+        "without_account": count_icp_records(
+            db, user_id=user_id, without_company=True, require_name=True
+        ),
+        "purged_empty": purged,
+    }
 
 
 def find_icp_by_linkedin_urls(

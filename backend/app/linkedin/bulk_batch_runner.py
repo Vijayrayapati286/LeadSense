@@ -487,6 +487,7 @@ class BulkBatchRunner:
         item.location = _str(data.get("location"))
         item.followers = data.get("followers") if isinstance(data.get("followers"), int) else None
         item.connections = data.get("connections") if isinstance(data.get("connections"), int) else None
+        item.image = _str(data.get("image"))
         item.extraction_response = result
         item.last_error = None
         item.retry_after = None
@@ -516,15 +517,17 @@ class BulkBatchRunner:
             verification.score,
         )
         try:
-            from app.icp.service import sync_icp_if_eligible
+            from app.icp.service import sync_icp_after_extraction
             from app.linkedin.bulk_jobs import get_job_row
 
             job = get_job_row(db, item.job_id)
-            sync_icp_if_eligible(db, item, user_id=getattr(job, "user_id", None) if job else None)
+            sync_icp_after_extraction(
+                db, item, user_id=getattr(job, "user_id", None) if job else None
+            )
         except Exception:
             # Do not fail the extraction batch if ICP sync fails; resolve/retry can repair.
             logger.exception(
-                "[JOB-%s] [URL-%s] ICP sync failed after auto-verify (extraction kept)",
+                "[JOB-%s] [URL-%s] ICP sync failed after extraction (extraction kept)",
                 item.job_id,
                 item.id,
             )

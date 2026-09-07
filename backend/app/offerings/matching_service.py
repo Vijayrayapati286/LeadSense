@@ -390,17 +390,26 @@ def record_feedback(
     return row
 
 
+# Align with ICP sync eligibility (VERIFIED / RESOLVED).
+_MATCH_VERIFIED_STATUSES = ("VERIFIED", "RESOLVED")
+
+
 def list_icp_ids_for_user(
     db: Session,
     user_id: int | None,
     *,
-    verified_only: bool = True,
+    verified_only: bool = False,
 ) -> list[int]:
+    """Return ICP ids to score for an offering match job.
+
+    By default includes all contacts for the user. When verified_only=True,
+    only VERIFIED and RESOLVED rows are included (same as ICP eligibility).
+    """
     q = db.query(IcpRecordRow.id)
     if user_id is not None:
         q = q.filter(IcpRecordRow.user_id == user_id)
     if verified_only:
-        q = q.filter(IcpRecordRow.verification_status == "VERIFIED")
+        q = q.filter(IcpRecordRow.verification_status.in_(_MATCH_VERIFIED_STATUSES))
     return [r[0] for r in q.all()]
 
 

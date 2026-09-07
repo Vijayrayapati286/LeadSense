@@ -301,6 +301,7 @@ def test_definition_change_invalidates_skip():
             user_id=1,
             data={
                 "name": "X",
+                "product_type": "Service",
                 "target_industries": ["BPO"],
                 "target_job_titles": ["VP Operations"],
             },
@@ -391,7 +392,16 @@ def test_unverified_icp_excluded_from_match_job(client, monkeypatch):
             verification_status="PENDING",
             source="manual",
         )
+        resolved = IcpRecordRow(
+            user_id=1,
+            name="Resolved Person",
+            designation="VP Sales",
+            industry="BPO",
+            verification_status="RESOLVED",
+            source="manual",
+        )
         db.add(unverified)
+        db.add(resolved)
         db.commit()
     finally:
         db.close()
@@ -403,8 +413,153 @@ def test_unverified_icp_excluded_from_match_job(client, monkeypatch):
     start = client.post(f"/api/offerings/{offering['id']}/match", params={"force": True, "verified_only": True})
     assert start.status_code == 200
     body = start.json()
-    # Only verified ICP should be queued
-    assert body["total_count"] >= 1
+    # VERIFIED + RESOLVED ICP should be queued; PENDING excluded
+    assert body["total_count"] >= 2
     matches = client.get(f"/api/offerings/{offering['id']}/matches", params={"search": "Unverified"})
     assert matches.status_code == 200
     assert all(i.get("name") != "Unverified" for i in matches.json()["items"])
+    resolved_matches = client.get(f"/api/offerings/{offering['id']}/matches", params={"search": "Resolved"})
+    assert resolved_matches.status_code == 200
+    assert any(i.get("name") == "Resolved Person" for i in resolved_matches.json()["items"])
+
+
+def test_match_job_includes_all_icps_by_default(client, monkeypatch):
+    offering = _seed_offering(client)
+    _seed_icp(name="Verified Person")
+    db = SessionLocal()
+    try:
+        unverified = IcpRecordRow(
+            user_id=1,
+            name="Unverified All",
+            designation="VP Sales",
+            industry="BPO",
+            verification_status="NOT_VERIFIED",
+            source="manual",
+        )
+        db.add(unverified)
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "app.offerings.routes.start_match_job_async",
+        lambda job_id, force=False: process_match_job(job_id, force=force, batch_size=10),
+    )
+    start = client.post(f"/api/offerings/{offering['id']}/match", params={"force": True})
+    assert start.status_code == 200
+    body = start.json()
+    assert body["total_count"] >= 2
+    matches = client.get(f"/api/offerings/{offering['id']}/matches", params={"search": "Unverified All"})
+    assert matches.status_code == 200
+    assert any(i.get("name") == "Unverified All" for i in matches.json()["items"])
+
+
+def test_banking_ai_draft_contains_domain_specific_fields(client):
+    response = client.post(
+        "/api/offerings/generate-icp",
+        json={
+            "description": (
+                "A comprehensive commercial banking solution for flexible working capital, "
+                "business expansion, equipment financing, and commercial lending portfolio growth."
+            )
+        },
+    )
+    assert response.status_code == 200, response.text
+    draft = response.json()
+    assert draft["suggested_name"] == "Commercial Business Growth & Lending Solutions"
+    assert draft["product_type"] == "Financial Services"
+    assert "Commercial Banker" in draft["job_titles"]
+    assert "Working capital financing" in draft["use_cases"]
+    assert draft["target_customer"]
+    assert draft["selling_points"]
+    assert draft["detailed_description"]
+
+
+def test_ai_draft_accepts_single_field_request(client):
+    response = client.post(
+        "/api/offerings/generate-icp",
+        json={
+            "description": "Commercial lending for banks that finance business expansion and working capital.",
+            "requested_fields": ["target_job_titles"],
+            "current_values": {"name": "Existing offering"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert "Commercial Banker" in response.json()["job_titles"]
+
+
+def test_offering_save_normalizes_rich_draft_fields(client):
+    response = client.post(
+        "/api/offerings",
+        json={
+            "name": "  Commercial Growth Finance  ",
+            "product_type": "  Financial Services ",
+            "detailed_description": "  Flexible commercial finance.  ",
+            "target_customer": "  Commercial banks and relationship teams  ",
+            "target_industries": [" Banking ", "banking", " Financial Services "],
+            "target_company_size": [" 200-10000 employees ", "200-10000 employees"],
+            "target_job_titles": [" Commercial Banker ", "commercial banker", "Relationship Manager"],
+            "pain_points": [" Complex financing ", "complex financing"],
+            "use_cases": [" Working capital ", "Equipment financing"],
+            "benefits": [" Portfolio growth ", "portfolio growth"],
+            "selling_points": [" Flexible terms ", "flexible terms"],
+        },
+    )
+    assert response.status_code == 201, response.text
+    saved = response.json()
+    assert saved["name"] == "Commercial Growth Finance"
+    assert saved["detailed_description"] == "Flexible commercial finance."
+    assert saved["description"] == saved["detailed_description"]
+    assert saved["target_customer"] == "Commercial banks and relationship teams"
+    assert saved["target_industries"] == ["Banking", "Financial Services"]
+    assert saved["target_company_size"] == ["200-10000 employees"]
+    assert saved["target_job_titles"] == ["Commercial Banker", "Relationship Manager"]
+    assert saved["pain_points"] == ["Complex financing"]
+    assert saved["use_cases"] == ["Working capital", "Equipment financing"]
+    assert saved["benefits"] == ["Portfolio growth"]
+    assert saved["selling_points"] == ["Flexible terms"]
+
+
+def test_offering_rejects_empty_and_legacy_placeholder_values(client):
+    missing_type = client.post("/api/offerings", json={"name": "Valid name"})
+    assert missing_type.status_code == 400
+
+    placeholder = client.post(
+        "/api/offerings",
+        json={
+            "name": "AI Sales Platform",
+            "product_type": "SaaS",
+            "short_description": "AI-powered platform for B2B sales teams",
+        },
+    )
+    assert placeholder.status_code == 400
+    assert "placeholder" in placeholder.json()["detail"].lower()
+
+
+def test_richer_offering_context_improves_problem_fit():
+    icp = IcpRecordRow(
+        name="Banking Leader",
+        designation="Commercial Banking Relationship Manager",
+        industry="Banking",
+        about="Owns working capital financing and customized lending recommendations for business growth.",
+    )
+    base = OfferingRow(
+        name="Finance",
+        product_type="Financial Services",
+        target_industries=["Banking"],
+        target_job_titles=["Commercial Banking Relationship Manager"],
+        hard_filter_rules={"require_industry_overlap": False},
+    )
+    rich = OfferingRow(
+        name="Finance",
+        product_type="Financial Services",
+        target_customer="Commercial banks and relationship managers",
+        target_industries=["Banking"],
+        target_job_titles=["Commercial Banking Relationship Manager"],
+        current_challenges=["working capital financing"],
+        selling_points=["customized lending recommendations"],
+        hard_filter_rules={"require_industry_overlap": False},
+    )
+    base_result = calculate_fit_score(base, icp, semantic_similarity=0)
+    rich_result = calculate_fit_score(rich, icp, semantic_similarity=0)
+    assert rich_result.problem_fit_score > base_result.problem_fit_score

@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  FiArrowDown,
-  FiArrowUp,
+  FiAlertCircle,
   FiBriefcase,
   FiCheck,
   FiCheckCircle,
   FiChevronDown,
-  FiFilter,
   FiMapPin,
   FiMoreVertical,
   FiPlus,
   FiSearch,
   FiSliders,
+  FiUserX,
   FiUsers,
   FiX,
 } from 'react-icons/fi';
@@ -37,22 +36,48 @@ const SORT_OPTIONS = [
   { id: 'created_at', label: 'Date added' },
 ];
 
-function DatabaseMetric({ label, value, hint, icon: Icon, tone = 'blue', action }) {
+function DatabaseMetric({ label, value, hint, icon: Icon, tone = 'blue', action, onClick, active = false }) {
   const tones = {
     blue: { value: 'text-slate-950', icon: 'bg-blue-50 text-blue-600' },
     green: { value: 'text-emerald-700', icon: 'bg-emerald-50 text-emerald-600' },
     violet: { value: 'text-slate-950', icon: 'bg-violet-50 text-violet-600' },
+    amber: { value: 'text-amber-800', icon: 'bg-amber-50 text-amber-700' },
   };
   const palette = tones[tone] || tones.blue;
+  const interactive = typeof onClick === 'function';
+  const Wrapper = interactive ? 'button' : 'div';
   return (
-    <div className="flex min-h-[96px] items-center justify-between rounded-xl border border-slate-200/80 bg-white px-5 py-4 shadow-sm">
+    <Wrapper
+      type={interactive ? 'button' : undefined}
+      onClick={onClick}
+      className={`flex min-h-[96px] w-full items-center justify-between rounded-xl border bg-white px-5 py-4 text-left shadow-sm transition-colors ${
+        active
+          ? 'border-amber-300 ring-2 ring-amber-100'
+          : 'border-slate-200/80'
+      } ${interactive ? 'cursor-pointer hover:border-amber-200 hover:bg-amber-50/30' : ''}`}
+    >
       <div>
         <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
         <p className={`mt-1 text-2xl font-bold tabular-nums ${palette.value}`}>{value}</p>
         {action ? (
-          <button type="button" onClick={action} className="mt-0.5 text-xs font-medium text-primary-600 hover:text-primary-700">
-            Clear all
-          </button>
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              action();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                action();
+              }
+            }}
+            className="mt-0.5 inline-block text-xs font-medium text-primary-600 hover:text-primary-700"
+          >
+            Clear filter
+          </span>
         ) : (
           <p className="mt-0.5 text-xs text-slate-500">{hint}</p>
         )}
@@ -62,8 +87,49 @@ function DatabaseMetric({ label, value, hint, icon: Icon, tone = 'blue', action 
           <Icon size={20} />
         </span>
       ) : null}
-    </div>
+    </Wrapper>
   );
+}
+
+function contactDisplayName(row) {
+  if (row?.name?.trim()) return row.name.trim();
+  if (row?.email?.trim()) return row.email.trim();
+  if (row?.linkedin_url) {
+    try {
+      const path = new URL(row.linkedin_url).pathname.replace(/\/+$/, '');
+      const slug = path.split('/').filter(Boolean).pop();
+      if (slug) return slug.replace(/-/g, ' ');
+    } catch {
+      /* ignore bad URL */
+    }
+  }
+  return null;
+}
+
+function statusTone(status) {
+  const value = (status || '').toLowerCase();
+  if (value === 'incomplete') {
+    return {
+      wrap: 'text-amber-800',
+      icon: 'bg-amber-50 text-amber-700',
+      label: 'Incomplete',
+      Icon: FiAlertCircle,
+    };
+  }
+  if (value === 'active') {
+    return {
+      wrap: 'text-sky-700',
+      icon: 'bg-sky-50 text-sky-600',
+      label: 'Active',
+      Icon: FiCheck,
+    };
+  }
+  return {
+    wrap: 'text-emerald-700',
+    icon: 'bg-emerald-50 text-emerald-600',
+    label: value ? value.replace(/_/g, ' ') : 'Verified',
+    Icon: FiCheck,
+  };
 }
 
 function contactType(row) {
@@ -94,11 +160,29 @@ function avatarStyle(row) {
   return AVATAR_STYLES[index];
 }
 
-function SortableHeading({ children, align = 'left' }) {
+function ContactAvatar({ row, displayName, size = 'md' }) {
+  const [broken, setBroken] = useState(false);
+  const photo = typeof row?.image === 'string' ? row.image.trim() : '';
+  const showPhoto = Boolean(photo) && !broken;
+  const sizeClass = size === 'lg' ? 'h-12 w-12 text-sm' : 'h-9 w-9 text-xs';
+
+  if (showPhoto) {
+    return (
+      <img
+        src={photo}
+        alt={displayName || row?.name || 'Contact'}
+        referrerPolicy="no-referrer"
+        onError={() => setBroken(true)}
+        className={`${sizeClass} shrink-0 rounded-full object-cover ring-1 ring-slate-200`}
+      />
+    );
+  }
+
   return (
-    <span className={`inline-flex items-center gap-1 ${align === 'right' ? 'justify-end' : ''}`}>
-      {children}
-      <span className="text-[9px] text-slate-400">↕</span>
+    <span
+      className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-full font-bold ${avatarStyle(row)}`}
+    >
+      {initials(displayName || row?.name)}
     </span>
   );
 }
@@ -119,6 +203,9 @@ export default function ContactsPage() {
   const [page, setPage] = useState(1);
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
+  const [totalContacts, setTotalContacts] = useState(0);
+  const [withoutAccountCount, setWithoutAccountCount] = useState(0);
+  const [withoutAccountOnly, setWithoutAccountOnly] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -143,24 +230,35 @@ export default function ContactsPage() {
         sort_order: sortOrder,
         search: search || undefined,
         industry: appliedFilters.industry || undefined,
-        company: appliedFilters.company || undefined,
+        company: withoutAccountOnly ? undefined : appliedFilters.company || undefined,
         company_size: appliedFilters.company_size || undefined,
         designation: appliedFilters.designation || undefined,
         location: appliedFilters.location || undefined,
         icp_status: appliedFilters.icp_status || undefined,
         verified_from: appliedFilters.date_from || undefined,
         verified_to: appliedFilters.date_to || undefined,
+        without_company: withoutAccountOnly || undefined,
+        require_name: true,
       };
-      const data = await icpService.list(params);
+      const [data, counts] = await Promise.all([
+        icpService.list(params),
+        icpService.counts().catch(() => null),
+      ]);
       setItems(data.items || []);
       setTotal(data.total || 0);
+      if (counts) {
+        setTotalContacts(counts.total ?? data.total ?? 0);
+        setWithoutAccountCount(counts.without_account ?? 0);
+      } else if (!withoutAccountOnly) {
+        setTotalContacts(data.total || 0);
+      }
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to load contacts');
     } finally {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, sortBy, sortOrder, search, appliedFilters]);
+  }, [page, sortBy, sortOrder, search, appliedFilters, withoutAccountOnly]);
 
   useEffect(() => {
     load();
@@ -196,11 +294,6 @@ export default function ContactsPage() {
     } else {
       setSortOrder('asc');
     }
-  }
-
-  function toggleSortOrder() {
-    setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-    setPage(1);
   }
 
   useEffect(() => {
@@ -256,9 +349,15 @@ export default function ContactsPage() {
     ([key, value]) => value && key !== 'company',
   ).length;
   const activeFilterEntries = Object.entries(appliedFilters).filter(([, value]) => value);
-  const sortLabel = SORT_OPTIONS.find((o) => o.id === sortBy)?.label || 'Name';
-  const activeCount = items.filter((row) => ['active', 'verified'].includes((row.icp_status || '').toLowerCase())).length;
+  const activeCount = items.filter((row) =>
+    ['active', 'verified'].includes((row.icp_status || '').toLowerCase()),
+  ).length;
   const showInitialSpinner = loading && items.length === 0;
+
+  function toggleWithoutAccountFilter() {
+    setWithoutAccountOnly((prev) => !prev);
+    setPage(1);
+  }
 
   return (
     <div className="mx-auto flex h-[calc(100vh-3rem)] min-h-[560px] w-full max-w-[1440px] flex-col lg:h-[calc(100vh-4rem)]">
@@ -283,7 +382,7 @@ export default function ContactsPage() {
         <div className="grid gap-3 sm:grid-cols-3">
           <DatabaseMetric
             label="Total contacts"
-            value={(total || 0).toLocaleString()}
+            value={(totalContacts || total || 0).toLocaleString()}
             hint="In database"
             icon={FiUsers}
           />
@@ -295,14 +394,33 @@ export default function ContactsPage() {
             tone="green"
           />
           <DatabaseMetric
-            label="Filters applied"
-            value={activeFilterEntries.length}
-            hint="No filters"
-            icon={FiFilter}
-            tone="violet"
-            action={activeFilterEntries.length ? clearFilters : undefined}
+            label="Contacts without account"
+            value={(withoutAccountCount || 0).toLocaleString()}
+            hint={withoutAccountOnly ? 'Showing these contacts — click to clear' : 'Click to view all'}
+            icon={FiUserX}
+            tone="amber"
+            active={withoutAccountOnly}
+            onClick={toggleWithoutAccountFilter}
+            action={withoutAccountOnly ? () => setWithoutAccountOnly(false) : undefined}
           />
         </div>
+
+        {withoutAccountOnly ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+            <p>
+              Showing contacts with <span className="font-semibold">no account</span>. Name, email,
+              designation, and other fields still appear when available — open a row to link or create
+              an account.
+            </p>
+            <button
+              type="button"
+              onClick={() => setWithoutAccountOnly(false)}
+              className="shrink-0 text-xs font-semibold text-amber-800 underline hover:text-amber-950"
+            >
+              Clear
+            </button>
+          </div>
+        ) : null}
 
         <div className="surface-card flex flex-col gap-3 p-3">
           <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
@@ -360,15 +478,6 @@ export default function ContactsPage() {
               </div>
               <button
                 type="button"
-                onClick={toggleSortOrder}
-                className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-2.5 text-slate-600 hover:bg-slate-50"
-                title={`${sortLabel} ${sortOrder === 'asc' ? 'ascending' : 'descending'}`}
-                aria-label={`Toggle ${sortLabel} sort direction`}
-              >
-                {sortOrder === 'asc' ? <FiArrowUp size={15} /> : <FiArrowDown size={15} />}
-              </button>
-              <button
-                type="button"
                 onClick={() => setMoreOpen((open) => !open)}
                 className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold ${
                   moreOpen || advancedFilterCount > 0
@@ -416,13 +525,13 @@ export default function ContactsPage() {
           <table className="min-w-[940px] w-full table-fixed text-sm">
             <thead className="sticky top-0 z-[1] border-b border-slate-200 bg-slate-50/95">
               <tr className="text-left text-[10px] font-bold uppercase tracking-[0.07em] text-slate-500">
-                <th className="w-[15%] px-4 py-3"><SortableHeading>Contact name</SortableHeading></th>
-                <th className="w-[14%] px-4 py-3"><SortableHeading>Account</SortableHeading></th>
-                <th className="w-[17%] px-4 py-3"><SortableHeading>Designation</SortableHeading></th>
-                <th className="w-[19%] px-4 py-3"><SortableHeading>Location</SortableHeading></th>
+                <th className="w-[15%] px-4 py-3">Contact name</th>
+                <th className="w-[14%] px-4 py-3">Account</th>
+                <th className="w-[17%] px-4 py-3">Designation</th>
+                <th className="w-[19%] px-4 py-3">Location</th>
                 <th className="w-[12%] px-4 py-3">Email</th>
-                <th className="w-[9%] px-4 py-3"><SortableHeading>Type</SortableHeading></th>
-                <th className="w-[9%] px-4 py-3"><SortableHeading>Status</SortableHeading></th>
+                <th className="w-[9%] px-4 py-3">Type</th>
+                <th className="w-[9%] px-4 py-3">Status</th>
                 <th className="w-[5%] px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -432,11 +541,15 @@ export default function ContactsPage() {
               ) : items.length === 0 ? (
                 <tr className="[&>td]:border-b [&>td]:border-slate-200">
                   <td colSpan={8} className="py-16 text-center text-gray-500">
-                    No contacts yet. Verify extracted profiles or add one manually.
+                    {withoutAccountOnly
+                      ? 'No contacts without an account — everyone has a company linked.'
+                      : 'No contacts yet. Verify extracted profiles or add one manually.'}
                   </td>
                 </tr>
               ) : (
-                items.map((row) => (
+                items.map((row) => {
+                  const displayName = contactDisplayName(row);
+                  return (
                   <tr
                     key={row.id}
                     onClick={() => setSelected(row)}
@@ -444,20 +557,38 @@ export default function ContactsPage() {
                   >
                     <td className="px-4 py-3">
                       <div className="flex min-w-0 items-center gap-3">
-                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${avatarStyle(row)}`}>
-                          {initials(row.name)}
-                        </span>
-                        <span className="truncate text-xs font-semibold text-primary-700">{row.name || '—'}</span>
+                        <ContactAvatar row={row} displayName={displayName} />
+                        <div className="min-w-0">
+                          <p className={`truncate text-xs font-semibold ${displayName ? 'text-primary-700' : 'text-slate-400'}`}>
+                            {displayName || 'Unnamed contact'}
+                          </p>
+                          {!row.name?.trim() && row.linkedin_url ? (
+                            <p className="truncate text-[10px] text-slate-400">From LinkedIn URL</p>
+                          ) : null}
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex min-w-0 items-start gap-2">
-                        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-50 text-slate-400">
+                        <span
+                          className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
+                            row.company_name ? 'bg-slate-50 text-slate-400' : 'bg-amber-50 text-amber-600'
+                          }`}
+                        >
                           <FiBriefcase size={13} />
                         </span>
                         <div className="min-w-0">
-                          <p className="truncate text-xs font-medium text-slate-700">{row.company_name || '—'}</p>
-                          <p className="truncate text-[10px] text-slate-400">{row.industry || ''}</p>
+                          {row.company_name ? (
+                            <>
+                              <p className="truncate text-xs font-medium text-slate-700">{row.company_name}</p>
+                              <p className="truncate text-[10px] text-slate-400">{row.industry || ''}</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="truncate text-xs font-semibold text-amber-700">No account</p>
+                              <p className="truncate text-[10px] text-amber-600/80">Open to link or create</p>
+                            </>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -477,12 +608,18 @@ export default function ContactsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold capitalize text-emerald-700">
-                        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-50">
-                          <FiCheck size={10} />
-                        </span>
-                        {row.icp_status || 'Active'}
-                      </span>
+                      {(() => {
+                        const tone = statusTone(row.icp_status);
+                        const StatusIcon = tone.Icon || FiCheck;
+                        return (
+                          <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold capitalize ${tone.wrap}`}>
+                            <span className={`flex h-4 w-4 items-center justify-center rounded-full ${tone.icon}`}>
+                              <StatusIcon size={10} />
+                            </span>
+                            {tone.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <button
@@ -492,14 +629,15 @@ export default function ContactsPage() {
                           setDeleteTarget(row);
                         }}
                         className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 hover:text-slate-800"
-                        aria-label={`Actions for ${row.name || 'contact'}`}
+                        aria-label={`Actions for ${displayName || 'contact'}`}
                         title="Delete contact"
                       >
                         <FiMoreVertical size={14} />
                       </button>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

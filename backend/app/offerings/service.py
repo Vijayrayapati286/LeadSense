@@ -22,9 +22,16 @@ from app.offerings.models import (
     OfferingRow,
 )
 from app.offerings.embeddings import ensure_offering_embedding
+from app.offerings.scoring_utils import _parse_company_size
 
 DEFINITION_FIELDS = (
+    "name",
+    "short_description",
+    "description",
+    "product_type",
+    "target_customer",
     "target_industries",
+    "target_company_size",
     "company_size_min",
     "company_size_max",
     "company_size_label",
@@ -44,6 +51,7 @@ DEFINITION_FIELDS = (
     "use_cases",
     "desired_outcomes",
     "benefits",
+    "selling_points",
     "must_have_rules",
     "nice_to_have_rules",
     "exclusion_rules",
@@ -53,6 +61,7 @@ DEFINITION_FIELDS = (
 
 LIST_FIELDS = (
     "target_industries",
+    "target_company_size",
     "target_geographies",
     "business_models",
     "target_departments",
@@ -67,6 +76,7 @@ LIST_FIELDS = (
     "use_cases",
     "desired_outcomes",
     "benefits",
+    "selling_points",
     "must_have_rules",
     "nice_to_have_rules",
     "exclusion_rules",
@@ -76,6 +86,23 @@ LIST_FIELDS = (
 )
 
 NULLABLE_JSON_FIELDS = ("email_template",)
+
+TEXT_FIELDS = (
+    "name",
+    "short_description",
+    "description",
+    "product_type",
+    "website_url",
+    "pricing_range",
+    "target_customer",
+    "company_size_label",
+)
+
+LEGACY_PLACEHOLDER_DRAFT = {
+    "name": "ai sales platform",
+    "product_type": "saas",
+    "short_description": "ai-powered platform for b2b sales teams",
+}
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -94,6 +121,63 @@ def _list_or_empty(value: Any) -> list:
     return [value]
 
 
+def _normalize_list(value: Any) -> list:
+    values = value if isinstance(value, list) else _list_or_empty(value)
+    result = []
+    seen = set()
+    for item in values:
+        text = str(item).strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            result.append(text)
+    return result
+
+
+def _normalize_payload(data: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(data)
+    detailed = payload.pop("detailed_description", None)
+    if detailed is not None:
+        payload["description"] = detailed
+    for key in TEXT_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, str):
+            payload[key] = value.strip() or None
+    for key in LIST_FIELDS:
+        if key in payload and payload[key] is not None:
+            payload[key] = _normalize_list(payload[key])
+
+    target_sizes = payload.get("target_company_size")
+    if target_sizes:
+        payload["company_size_label"] = ", ".join(target_sizes)
+        size_min, size_max = _parse_company_size(target_sizes[0])
+        payload["company_size_min"] = size_min
+        payload["company_size_max"] = size_max
+    elif "target_company_size" in payload:
+        payload["company_size_label"] = None
+        payload["company_size_min"] = None
+        payload["company_size_max"] = None
+    elif "target_company_size" not in payload and payload.get("company_size_label"):
+        payload["target_company_size"] = _normalize_list(payload["company_size_label"])
+    return payload
+
+
+def _is_legacy_placeholder(payload: dict[str, Any]) -> bool:
+    return all(
+        str(payload.get(key) or "").strip().casefold() == value
+        for key, value in LEGACY_PLACEHOLDER_DRAFT.items()
+    )
+
+
+def _validate_create_payload(payload: dict[str, Any]) -> None:
+    if not payload.get("name"):
+        raise ValueError("Offering name is required")
+    if not payload.get("product_type"):
+        raise ValueError("Product or service type is required")
+    if _is_legacy_placeholder(payload):
+        raise ValueError("Replace the generic AI Sales Platform placeholder values before saving")
+
+
 def compute_definition_hash(data: dict[str, Any]) -> str:
     payload = {k: data.get(k) for k in DEFINITION_FIELDS}
     raw = json.dumps(payload, sort_keys=True, default=str)
@@ -107,9 +191,13 @@ def serialize_offering(row: OfferingRow, *, stats: dict[str, int] | None = None)
         "name": row.name,
         "short_description": row.short_description,
         "description": row.description,
+        "detailed_description": row.description,
         "product_type": row.product_type,
         "website_url": row.website_url,
+        "target_customer": row.target_customer,
         "target_industries": _list_or_empty(row.target_industries),
+        "target_company_size": _list_or_empty(row.target_company_size)
+        or _list_or_empty(row.company_size_label),
         "company_size_min": row.company_size_min,
         "company_size_max": row.company_size_max,
         "company_size_label": row.company_size_label,
@@ -129,6 +217,7 @@ def serialize_offering(row: OfferingRow, *, stats: dict[str, int] | None = None)
         "use_cases": _list_or_empty(row.use_cases),
         "desired_outcomes": _list_or_empty(row.desired_outcomes),
         "benefits": _list_or_empty(row.benefits),
+        "selling_points": _list_or_empty(row.selling_points),
         "must_have_rules": _list_or_empty(row.must_have_rules),
         "nice_to_have_rules": _list_or_empty(row.nice_to_have_rules),
         "exclusion_rules": _list_or_empty(row.exclusion_rules),
@@ -262,13 +351,13 @@ def _apply_fields(row: OfferingRow, data: dict[str, Any]) -> None:
 
 
 def create_offering(db: Session, *, user_id: int | None, data: dict[str, Any]) -> OfferingRow:
+    data = _normalize_payload(data)
     payload = {
         k: v
         for k, v in data.items()
         if v is not None or k in LIST_FIELDS or k in NULLABLE_JSON_FIELDS
     }
-    if not payload.get("name"):
-        raise ValueError("name is required")
+    _validate_create_payload(payload)
     row = OfferingRow(user_id=user_id, definition_version=1)
     _apply_fields(row, payload)
     row.definition_hash = compute_definition_hash(serialize_offering(row))
@@ -280,6 +369,7 @@ def create_offering(db: Session, *, user_id: int | None, data: dict[str, Any]) -
 
 def update_offering(db: Session, row: OfferingRow, data: dict[str, Any]) -> OfferingRow:
     before = compute_definition_hash(serialize_offering(row))
+    data = _normalize_payload(data)
     payload = {k: v for k, v in data.items() if v is not None or k in LIST_FIELDS or k in NULLABLE_JSON_FIELDS}
     _apply_fields(row, payload)
     after = compute_definition_hash(serialize_offering(row))
@@ -305,7 +395,9 @@ def generated_to_offering_fields(generated: dict[str, Any]) -> dict[str, Any]:
         "name": generated.get("suggested_name") or None,
         "short_description": generated.get("short_description"),
         "product_type": generated.get("product_type"),
+        "target_customer": generated.get("target_customer"),
         "target_industries": generated.get("industries") or [],
+        "target_company_size": [cs.get("label")] if cs.get("label") else [],
         "company_size_min": cs.get("min"),
         "company_size_max": cs.get("max"),
         "company_size_label": cs.get("label"),
@@ -321,6 +413,7 @@ def generated_to_offering_fields(generated: dict[str, Any]) -> dict[str, Any]:
         "use_cases": generated.get("use_cases") or [],
         "desired_outcomes": generated.get("desired_outcomes") or [],
         "benefits": generated.get("benefits") or [],
+        "selling_points": generated.get("selling_points") or [],
         "positive_keywords": generated.get("positive_keywords") or [],
         "negative_keywords": generated.get("negative_keywords") or [],
         "must_have_rules": generated.get("must_have_rules") or [],

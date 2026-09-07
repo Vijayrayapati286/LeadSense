@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class OfferingVoucherMeta(BaseModel):
@@ -28,11 +28,14 @@ class OfferingCreate(BaseModel):
     name: str
     short_description: str | None = None
     description: str | None = None
+    detailed_description: str | None = None
     product_type: str | None = None
     website_url: str | None = None
     pricing_range: str | None = None
+    target_customer: str | None = None
     hard_filter_rules: dict[str, Any] | None = None
     target_industries: list[str] | None = None
+    target_company_size: list[str] | None = None
     company_size_min: int | None = None
     company_size_max: int | None = None
     company_size_label: str | None = None
@@ -52,6 +55,7 @@ class OfferingCreate(BaseModel):
     use_cases: list[str] | None = None
     desired_outcomes: list[str] | None = None
     benefits: list[str] | None = None
+    selling_points: list[str] | None = None
     must_have_rules: list[str] | None = None
     nice_to_have_rules: list[str] | None = None
     exclusion_rules: list[str] | None = None
@@ -60,6 +64,63 @@ class OfferingCreate(BaseModel):
     vouchers: list[OfferingVoucherMeta] | None = None
     email_template: OfferingEmailTemplateMeta | None = None
     status: str | None = "active"
+
+    @field_validator(
+        "name",
+        "short_description",
+        "description",
+        "detailed_description",
+        "product_type",
+        "website_url",
+        "pricing_range",
+        "target_customer",
+        mode="before",
+    )
+    @classmethod
+    def trim_text_fields(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator(
+        "target_industries",
+        "target_company_size",
+        "target_geographies",
+        "business_models",
+        "target_departments",
+        "target_job_titles",
+        "target_seniority",
+        "decision_maker_types",
+        "buying_roles",
+        "pain_points",
+        "business_problems",
+        "current_challenges",
+        "use_cases",
+        "desired_outcomes",
+        "benefits",
+        "selling_points",
+        "must_have_rules",
+        "nice_to_have_rules",
+        "exclusion_rules",
+        "positive_keywords",
+        "negative_keywords",
+        mode="before",
+    )
+    @classmethod
+    def normalize_lists(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, str):
+            value = value.replace(",", "\n").splitlines()
+        if not isinstance(value, list):
+            return value
+        result = []
+        seen = set()
+        for item in value:
+            text = str(item).strip()
+            key = text.casefold()
+            if text and key not in seen:
+                seen.add(key)
+                result.append(text)
+        return result
 
 
 class OfferingUpdate(OfferingCreate):
@@ -72,12 +133,15 @@ class OfferingResponse(BaseModel):
     name: str
     short_description: str | None = None
     description: str | None = None
+    detailed_description: str | None = None
     product_type: str | None = None
     website_url: str | None = None
     pricing_range: str | None = None
+    target_customer: str | None = None
     hard_filter_rules: dict[str, Any] = Field(default_factory=dict)
     profile_text: str | None = None
     target_industries: list[Any] = Field(default_factory=list)
+    target_company_size: list[Any] = Field(default_factory=list)
     company_size_min: int | None = None
     company_size_max: int | None = None
     company_size_label: str | None = None
@@ -97,6 +161,7 @@ class OfferingResponse(BaseModel):
     use_cases: list[Any] = Field(default_factory=list)
     desired_outcomes: list[Any] = Field(default_factory=list)
     benefits: list[Any] = Field(default_factory=list)
+    selling_points: list[Any] = Field(default_factory=list)
     must_have_rules: list[Any] = Field(default_factory=list)
     nice_to_have_rules: list[Any] = Field(default_factory=list)
     exclusion_rules: list[Any] = Field(default_factory=list)
@@ -125,6 +190,8 @@ class OfferingListResponse(BaseModel):
 
 class GenerateIcpRequest(BaseModel):
     description: str = Field(..., min_length=10)
+    requested_fields: list[str] = Field(default_factory=list)
+    current_values: dict[str, Any] = Field(default_factory=dict)
 
 
 class GenerateOfferingEmailRequest(BaseModel):
@@ -183,6 +250,7 @@ class GeneratedIcpPayload(BaseModel):
     use_cases: list[str] = Field(default_factory=list)
     desired_outcomes: list[str] = Field(default_factory=list)
     benefits: list[str] = Field(default_factory=list)
+    selling_points: list[str] = Field(default_factory=list)
     positive_keywords: list[str] = Field(default_factory=list)
     negative_keywords: list[str] = Field(default_factory=list)
     must_have_rules: list[str] = Field(default_factory=list)
@@ -191,9 +259,59 @@ class GeneratedIcpPayload(BaseModel):
     suggested_name: str | None = None
     short_description: str | None = None
     description: str | None = None
+    detailed_description: str | None = None
     product_type: str | None = None
+    target_customer: str | None = None
     pricing_range: str | None = None
     is_mock: bool = False
+
+    @field_validator(
+        "industries",
+        "departments",
+        "job_titles",
+        "seniority",
+        "geographies",
+        "business_models",
+        "decision_maker_types",
+        "buying_roles",
+        "pain_points",
+        "business_problems",
+        "use_cases",
+        "desired_outcomes",
+        "benefits",
+        "selling_points",
+        "positive_keywords",
+        "negative_keywords",
+        "must_have_rules",
+        "nice_to_have_rules",
+        "exclusion_rules",
+        mode="after",
+    )
+    @classmethod
+    def deduplicate_generated_lists(cls, value):
+        result = []
+        seen = set()
+        for item in value:
+            text = item.strip()
+            key = text.casefold()
+            if text and key not in seen:
+                seen.add(key)
+                result.append(text)
+        return result
+
+    @field_validator(
+        "suggested_name",
+        "short_description",
+        "description",
+        "detailed_description",
+        "product_type",
+        "target_customer",
+        "pricing_range",
+        mode="after",
+    )
+    @classmethod
+    def trim_generated_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class MatchReasonBreakdown(BaseModel):

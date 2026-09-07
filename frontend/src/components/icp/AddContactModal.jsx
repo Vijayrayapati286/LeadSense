@@ -19,6 +19,7 @@ const COUNTRY_CODES = [
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
   { value: 'verified', label: 'Verified' },
+  { value: 'incomplete', label: 'Incomplete' },
 ];
 
 export const EMPTY_CONTACT_FORM = {

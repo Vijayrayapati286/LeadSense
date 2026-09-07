@@ -1,8 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { FiArrowLeft, FiArrowRight, FiBriefcase, FiCheck, FiMail, FiTarget, FiUsers, FiZap } from 'react-icons/fi';
 import {
-  applyGeneratedIcp,
+  FiArrowLeft,
+  FiArrowRight,
+  FiCheck,
+  FiMail,
+  FiTarget,
+  FiUsers,
+  FiZap,
+} from 'react-icons/fi';
+import {
   AreaField,
   EMPTY_OFFERING,
   formToPayload,
@@ -10,6 +17,14 @@ import {
   offeringEmailTemplateName,
   TextField,
 } from '../components/offerings/offeringFormUtils';
+import {
+  acceptAiSuggestion,
+  AI_EDITABLE_FIELDS,
+  applyAllAiSuggestions,
+  keepCurrentSuggestion,
+  reconcileAiDraft,
+  validateOffering,
+} from '../components/offerings/offeringDraftUtils';
 import OfferingVouchersSection from '../components/offerings/OfferingVouchersSection';
 import OfferingEmailWizardStep from '../components/offerings/OfferingEmailWizardStep';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
@@ -18,103 +33,84 @@ import { offeringsService } from '../services/services';
 import { WorkspaceHeader } from '../components/ui/GrowthWorkspace';
 
 const STEPS = [
-  { label: 'Offering', hint: 'What you sell', icon: FiBriefcase },
-  { label: 'Companies', hint: 'Who it fits', icon: FiTarget },
-  { label: 'Buyers', hint: 'Who decides', icon: FiUsers },
+  { label: 'Offering', hint: 'AI draft & basics', icon: FiZap },
+  { label: 'Target customer', hint: 'Companies & buyers', icon: FiTarget },
+  { label: 'Value', hint: 'Problems & outcomes', icon: FiUsers },
   { label: 'Email', hint: 'Outreach template', icon: FiMail },
-  { label: 'Review', hint: 'Confirm & match', icon: FiCheck },
+  { label: 'Review', hint: 'Preview & save', icon: FiCheck },
 ];
 
-function ChipList({ items, empty = '—' }) {
-  if (!items?.length) return <p className="text-sm text-gray-400">{empty}</p>;
+const PREVIEW_GROUPS = [
+  ['Offering basics', ['product_type', 'short_description', 'detailed_description', 'website_url', 'pricing_range']],
+  ['Target customer', ['target_customer', 'target_industries', 'target_company_size', 'target_job_titles']],
+  ['Customer problems', ['pain_points', 'current_challenges']],
+  ['Use cases', ['use_cases']],
+  ['Benefits and selling points', ['benefits', 'selling_points']],
+];
+
+const LABELS = {
+  name: 'Offering name',
+  product_type: 'Product / service type',
+  short_description: 'Short description',
+  detailed_description: 'Detailed description',
+  website_url: 'Website URL',
+  pricing_range: 'Pricing range',
+  target_customer: 'Target customer',
+  target_industries: 'Target industries',
+  target_company_size: 'Target company size',
+  target_job_titles: 'Target job titles',
+  pain_points: 'Pain points',
+  current_challenges: 'Challenges this offering solves',
+  use_cases: 'Use cases',
+  benefits: 'Benefits',
+  selling_points: 'Selling points',
+};
+
+function displayValue(value) {
+  if (Array.isArray(value)) return value.join(', ') || 'Not provided';
+  return value || 'Not provided';
+}
+
+function SuggestionReview({ field, item, onKeep, onAccept }) {
+  if (!item) return null;
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {items.map((item) => (
-        <span
-          key={item}
-          className="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700"
-        >
-          {item}
-        </span>
-      ))}
+    <div className="mt-2 rounded-xl border border-violet-200 bg-violet-50/60 p-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Current</p>
+          <p className="mt-1 text-sm text-slate-700">{displayValue(item.current)}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-violet-600">AI suggestion</p>
+          <p className="mt-1 text-sm font-medium text-slate-900">{displayValue(item.suggested)}</p>
+        </div>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <button type="button" onClick={() => onKeep(field)} className="btn-secondary px-3 py-1.5 text-xs">
+          Keep current
+        </button>
+        <button type="button" onClick={() => onAccept(field)} className="btn-primary px-3 py-1.5 text-xs">
+          Use AI suggestion
+        </button>
+      </div>
     </div>
   );
 }
 
-/** Compact read-only ICP summary — no Target Company / Persona / Keywords textareas */
-function IcpSummaryCard({ form }) {
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-5 space-y-4">
-      <div>
-        <h2 className="text-sm font-semibold text-gray-900">AI ICP profile</h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Generated from your description — used for matching (not edited field-by-field)
-        </p>
+function PreviewValue({ value }) {
+  if (Array.isArray(value)) {
+    if (!value.length) return <span className="text-slate-400">Not provided</span>;
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {value.map((item) => (
+          <span key={item.toLocaleLowerCase()} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+            {item}
+          </span>
+        ))}
       </div>
-      <div className="grid sm:grid-cols-2 gap-4">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-            Industries
-          </p>
-          <ChipList items={form.target_industries} />
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-            Job titles
-          </p>
-          <ChipList items={form.target_job_titles} />
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-            Pain points
-          </p>
-          <ChipList items={form.pain_points} />
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-            Use cases
-          </p>
-          <ChipList items={form.use_cases} />
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-            Benefits
-          </p>
-          <ChipList items={form.benefits} />
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-            Buying signals
-          </p>
-          <ChipList items={[...(form.buying_roles || []), ...(form.decision_maker_types || [])]} />
-        </div>
-      </div>
-      <div className="grid sm:grid-cols-3 gap-3 text-sm border-t border-gray-100 pt-3">
-        <div>
-          <p className="text-[11px] uppercase text-gray-400">Company size</p>
-          <p className="font-medium text-gray-800">
-            {form.company_size_label ||
-              [form.company_size_min, form.company_size_max]
-                .filter((v) => v !== '' && v != null)
-                .join('–') ||
-              '—'}
-          </p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase text-gray-400">Geography</p>
-          <p className="font-medium text-gray-800">
-            {(form.target_geographies || []).slice(0, 3).join(', ') || '—'}
-          </p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase text-gray-400">Keywords</p>
-          <p className="font-medium text-gray-800 truncate">
-            {(form.positive_keywords || []).slice(0, 4).join(', ') || '—'}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
+    );
+  }
+  return <p className="whitespace-pre-wrap text-sm text-slate-700">{value || 'Not provided'}</p>;
 }
 
 export default function OfferingCreatePage() {
@@ -125,26 +121,35 @@ export default function OfferingCreatePage() {
   const [form, setForm] = useState({ ...EMPTY_OFFERING, status: 'active' });
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
-  const [generated, setGenerated] = useState(false);
+  const [regeneratingField, setRegeneratingField] = useState('');
+  const [generationState, setGenerationState] = useState('idle');
+  const [suggestions, setSuggestions] = useState({});
+  const [provenance, setProvenance] = useState({});
+  const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(isEdit);
   const [runMatch, setRunMatch] = useState(true);
+  const [previewConfirmed, setPreviewConfirmed] = useState(false);
   const [step, setStep] = useState(0);
   const voucherBatchId = useRef(
     id ? `offering-voucher-${id}` : `offering-voucher-${crypto.randomUUID()}`,
   );
+  const pendingSuggestionCount = Object.keys(suggestions).length;
+
+  const fieldProps = (field) => ({
+    generated: Boolean(provenance[field]),
+    regenerating: regeneratingField === field,
+    onRegenerate: AI_EDITABLE_FIELDS.includes(field) ? () => handleGenerate([field]) : undefined,
+    error: errors[field],
+  });
 
   function setField(key, value) {
     setForm((prev) => ({ ...prev, [key]: value }));
-  }
-
-  function nextStep() {
-    if (step === 0 && !form.name?.trim()) {
-      toast.error('Add an offering name before continuing');
-      return;
+    setPreviewConfirmed(false);
+    setErrors((prev) => ({ ...prev, [key]: undefined }));
+    if (provenance[key]) {
+      setProvenance((prev) => ({ ...prev, [key]: 'ai_edited' }));
     }
-    setStep((current) => Math.min(STEPS.length - 1, current + 1));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   useEffect(() => {
@@ -158,16 +163,17 @@ export default function OfferingCreatePage() {
           setForm({
             ...EMPTY_OFFERING,
             ...data,
+            detailed_description: data.detailed_description || data.description || '',
+            target_company_size:
+              data.target_company_size ||
+              (data.company_size_label ? [data.company_size_label] : []),
             company_size_min: data.company_size_min ?? '',
             company_size_max: data.company_size_max ?? '',
-            revenue_min: data.revenue_min ?? '',
-            revenue_max: data.revenue_max ?? '',
             status: data.status || 'active',
             vouchers: Array.isArray(data.vouchers) ? data.vouchers : [],
             email_template: data.email_template || null,
           });
-          setAiPrompt(data.description || data.short_description || '');
-          setGenerated(true);
+          setAiPrompt(data.detailed_description || data.description || data.short_description || '');
         }
       } catch (err) {
         toast.error(err?.response?.data?.detail || 'Failed to load offering');
@@ -182,38 +188,97 @@ export default function OfferingCreatePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isEdit]);
 
-  async function handleGenerate() {
+  async function handleGenerate(requestedFields = null) {
     if (!aiPrompt.trim() || aiPrompt.trim().length < 10) {
-      toast.error('Describe what you are selling (at least a sentence)');
+      toast.error('Describe what you sell, the problem it solves, and your best customers.');
       return;
     }
-    setAiLoading(true);
+    if (requestedFields?.length) setRegeneratingField(requestedFields[0]);
+    else setAiLoading(true);
+    setGenerationState('loading');
     try {
-      const result = await offeringsService.generateIcp(aiPrompt.trim());
-      setForm((prev) => {
-        const next = applyGeneratedIcp(prev, result);
-        next.description = result.description || aiPrompt.trim();
-        if (!next.short_description) next.short_description = result.short_description || '';
-        if (!next.name) next.name = result.suggested_name || '';
-        next.status = prev.status || 'active';
-        return next;
+      const result = await offeringsService.generateIcp({
+        description: aiPrompt.trim(),
+        requested_fields: requestedFields || [],
+        current_values: formToPayload(form),
       });
-      setGenerated(true);
+      const reconciled = reconcileAiDraft(form, result, requestedFields);
+      setForm(reconciled.form);
+      setSuggestions((prev) => {
+        if (!requestedFields?.length) return reconciled.suggestions;
+        const next = { ...prev };
+        requestedFields.forEach((field) => delete next[field]);
+        return { ...next, ...reconciled.suggestions };
+      });
+      setProvenance((prev) => ({ ...prev, ...reconciled.provenance }));
+      setGenerationState('success');
+      setPreviewConfirmed(false);
       toast.success(
-        result.is_mock
-          ? 'Description + ICP ready (mock mode)'
-          : 'Description + ICP ready — review basic info then save',
+        pendingSuggestionCount || Object.keys(reconciled.suggestions).length
+          ? 'AI draft ready — review the suggestions before applying them'
+          : 'AI draft added — every generated field remains editable',
       );
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'AI generation failed');
+      setGenerationState('error');
+      toast.error(err?.response?.data?.detail || 'AI generation failed. Your current data was not changed.');
     } finally {
       setAiLoading(false);
+      setRegeneratingField('');
     }
   }
 
+  function acceptSuggestion(field) {
+    const result = acceptAiSuggestion(form, suggestions, field);
+    setForm(result.form);
+    setSuggestions(result.suggestions);
+    setProvenance((prev) => ({ ...prev, [field]: 'ai_accepted' }));
+    setPreviewConfirmed(false);
+  }
+
+  function keepSuggestion(field) {
+    setSuggestions((prev) => keepCurrentSuggestion(prev, field));
+  }
+
+  function applyAllSuggestions() {
+    const fields = Object.keys(suggestions);
+    const result = applyAllAiSuggestions(form, suggestions);
+    setForm(result.form);
+    setSuggestions(result.suggestions);
+    setProvenance((prev) => ({
+      ...prev,
+      ...Object.fromEntries(fields.map((field) => [field, 'ai_accepted'])),
+    }));
+    setPreviewConfirmed(false);
+    toast.success('All AI suggestions applied');
+  }
+
+  function nextStep() {
+    if (step === 0) {
+      const nextErrors = validateOffering(form);
+      setErrors(nextErrors);
+      if (nextErrors.name || nextErrors.product_type) {
+        toast.error('Complete the required offering basics before continuing');
+        return;
+      }
+    }
+    setStep((current) => Math.min(STEPS.length - 1, current + 1));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   async function handleSave() {
-    if (!form.name?.trim()) {
-      toast.error('Offering name is required');
+    const nextErrors = validateOffering(form);
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
+      setStep(0);
+      toast.error('Fix the highlighted fields before saving');
+      return;
+    }
+    if (pendingSuggestionCount) {
+      toast.error('Apply or keep each pending AI suggestion before saving');
+      return;
+    }
+    if (!previewConfirmed) {
+      toast.error('Confirm the final preview before saving');
       return;
     }
     setSaving(true);
@@ -230,28 +295,25 @@ export default function OfferingCreatePage() {
       }
       if (runMatch && offeringId) {
         try {
-          await offeringsService.startMatch(offeringId, true, true);
-          toast.success('Matching verified ICP contacts…');
+          await offeringsService.startMatch(offeringId, true, false);
+          toast.success('Matching ICP contacts…');
         } catch {
-          /* best-effort */
+          toast.error('Offering saved, but candidate matching could not be started');
         }
       }
       navigate(`/offerings/${offeringId}?tab=matching`);
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      let message = 'Failed to save offering';
-      if (Array.isArray(detail)) {
-        message = detail.map((d) => d.msg || JSON.stringify(d)).join('; ');
-      } else if (typeof detail === 'string' && detail.trim()) {
-        message = detail;
-      } else if (err?.message) {
-        message = err.response ? err.message : `Save failed — ${err.message}`;
-      }
+      const message = Array.isArray(detail)
+        ? detail.map((item) => item.msg || JSON.stringify(item)).join('; ')
+        : detail || err?.message || 'Failed to save offering';
       toast.error(message);
     } finally {
       setSaving(false);
     }
   }
+
+  const previewName = useMemo(() => form.name?.trim() || 'Untitled offering', [form.name]);
 
   if (loading) {
     return (
@@ -261,12 +323,21 @@ export default function OfferingCreatePage() {
     );
   }
 
+  const suggestionFor = (field) => (
+    <SuggestionReview
+      field={field}
+      item={suggestions[field]}
+      onKeep={keepSuggestion}
+      onAccept={acceptSuggestion}
+    />
+  );
+
   return (
     <div className="workspace-shell max-w-6xl">
       <WorkspaceHeader
         eyebrow="Offering studio"
-        title={isEdit ? 'Refine your offering' : 'Create a market-ready offering'}
-        description="Start with your own notes or let AI build the first draft. Every company, persona, signal, and rule remains fully editable."
+        title={isEdit ? 'Refine your offering' : 'Create offering'}
+        description="Build a precise offering profile for stronger candidate recommendations. AI suggests; you decide."
         actions={
           <Link to={isEdit ? `/offerings/${id}` : '/offerings'} className="btn-secondary inline-flex items-center gap-2">
             <FiArrowLeft size={16} /> Exit
@@ -281,15 +352,14 @@ export default function OfferingCreatePage() {
               <li key={label}>
                 <button
                   type="button"
-                  onClick={() => (index < step || isEdit || generated) && setStep(index)}
-                  disabled={index > step && !isEdit && !generated}
+                  onClick={() => setStep(index)}
                   className={`flex w-full items-center gap-3 rounded-xl p-3 text-left transition ${
-                    step === index ? 'bg-primary-50 text-primary-800' : 'text-slate-500 hover:bg-slate-50 disabled:opacity-45'
+                    step === index ? 'bg-primary-50 text-primary-800' : 'text-slate-500 hover:bg-slate-50'
                   }`}
                   aria-current={step === index ? 'step' : undefined}
                 >
-                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${step === index ? 'bg-primary-600 text-white' : index < step ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                    {index < step ? <FiCheck size={17} /> : <Icon size={17} />}
+                  <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${step === index ? 'bg-primary-600 text-white' : 'bg-slate-100'}`}>
+                    <Icon size={17} />
                   </span>
                   <span>
                     <span className="block text-sm font-semibold">{label}</span>
@@ -304,124 +374,160 @@ export default function OfferingCreatePage() {
         <main className="min-w-0 space-y-5">
           {step === 0 ? (
             <div className="space-y-5 animate-rise-in">
-              <section className="overflow-hidden rounded-2xl border border-primary-200 bg-gradient-to-br from-primary-50 to-white p-5 sm:p-6">
+              <section className="overflow-hidden rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 via-white to-primary-50 p-5 sm:p-6">
                 <div className="flex items-start gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-600 text-white shadow-lg shadow-primary-200"><FiZap size={18} /></span>
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white shadow-lg shadow-violet-200">
+                    <FiZap size={19} />
+                  </span>
                   <div>
-                    <h2 className="font-semibold text-slate-900">Build a first draft with AI</h2>
-                    <p className="mt-1 text-sm text-slate-500">Describe what you sell, the problem it solves, and your best customers. You can edit every generated field.</p>
+                    <h2 className="font-semibold text-slate-950">Generate offering draft with AI</h2>
+                    <p className="mt-1 text-sm text-slate-600">Describe what you sell, the problem it solves, and your best customers.</p>
                   </div>
                 </div>
-                <textarea rows={5} className="control mt-4 resize-y border-primary-200" placeholder="We sell an AI platform that analyzes customer calls and provides real-time coaching..." value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} />
-                <button type="button" disabled={aiLoading} onClick={handleGenerate} className="btn-primary mt-3 inline-flex items-center gap-2">
-                  <FiZap size={16} /> {aiLoading ? 'Building your ICP…' : generated ? 'Regenerate draft' : 'Generate offering & ICP'}
-                </button>
+                <textarea
+                  rows={5}
+                  className="control mt-4 resize-y border-violet-200 bg-white"
+                  placeholder="A comprehensive commercial banking solution designed to help businesses access flexible financing…"
+                  value={aiPrompt}
+                  onChange={(event) => setAiPrompt(event.target.value)}
+                />
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button type="button" disabled={aiLoading} onClick={() => handleGenerate()} className="btn-primary inline-flex items-center gap-2">
+                    <FiZap size={16} /> {aiLoading ? 'Generating draft…' : 'Generate draft'}
+                  </button>
+                  {generationState === 'success' ? <p className="text-xs font-medium text-emerald-700">Draft generated successfully</p> : null}
+                  {generationState === 'error' ? <p className="text-xs font-medium text-red-600">Generation failed; your form is unchanged</p> : null}
+                </div>
+                {aiLoading ? (
+                  <div className="mt-4 grid animate-pulse gap-2 sm:grid-cols-3">
+                    {[1, 2, 3].map((item) => <div key={item} className="h-10 rounded-lg bg-violet-100/80" />)}
+                  </div>
+                ) : null}
               </section>
+
+              {pendingSuggestionCount ? (
+                <section className="flex flex-col gap-3 rounded-2xl border border-violet-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{pendingSuggestionCount} AI suggestion{pendingSuggestionCount === 1 ? '' : 's'} ready for review</p>
+                    <p className="text-xs text-slate-500">Nothing has replaced your existing information.</p>
+                  </div>
+                  <button type="button" onClick={applyAllSuggestions} className="btn-primary whitespace-nowrap">Apply all AI suggestions</button>
+                </section>
+              ) : null}
 
               <section className="surface-card space-y-5 p-5 sm:p-6">
-                <div><h2 className="font-semibold text-slate-900">Offering basics</h2><p className="mt-1 text-sm text-slate-500">Give your team a clear, recognizable description.</p></div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <TextField label="Offering name" required value={form.name} onChange={(v) => setField('name', v)} />
-                  <TextField label="Product or service type" value={form.product_type} onChange={(v) => setField('product_type', v)} />
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-950">Offering basics</h2>
+                  <p className="mt-1 text-sm text-slate-500">Clear, specific details prevent irrelevant recommendations.</p>
                 </div>
-                <TextField label="Short description" value={form.short_description} onChange={(v) => setField('short_description', v)} />
-                <AreaField label="Detailed description" value={form.description} onChange={(v) => setField('description', v)} rows={5} />
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <TextField label="Website URL" value={form.website_url} onChange={(v) => setField('website_url', v)} />
-                  <TextField label="Pricing range" value={form.pricing_range} onChange={(v) => setField('pricing_range', v)} />
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <div><TextField label="Offering name" required value={form.name} onChange={(value) => setField('name', value)} {...fieldProps('name')} />{suggestionFor('name')}</div>
+                  <div><TextField label="Product or service type" required value={form.product_type} onChange={(value) => setField('product_type', value)} {...fieldProps('product_type')} />{suggestionFor('product_type')}</div>
+                </div>
+                <div><TextField label="Short description" value={form.short_description} onChange={(value) => setField('short_description', value)} {...fieldProps('short_description')} />{suggestionFor('short_description')}</div>
+                <div><AreaField label="Detailed description" value={form.detailed_description} onChange={(value) => setField('detailed_description', value)} rows={5} {...fieldProps('detailed_description')} />{suggestionFor('detailed_description')}</div>
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <TextField label="Website URL" type="url" placeholder="https://example.com" value={form.website_url} onChange={(value) => setField('website_url', value)} {...fieldProps('website_url')} />
+                  <TextField label="Pricing range" value={form.pricing_range} onChange={(value) => setField('pricing_range', value)} {...fieldProps('pricing_range')} />
                 </div>
               </section>
-
-              <OfferingVouchersSection
-                vouchers={form.vouchers}
-                batchId={voucherBatchId.current}
-                onChange={(vouchers) => setField('vouchers', vouchers)}
-              />
+              <OfferingVouchersSection vouchers={form.vouchers} batchId={voucherBatchId.current} onChange={(value) => setField('vouchers', value)} />
             </div>
           ) : null}
 
           {step === 1 ? (
-            <section className="surface-card space-y-6 p-5 sm:p-6 animate-rise-in">
-              <div><p className="workspace-eyebrow">Step 2</p><h2 className="text-xl font-semibold text-slate-900">Define your best-fit companies</h2><p className="mt-1 text-sm text-slate-500">These criteria power matching and recommendation quality.</p></div>
-              <div className="grid gap-5 sm:grid-cols-2">
-                <ListField label="Target industries" hint="One value per line" value={form.target_industries} onChange={(v) => setField('target_industries', v)} />
-                <ListField label="Target geographies" value={form.target_geographies} onChange={(v) => setField('target_geographies', v)} />
-                <ListField label="Business models" value={form.business_models} onChange={(v) => setField('business_models', v)} />
-                <ListField label="Target departments" value={form.target_departments} onChange={(v) => setField('target_departments', v)} />
-              </div>
-              <div className="grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
-                <label><span className="field-label">Minimum employees</span><input type="number" className="control" value={form.company_size_min} onChange={(e) => setField('company_size_min', e.target.value)} /></label>
-                <label><span className="field-label">Maximum employees</span><input type="number" className="control" value={form.company_size_max} onChange={(e) => setField('company_size_max', e.target.value)} /></label>
-                <label><span className="field-label">Minimum revenue</span><input type="number" className="control" value={form.revenue_min} onChange={(e) => setField('revenue_min', e.target.value)} /></label>
-                <label><span className="field-label">Maximum revenue</span><input type="number" className="control" value={form.revenue_max} onChange={(e) => setField('revenue_max', e.target.value)} /></label>
-              </div>
-              <div className="grid gap-5 sm:grid-cols-3">
-                <ListField label="Must-have rules" value={form.must_have_rules} onChange={(v) => setField('must_have_rules', v)} />
-                <ListField label="Nice-to-have rules" value={form.nice_to_have_rules} onChange={(v) => setField('nice_to_have_rules', v)} />
-                <ListField label="Exclusions" value={form.exclusion_rules} onChange={(v) => setField('exclusion_rules', v)} />
-              </div>
-            </section>
+            <div className="space-y-5 animate-rise-in">
+              <section className="surface-card space-y-5 p-5 sm:p-6">
+                <div><h2 className="text-lg font-semibold text-slate-950">Target customer</h2><p className="mt-1 text-sm text-slate-500">Define the companies and people most likely to benefit.</p></div>
+                <div><AreaField label="Target customer description" rows={3} value={form.target_customer} onChange={(value) => setField('target_customer', value)} {...fieldProps('target_customer')} />{suggestionFor('target_customer')}</div>
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <div><ListField label="Target industries" value={form.target_industries} onChange={(value) => setField('target_industries', value)} {...fieldProps('target_industries')} />{suggestionFor('target_industries')}</div>
+                  <div><ListField label="Target company size" hint="Examples: 50–200 employees, Enterprise" value={form.target_company_size} onChange={(value) => setField('target_company_size', value)} {...fieldProps('target_company_size')} />{suggestionFor('target_company_size')}</div>
+                  <div className="sm:col-span-2"><ListField label="Target job titles" value={form.target_job_titles} onChange={(value) => setField('target_job_titles', value)} {...fieldProps('target_job_titles')} />{suggestionFor('target_job_titles')}</div>
+                </div>
+              </section>
+              <details className="surface-card p-5">
+                <summary className="cursor-pointer text-sm font-semibold text-slate-800">Advanced matching criteria</summary>
+                <div className="mt-5 grid gap-5 sm:grid-cols-2">
+                  <ListField label="Target seniority" value={form.target_seniority} onChange={(value) => setField('target_seniority', value)} />
+                  <ListField label="Target departments" value={form.target_departments} onChange={(value) => setField('target_departments', value)} />
+                  <ListField label="Geographies" value={form.target_geographies} onChange={(value) => setField('target_geographies', value)} />
+                  <ListField label="Business models" value={form.business_models} onChange={(value) => setField('business_models', value)} />
+                </div>
+              </details>
+            </div>
           ) : null}
 
           {step === 2 ? (
-            <section className="surface-card space-y-6 p-5 sm:p-6 animate-rise-in">
-              <div><p className="workspace-eyebrow">Step 3</p><h2 className="text-xl font-semibold text-slate-900">Describe the buyer and their signals</h2><p className="mt-1 text-sm text-slate-500">Focus recommendations on people who own the problem and can act.</p></div>
-              <div className="grid gap-5 sm:grid-cols-2">
-                <ListField label="Job titles" value={form.target_job_titles} onChange={(v) => setField('target_job_titles', v)} />
-                <ListField label="Seniority levels" value={form.target_seniority} onChange={(v) => setField('target_seniority', v)} />
-                <ListField label="Decision maker types" value={form.decision_maker_types} onChange={(v) => setField('decision_maker_types', v)} />
-                <ListField label="Buying roles" value={form.buying_roles} onChange={(v) => setField('buying_roles', v)} />
-                <ListField label="Pain points" value={form.pain_points} onChange={(v) => setField('pain_points', v)} />
-                <ListField label="Business problems" value={form.business_problems} onChange={(v) => setField('business_problems', v)} />
-                <ListField label="Current challenges" value={form.current_challenges} onChange={(v) => setField('current_challenges', v)} />
-                <ListField label="Use cases" value={form.use_cases} onChange={(v) => setField('use_cases', v)} />
-                <ListField label="Desired outcomes" value={form.desired_outcomes} onChange={(v) => setField('desired_outcomes', v)} />
-                <ListField label="Benefits" value={form.benefits} onChange={(v) => setField('benefits', v)} />
-                <ListField label="Positive keywords" value={form.positive_keywords} onChange={(v) => setField('positive_keywords', v)} />
-                <ListField label="Negative keywords" value={form.negative_keywords} onChange={(v) => setField('negative_keywords', v)} />
-              </div>
-            </section>
+            <div className="space-y-5 animate-rise-in">
+              <section className="surface-card space-y-5 p-5 sm:p-6">
+                <div><h2 className="text-lg font-semibold text-slate-950">Customer problems</h2><p className="mt-1 text-sm text-slate-500">Describe the problems visible in a candidate’s role and responsibilities.</p></div>
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <div><ListField label="Pain points" value={form.pain_points} onChange={(value) => setField('pain_points', value)} {...fieldProps('pain_points')} />{suggestionFor('pain_points')}</div>
+                  <div><ListField label="Challenges this offering solves" value={form.current_challenges} onChange={(value) => setField('current_challenges', value)} {...fieldProps('current_challenges')} />{suggestionFor('current_challenges')}</div>
+                </div>
+              </section>
+              <section className="surface-card space-y-5 p-5 sm:p-6">
+                <div><h2 className="text-lg font-semibold text-slate-950">Use cases</h2><p className="mt-1 text-sm text-slate-500">Add practical reasons customers choose this offering.</p></div>
+                <div><ListField label="Use cases" value={form.use_cases} onChange={(value) => setField('use_cases', value)} {...fieldProps('use_cases')} />{suggestionFor('use_cases')}</div>
+              </section>
+              <section className="surface-card space-y-5 p-5 sm:p-6">
+                <div><h2 className="text-lg font-semibold text-slate-950">Benefits and selling points</h2><p className="mt-1 text-sm text-slate-500">Separate customer outcomes from the reasons your offer wins.</p></div>
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <div><ListField label="Benefits" value={form.benefits} onChange={(value) => setField('benefits', value)} {...fieldProps('benefits')} />{suggestionFor('benefits')}</div>
+                  <div><ListField label="Selling points" value={form.selling_points} onChange={(value) => setField('selling_points', value)} {...fieldProps('selling_points')} />{suggestionFor('selling_points')}</div>
+                </div>
+              </section>
+            </div>
           ) : null}
 
           {step === 3 ? (
-            <OfferingEmailWizardStep
-              form={form}
-              emailTemplate={form.email_template}
-              onChange={(emailTemplate) => setField('email_template', emailTemplate)}
-            />
+            <OfferingEmailWizardStep form={form} emailTemplate={form.email_template} onChange={(value) => setField('email_template', value)} />
           ) : null}
 
           {step === 4 ? (
             <div className="space-y-5 animate-rise-in">
               <section className="surface-card p-5 sm:p-6">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div><p className="workspace-eyebrow">Ready to launch</p><h2 className="text-xl font-semibold text-slate-900">{form.name || 'Untitled offering'}</h2><p className="mt-1 text-sm text-slate-500">{form.short_description || form.description || 'Add a description in the Offering step.'}</p></div>
-                  <select className="control sm:w-40" value={form.status || 'active'} onChange={(e) => setField('status', e.target.value)}>
+                <p className="workspace-eyebrow">Final preview</p>
+                <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div><h2 className="text-2xl font-semibold text-slate-950">{previewName}</h2><p className="mt-1 text-sm text-slate-500">{form.short_description || 'No short description provided'}</p></div>
+                  <select className="control sm:w-40" value={form.status || 'active'} onChange={(event) => setField('status', event.target.value)}>
                     <option value="active">Active</option><option value="draft">Draft</option><option value="archived">Archived</option>
                   </select>
                 </div>
               </section>
-              <IcpSummaryCard form={form} />
+              {PREVIEW_GROUPS.map(([title, fields]) => (
+                <section key={title} className="surface-card p-5 sm:p-6">
+                  <h3 className="font-semibold text-slate-900">{title}</h3>
+                  <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+                    {fields.map((field) => (
+                      <div key={field} className={field === 'detailed_description' || field === 'target_customer' ? 'sm:col-span-2' : ''}>
+                        <dt className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{LABELS[field]}</dt>
+                        <dd><PreviewValue value={form[field]} /></dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              ))}
               {form.email_template?.subject && form.email_template?.body ? (
-                <section className="rounded-2xl border border-primary-200 bg-primary-50/30 p-5 space-y-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-primary-700">Email template</p>
-                  <p className="text-sm font-semibold text-slate-900">{offeringEmailTemplateName(form.name, form.email_template.name)}</p>
-                  {form.email_template.source === 'upload' ? (
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-primary-600">Uploaded</p>
-                  ) : form.email_template.source === 'ai_generated' ? (
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-primary-600">AI generated</p>
-                  ) : null}
-                  <p className="text-sm text-slate-600">{form.email_template.subject}</p>
-                  <p className="text-xs text-slate-500 line-clamp-2 whitespace-pre-wrap">{form.email_template.body}</p>
+                <section className="rounded-2xl border border-primary-200 bg-primary-50/30 p-5">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-primary-700">Email template</p>
+                  <p className="mt-1 font-semibold text-slate-900">{offeringEmailTemplateName(form.name, form.email_template.name)}</p>
+                  <p className="mt-1 text-sm text-slate-600">{form.email_template.subject}</p>
                 </section>
-              ) : (
-                <section className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-4">
-                  <p className="text-sm text-slate-500">No email template — you can add one later from the offering edit flow.</p>
+              ) : null}
+              {pendingSuggestionCount ? (
+                <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  Resolve {pendingSuggestionCount} pending AI suggestion{pendingSuggestionCount === 1 ? '' : 's'} before saving.
                 </section>
-              )}
+              ) : null}
               <label className="surface-card flex cursor-pointer items-start gap-3 p-5">
-                <input type="checkbox" className="mt-1 h-4 w-4 rounded border-slate-300 text-primary-600" checked={runMatch} onChange={(e) => setRunMatch(e.target.checked)} />
-                <span><span className="block text-sm font-semibold text-slate-900">Recommend matching contacts after save</span><span className="mt-0.5 block text-xs text-slate-500">Search verified ICP records immediately and rank the strongest opportunities.</span></span>
+                <input type="checkbox" className="mt-1 h-4 w-4 rounded border-slate-300 text-primary-600" checked={previewConfirmed} onChange={(event) => setPreviewConfirmed(event.target.checked)} />
+                <span><span className="block text-sm font-semibold text-slate-900">I reviewed this offering and confirm the information is accurate</span><span className="mt-0.5 block text-xs text-slate-500">This data will be used to rank candidate relevance.</span></span>
+              </label>
+              <label className="surface-card flex cursor-pointer items-start gap-3 p-5">
+                <input type="checkbox" className="mt-1 h-4 w-4 rounded border-slate-300 text-primary-600" checked={runMatch} onChange={(event) => setRunMatch(event.target.checked)} />
+                <span><span className="block text-sm font-semibold text-slate-900">Recommend matching contacts after save</span><span className="mt-0.5 block text-xs text-slate-500">Search your ICP contacts and rank the strongest opportunities.</span></span>
               </label>
             </div>
           ) : null}
@@ -432,7 +538,7 @@ export default function OfferingCreatePage() {
             {step < STEPS.length - 1 ? (
               <button type="button" onClick={nextStep} className="btn-primary inline-flex items-center gap-2">Continue <FiArrowRight size={16} /></button>
             ) : (
-              <button type="button" disabled={saving || !form.name?.trim()} onClick={handleSave} className="btn-primary inline-flex items-center gap-2">
+              <button type="button" disabled={saving || !previewConfirmed || pendingSuggestionCount > 0} onClick={handleSave} className="btn-primary inline-flex items-center gap-2">
                 <FiCheck size={16} /> {saving ? 'Saving…' : isEdit ? 'Save offering' : 'Save & recommend'}
               </button>
             )}

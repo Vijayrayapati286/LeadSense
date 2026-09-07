@@ -15,6 +15,7 @@ class IcpRecordCreate(BaseModel):
     designation: str | None = None
     about: str | None = None
     linkedin_url: str | None = None
+    image: str | None = None
     industry: str | None = None
     company_size: str | None = None
     location: str | None = None
@@ -32,6 +33,7 @@ class IcpRecordUpdate(BaseModel):
     designation: str | None = None
     about: str | None = None
     linkedin_url: str | None = None
+    image: str | None = None
     industry: str | None = None
     company_size: str | None = None
     location: str | None = None
@@ -50,6 +52,7 @@ class IcpRecordResponse(BaseModel):
     designation: str | None = None
     about: str | None = None
     linkedin_url: str | None = None
+    image: str | None = None
     industry: str | None = None
     company_size: str | None = None
     location: str | None = None

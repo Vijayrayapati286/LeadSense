@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/components/offerings/offeringDraftUtils.test.js"
   },
   "dependencies": {
     "@tiptap/extension-color": "^3.29.2",
