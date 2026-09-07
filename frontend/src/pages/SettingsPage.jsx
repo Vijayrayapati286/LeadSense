@@ -2,23 +2,59 @@ import { useEffect, useState } from 'react';
 import { FiUser, FiMail, FiBriefcase, FiShield, FiSliders, FiSave } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
-import { appSettingsService } from '../services/services';
+import { appSettingsService, authService } from '../services/services';
 import { RESPONSE_TAGS } from '../components/FilterBuilder';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import PageHeader from '../components/ui/PageHeader';
+import PageShell from '../components/ui/PageShell';
 
 export default function SettingsPage() {
-  const { user } = useAuth();
+  const { user, loadUser } = useAuth();
   const toast = useToast();
+  const [profile, setProfile] = useState({ name: '', email: '', department: '' });
+  const [savingProfile, setSavingProfile] = useState(false);
   const [appSettings, setAppSettings] = useState(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
+    if (user) {
+      setProfile({
+        name: user.name || '',
+        email: user.email || '',
+        department: user.department || 'Sales',
+      });
+    }
+  }, [user]);
+
+  useEffect(() => {
     appSettingsService.get()
       .then(({ data }) => setAppSettings(data))
-      .catch(() => toast.error('Failed to load deliverability settings'))
+      .catch(() => toast.error('Failed to load application settings'))
       .finally(() => setLoadingSettings(false));
   }, [toast]);
+
+  const handleSaveProfile = async () => {
+    const name = profile.name.trim();
+    const email = profile.email.trim();
+    const department = profile.department.trim();
+
+    if (!name || !email || !department) {
+      toast.error('Name, email, and department are required');
+      return;
+    }
+
+    setSavingProfile(true);
+    try {
+      await authService.updateMe({ name, email, department });
+      await loadUser();
+      toast.success('Profile updated');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to update profile');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   const handleSaveSettings = async () => {
     setSavingSettings(true);
@@ -47,41 +83,73 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-        <p className="text-gray-500 mt-1">Manage your account and application preferences</p>
-      </div>
+    <PageShell maxWidth="max-w-[1100px]">
+      <PageHeader
+        eyebrow="Workspace"
+        title="Settings"
+        subtitle="Manage your account and application preferences."
+      />
 
       <div className="card">
-        <h2 className="text-lg font-semibold mb-4">Profile Information</h2>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Profile Information</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Click any field below to update your details.</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleSaveProfile}
+            disabled={savingProfile}
+            className="btn-primary flex items-center gap-2"
+          >
+            {savingProfile ? <LoadingSpinner size="sm" /> : <><FiSave size={16} /> Save Profile</>}
+          </button>
+        </div>
+
         <div className="space-y-4">
-          <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg">
-            <div className="w-12 h-12 bg-primary-100 rounded-full flex items-center justify-center">
+          <label className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg cursor-text">
+            <div className="w-12 h-12 bg-primary-100 rounded-full flex items-center justify-center shrink-0">
               <FiUser className="text-primary-600" size={24} />
             </div>
-            <div>
-              <p className="font-medium text-gray-900">{user?.name}</p>
-              <p className="text-sm text-gray-500">Authenticated via Microsoft SSO</p>
+            <div className="min-w-0 flex-1">
+              <span className="text-xs text-gray-500">Display name</span>
+              <input
+                type="text"
+                className="input-field mt-1 bg-white"
+                value={profile.name}
+                onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))}
+                placeholder="Your name"
+              />
             </div>
-          </div>
+          </label>
 
-          <div className="grid grid-cols-1 gap-4">
-            <div className="flex items-center gap-3 p-3 border border-gray-100 rounded-lg">
-              <FiMail className="text-gray-400" size={18} />
-              <div>
-                <p className="text-xs text-gray-500">Email</p>
-                <p className="text-sm font-medium">{user?.email}</p>
-              </div>
+          <label className="flex items-start gap-3 p-3 border border-gray-100 rounded-lg cursor-text">
+            <FiMail className="text-gray-400 mt-2 shrink-0" size={18} />
+            <div className="min-w-0 flex-1">
+              <span className="text-xs text-gray-500">Email</span>
+              <input
+                type="email"
+                className="input-field mt-1"
+                value={profile.email}
+                onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
+                placeholder="you@company.com"
+              />
             </div>
-            <div className="flex items-center gap-3 p-3 border border-gray-100 rounded-lg">
-              <FiBriefcase className="text-gray-400" size={18} />
-              <div>
-                <p className="text-xs text-gray-500">Department</p>
-                <p className="text-sm font-medium">{user?.department || 'Sales'}</p>
-              </div>
+          </label>
+
+          <label className="flex items-start gap-3 p-3 border border-gray-100 rounded-lg cursor-text">
+            <FiBriefcase className="text-gray-400 mt-2 shrink-0" size={18} />
+            <div className="min-w-0 flex-1">
+              <span className="text-xs text-gray-500">Department</span>
+              <input
+                type="text"
+                className="input-field mt-1"
+                value={profile.department}
+                onChange={(e) => setProfile((p) => ({ ...p, department: e.target.value }))}
+                placeholder="Sales"
+              />
             </div>
-          </div>
+          </label>
         </div>
       </div>
 
@@ -173,6 +241,6 @@ export default function SettingsPage() {
           Configure credentials in backend .env to enable live integrations.
         </p>
       </div>
-    </div>
+    </PageShell>
   );
 }

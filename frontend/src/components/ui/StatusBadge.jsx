@@ -1,10 +1,12 @@
-import { getStatusColor } from '../../utils/helpers';
+import { STATUS_BADGE_CLASSES } from '../../design-tokens';
 
-export default function StatusBadge({ status }) {
+export default function StatusBadge({ status, className = '' }) {
+  const key = status?.toLowerCase();
+  const badgeClass = STATUS_BADGE_CLASSES[key] || 'badge-neutral';
+
   return (
-    <span
-      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${getStatusColor(status)}`}
-    >
+    <span className={`badge ${badgeClass} capitalize ${className}`}>
+      <span className="badge-dot" aria-hidden="true" />
       {status}
     </span>
   );

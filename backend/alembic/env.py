@@ -18,6 +18,8 @@ from app.models import (  # noqa: F401
     Template,
     User,
 )
+from app.linkedin import bulk_models as _linkedin_bulk_models  # noqa: F401
+from app.profile_extractor import models as _profile_extractor_models  # noqa: F401
 
 config = context.config
 

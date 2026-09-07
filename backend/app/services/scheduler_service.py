@@ -15,11 +15,13 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import SessionLocal
 from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template, User
+from app.services.app_settings_service import AppSettingsService
 from app.services.ses_service import SESService
 from app.utils.helpers import build_recipient_context, render_email_body, render_template, utc_now
 
 logger = logging.getLogger(__name__)
 ses_service = SESService()
+app_settings_service = AppSettingsService()
 
 # Statuses that should never receive another automated follow-up.
 TERMINAL_STATUSES = {"replied", "suppressed", "bounced", "invalid_email"}
@@ -30,21 +32,27 @@ BUSINESS_HOURS_START = 9
 BUSINESS_HOURS_END = 18
 
 
-def next_business_hour_utc(tz_name: str, now_utc: datetime) -> datetime | None:
-    """None if `now_utc` already falls within the recipient's local 9am-6pm
-    business hours; otherwise the next local 9am, converted back to UTC."""
+def next_business_hour_utc(
+    tz_name: str,
+    now_utc: datetime,
+    *,
+    hours_start: int = BUSINESS_HOURS_START,
+    hours_end: int = BUSINESS_HOURS_END,
+) -> datetime | None:
+    """None if `now_utc` already falls within the recipient's local business
+    hours; otherwise the next local start hour, converted back to UTC."""
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
         return None
     local_now = now_utc.astimezone(tz)
-    if BUSINESS_HOURS_START <= local_now.hour < BUSINESS_HOURS_END:
+    if hours_start <= local_now.hour < hours_end:
         return None
     next_day = local_now.date()
-    if local_now.hour >= BUSINESS_HOURS_END:
+    if local_now.hour >= hours_end:
         next_day += timedelta(days=1)
-    next_9am_local = datetime.combine(next_day, time(hour=BUSINESS_HOURS_START), tzinfo=tz)
-    return next_9am_local.astimezone(timezone.utc)
+    next_start_local = datetime.combine(next_day, time(hour=hours_start), tzinfo=tz)
+    return next_start_local.astimezone(timezone.utc)
 
 _scheduler: AsyncIOScheduler | None = None
 
@@ -181,6 +189,10 @@ def process_queued_initial_sends() -> None:
     due. Mirrors process_due_followups' approach for later stages."""
     db: Session = SessionLocal()
     try:
+        app_settings = app_settings_service.get(db)
+        hours_start = app_settings.business_hours_start
+        hours_end = app_settings.business_hours_end
+
         due_ids = [
             row.id
             for row in db.query(CampaignRecipient.id)
@@ -210,7 +222,12 @@ def process_queued_initial_sends() -> None:
             recipient = cr.recipient
 
             if cr.campaign.use_recipient_timezone and recipient.timezone:
-                reschedule = next_business_hour_utc(recipient.timezone, utc_now())
+                reschedule = next_business_hour_utc(
+                    recipient.timezone,
+                    utc_now(),
+                    hours_start=hours_start,
+                    hours_end=hours_end,
+                )
                 if reschedule is not None:
                     cr.next_send_at = reschedule
                     db.commit()

@@ -369,6 +369,11 @@ class AppSetting(Base):
     soft_bounce_threshold: Mapped[int] = mapped_column(Integer, default=3)
     send_interval_seconds: Mapped[int] = mapped_column(Integer, default=12)
     suppress_on_tags: Mapped[str] = mapped_column(Text, default="[]")  # JSON list, e.g. ["Negative", "Cold"]
+    business_hours_start: Mapped[int] = mapped_column(Integer, default=9)
+    business_hours_end: Mapped[int] = mapped_column(Integer, default=18)
+    default_page_size: Mapped[int] = mapped_column(Integer, default=10)
+    default_ai_tone: Mapped[str] = mapped_column(String(32), default="formal")
+    default_use_recipient_timezone: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class EmailLog(Base):

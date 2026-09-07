@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
+    # S3 file storage (binaries). Leave USE_MOCK_S3=true for local/dev without AWS.
+    # Production: set S3_BUCKET_NAME + USE_MOCK_S3=false; prefer IAM role over long-lived keys.
+    s3_bucket_name: str = Field("", validation_alias="S3_BUCKET_NAME")
+    use_mock_s3: bool = Field(True, validation_alias="USE_MOCK_S3")
+    s3_presign_expires_seconds: int = Field(3600, validation_alias="S3_PRESIGN_EXPIRES_SECONDS")
+    max_upload_file_bytes: int = Field(26_214_400, validation_alias="MAX_UPLOAD_FILE_BYTES")  # 25 MiB
     aws_ses_sender_email: str = "noreply@example.com"
     # Domain used for the personalized From address (local part swapped for
     # the sending rep's, e.g. vijay.rayapati@mail.feuji.com) — see
@@ -62,6 +68,36 @@ class Settings(BaseSettings):
     # e.g. {"name@feuji.com": "..."}. Kept out of source (core_users.py has
     # no passwords) since that file is committed to a shared repo.
     core_user_passwords_json: str = Field("{}", validation_alias="CORE_USER_PASSWORDS")
+
+    # LinkedIn Sales Navigator extraction (Apify + Playwright session check)
+    apify_token: str = ""
+    apify_actor_id: str = ""
+    # Optional actor for /in/ profile scrape (LinkedIn Profile Extractor fallback).
+    # When empty, profile Apify fallback uses apify_actor_id.
+    apify_profile_actor_id: str = ""
+    linkedin_li_at: str = ""
+    # Optional full cookie-array JSON from a "Copy Cookies" browser extension.
+    # When set, preferred over building a single li_at cookie for Apify.
+    linkedin_cookies_json: str = ""
+
+    # Bulk LinkedIn extract: concurrent Apify batch processing
+    max_concurrent_apify_runs: int = Field(10, validation_alias="MAX_CONCURRENT_APIFY_RUNS")
+    max_concurrent_batches: int = Field(10, validation_alias="MAX_CONCURRENT_BATCHES")
+    apify_batch_size: int = Field(10, validation_alias="APIFY_BATCH_SIZE")
+    processing_window: int = Field(100, validation_alias="PROCESSING_WINDOW")
+    # Max extraction attempts per URL (attempt 1 + retries). Success stops immediately.
+    apify_max_retries: int = Field(5, validation_alias="APIFY_MAX_RETRIES")
+    max_bulk_urls: int = Field(5000, validation_alias="MAX_BULK_URLS")
+    bulk_retry_base_delay_seconds: float = Field(5.0, validation_alias="BULK_RETRY_BASE_DELAY_SECONDS")
+    bulk_retry_backoff_multiplier: float = Field(2.0, validation_alias="BULK_RETRY_BACKOFF_MULTIPLIER")
+    bulk_stale_processing_seconds: int = Field(900, validation_alias="BULK_STALE_PROCESSING_SECONDS")
+    verify_match_threshold: int = Field(100, validation_alias="VERIFY_MATCH_THRESHOLD")
+    verify_review_threshold: int = Field(100, validation_alias="VERIFY_REVIEW_THRESHOLD")
+    # Comma-separated substrings; matching errors skip further retries.
+    bulk_non_retryable_errors: str = Field(
+        "invalid url,malformed,permanently unavailable,profile not found,not a linkedin",
+        validation_alias="BULK_NON_RETRYABLE_ERRORS",
+    )
 
     @property
     def azure_authority(self) -> str:

@@ -1,11 +1,12 @@
 """Email template routes."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import User
+from app.offerings.service import get_offering
 from app.schemas.schemas import (
     AITemplateRequest,
     AITemplateResponse,
@@ -56,13 +57,45 @@ PLACEHOLDER_TEMPLATES = [
 ]
 
 
+def _offering_template_display_name(offering_name: str | None, stored_name: str | None) -> str:
+    if stored_name and stored_name != "Introduction Outreach":
+        return stored_name
+    if offering_name and offering_name.strip():
+        return f"{offering_name.strip()} — Outreach"
+    return "Introduction Outreach"
+
+
 @router.get("/placeholder-templates")
 def get_placeholder_templates(
+    offering_id: int | None = Query(None, ge=1),
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Return hardcoded placeholder templates."""
+    """Return email templates for campaign compose — offering email only when saved on offering."""
+    templates: list[dict] = []
+    if offering_id is not None:
+        row = get_offering(db, offering_id, user_id=getattr(current_user, "id", None))
+        email_template = getattr(row, "email_template", None) if row else None
+        if email_template and email_template.get("subject") and email_template.get("body"):
+            offering_name = getattr(row, "name", None) if row else None
+            templates = [
+                {
+                    "id": f"offering-{offering_id}",
+                    "name": _offering_template_display_name(offering_name, email_template.get("name")),
+                    "subject": email_template["subject"],
+                    "body": email_template["body"],
+                    "source": "offering",
+                    "template_source": email_template.get("source"),
+                    "source_filename": email_template.get("source_filename"),
+                    "offering_name": offering_name,
+                },
+            ]
+        else:
+            templates = list(PLACEHOLDER_TEMPLATES)
+    else:
+        templates = list(PLACEHOLDER_TEMPLATES)
     enriched = []
-    for t in PLACEHOLDER_TEMPLATES:
+    for t in templates:
         placeholders = extract_placeholders(t["subject"] + " " + t["body"])
         enriched.append({**t, "placeholders": placeholders})
     return enriched

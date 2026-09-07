@@ -26,9 +26,16 @@ function MergeFieldHints() {
 
 export const TEMPLATE_TYPES = [
   { id: 'manual', label: 'Manual', icon: FiEdit3, desc: 'Write your own email with rich text' },
-  { id: 'placeholder', label: 'Placeholder', icon: FiFileText, desc: 'Use templates with dynamic placeholders' },
+  { id: 'placeholder', label: 'Offering Email', icon: FiFileText, desc: 'Use the email saved on your offering — personalized with {{Name}}, {{Company}}, etc.' },
   { id: 'ai', label: 'AI Generated', icon: FiZap, desc: 'Let AI craft your email content' },
 ];
+
+function templateSourceBadge(t) {
+  if (t.source !== 'offering') return null;
+  if (t.template_source === 'upload') return 'Uploaded';
+  if (t.template_source === 'ai_generated') return 'AI generated';
+  return 'From offering';
+}
 
 /** The manual/placeholder/AI template-type selector + editing forms, shared
  * between the campaign creation Template tab and the Mailers library so
@@ -103,38 +110,85 @@ export default function TemplateEditor({
 
       {templateType === 'placeholder' && (
         <div className="space-y-4">
+          {placeholderTemplates.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-500 text-center">
+              No offering email saved yet. Add one in the offering wizard (Email step) or pick a starter template below after selecting an offering without a template.
+            </p>
+          ) : null}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {placeholderTemplates.map((t) => (
+            {placeholderTemplates.map((t) => {
+              const badge = templateSourceBadge(t);
+              return (
               <button
                 key={t.id}
+                type="button"
                 onClick={() => onSelectPlaceholderTemplate(t)}
                 className={`p-3 rounded-lg border text-left text-sm ${
-                  selectedTemplate?.id === t.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200'
+                  selectedTemplate?.id === t.id ? 'border-primary-500 bg-primary-50 ring-2 ring-primary-200' : 'border-gray-200'
                 }`}
               >
                 <p className="font-medium">{t.name}</p>
+                {badge ? (
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-primary-600 mt-1">{badge}</p>
+                ) : null}
                 <p className="text-xs text-gray-500 mt-1 truncate">{t.subject}</p>
               </button>
-            ))}
+            );
+            })}
           </div>
           {selectedTemplate && (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                {Object.keys(placeholderValues).map((key) => (
-                  <div key={key}>
-                    <label className="label">{key}</label>
-                    <input
-                      className="input-field"
-                      value={placeholderValues[key]}
-                      onChange={(e) => onPlaceholderValueChange(key, e.target.value)}
-                      placeholder={`Sample ${key}`}
-                    />
+              <div className="rounded-xl border border-primary-200 bg-primary-50/40 p-4 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">Selected template</p>
+                    <p className="text-sm font-semibold text-slate-900 mt-0.5">{selectedTemplate.name}</p>
                   </div>
-                ))}
+                  {templateSourceBadge(selectedTemplate) ? (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-primary-600">
+                      {templateSourceBadge(selectedTemplate)}
+                    </span>
+                  ) : null}
+                </div>
+                <div>
+                  <label className="label">Subject</label>
+                  <input
+                    className="input-field"
+                    value={emailContent.subject}
+                    onChange={(e) => updateContent('subject', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="label">Body</label>
+                  <textarea
+                    className="input-field font-mono text-sm resize-y"
+                    rows={10}
+                    value={emailContent.body}
+                    onChange={(e) => updateContent('body', e.target.value)}
+                    placeholder="Email body with {{Name}}, {{Company}}, etc."
+                  />
+                  <p className="text-xs text-gray-400 mt-2">Available fields:</p>
+                  <MergeFieldHints />
+                </div>
               </div>
+              {Object.keys(placeholderValues).length > 0 ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {Object.keys(placeholderValues).map((key) => (
+                    <div key={key}>
+                      <label className="label">{key}</label>
+                      <input
+                        className="input-field"
+                        value={placeholderValues[key]}
+                        onChange={(e) => onPlaceholderValueChange(key, e.target.value)}
+                        placeholder={`Sample ${key}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {previewContext && (
-                <div className="p-4 bg-gray-50 rounded-lg">
-                  <p className="text-xs text-gray-500 mb-2">Live Preview</p>
+                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Live preview</p>
                   <p className="font-medium text-sm">{renderTemplate(emailContent.subject, previewContext)}</p>
                   <div
                     className="text-sm text-gray-600 mt-2"
