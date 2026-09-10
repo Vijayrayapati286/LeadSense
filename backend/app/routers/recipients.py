@@ -28,6 +28,7 @@ from app.schemas.schemas import (
 from app.services.app_settings_service import AppSettingsService
 from app.services.campaign_service import CampaignService
 from app.services.excel_service import ExcelService, MissingColumnsError, SUPPORTED_EXTENSIONS
+from app.services.millionverifier_service import recipients_to_responses
 from app.services.recipient_group_service import RecipientGroupService
 from app.services.recipient_query_service import (
     DISTINCT_VALUE_FIELDS,
@@ -73,6 +74,7 @@ def _search_filters(
     group_ids: list[int] = Query([]),
     tag_ids: list[int] = Query([]),
     exclude_suppressed: bool = Query(False),
+    email_verification: str = Query(""),
     campaign_id: int | None = Query(None),
     campaign_status: str = Query(""),
     sort_by: str = Query("name"),
@@ -85,6 +87,7 @@ def _search_filters(
         seniority_level=seniority_level, email_domain=email_domain, lead_status=lead_status,
         response_tag=response_tag,
         source=source, group_ids=group_ids, tag_ids=tag_ids, exclude_suppressed=exclude_suppressed,
+        email_verification=email_verification,
         campaign_id=campaign_id, campaign_status=campaign_status,
         sort_by=sort_by, sort_order=sort_order,
     )
@@ -243,7 +246,7 @@ def list_recipients(
     )
 
     return RecipientListResponse(
-        items=[RecipientResponse.model_validate(r) for r in recipients],
+        items=recipients_to_responses(db, recipients),
         total=total,
         page=page,
         page_size=page_size,
@@ -267,7 +270,7 @@ def search_recipients(
     recipients = query.offset((page - 1) * page_size).limit(page_size).all()
 
     return RecipientListResponse(
-        items=[RecipientResponse.model_validate(r) for r in recipients],
+        items=recipients_to_responses(db, recipients),
         total=total,
         page=page,
         page_size=page_size,

@@ -39,6 +39,7 @@ import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from
 import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
+import EmailVerificationBadge from '../components/ui/EmailVerificationBadge';
 import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import Modal from '../components/ui/Modal';
@@ -1390,12 +1391,16 @@ export default function CampaignDetailPage() {
                                 <span className="text-xs text-gray-500">{r.company || '—'}</span>
                               </div>
                               <p className={`text-sm ${r.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{r.email}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                <EmailVerificationBadge
+                                  status={r.email_verification_status}
+                                  result={r.email_verification_result}
+                                />
+                                {r.is_suppressed && <StatusBadge status={r.suppression_reason} />}
+                              </div>
                               <p className="text-xs text-gray-500">
                                 {r.designation || '—'} • {r.industry || '—'}
                               </p>
-                              {r.is_suppressed && (
-                                <div className="mt-1"><StatusBadge status={r.suppression_reason} /></div>
-                              )}
                             </div>
                           </label>
                         ))}
@@ -1565,6 +1570,10 @@ export default function CampaignDetailPage() {
                                 <div className="flex items-center justify-between gap-3">
                                   <p className={`font-medium ${m.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{m.name}</p>
                                   <div className="flex items-center gap-2 flex-shrink-0">
+                                    <EmailVerificationBadge
+                                      status={m.email_verification_status}
+                                      result={m.email_verification_result}
+                                    />
                                     <StatusBadge status={m.is_suppressed ? m.suppression_reason : m.status} />
                                     <button
                                       type="button"
@@ -1611,6 +1620,12 @@ export default function CampaignDetailPage() {
                               </div>
                               <p className={`font-medium mt-2 ${m.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{m.name}</p>
                               <p className={`text-sm ${m.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{m.email}</p>
+                              <div className="mt-1">
+                                <EmailVerificationBadge
+                                  status={m.email_verification_status}
+                                  result={m.email_verification_result}
+                                />
+                              </div>
                               <p className="text-xs text-gray-500 mt-1">{m.company || '—'}</p>
                             </div>
                           ))}

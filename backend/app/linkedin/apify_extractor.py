@@ -149,7 +149,7 @@ class LinkedInApifyProfileExtractor:
         company = str(item.get("companyName") or "").strip()
         job_title = str(item.get("jobTitle") or "").strip()
         if not company:
-            company = self._company_from_headline(job_title or headline) or ""
+            company = self._company_from_texts(job_title, headline) or ""
 
         data = {
             "name": name,
@@ -519,7 +519,7 @@ class LinkedInApifyProfileExtractor:
                     )
 
         if not company:
-            company = self._company_from_headline(job_title or headline) or ""
+            company = self._company_from_texts(job_title, headline) or ""
 
         profile_url = (
             self._first_str(item, ("inputUrl", "profileUrl", "url", "linkedinUrl"))
@@ -633,9 +633,12 @@ class LinkedInApifyProfileExtractor:
                         job_title = self._first_str(first_pos, ("title", "jobTitle"))
 
         about = self._first_str(item, ("about", "summary", "description", "bio"))
+        headline = self._first_str(item, ("headline",))
 
         if not company:
-            company = self._company_from_headline(job_title)
+            # Prefer experience/title parse first, then headline — job title alone
+            # often omits company while headline is "Title at Company".
+            company = self._company_from_texts(job_title, headline)
 
         return {
             "full_name": full_name,
@@ -643,6 +646,15 @@ class LinkedInApifyProfileExtractor:
             "job_title": job_title,
             "about": about,
         }
+
+    @classmethod
+    def _company_from_texts(cls, *texts: str | None) -> str | None:
+        """Try each text until a company can be derived from headline-style patterns."""
+        for text in texts:
+            company = cls._company_from_headline(text)
+            if company:
+                return company
+        return None
 
     @staticmethod
     def _company_from_headline(headline: str | None) -> str | None:
@@ -653,8 +665,9 @@ class LinkedInApifyProfileExtractor:
         at_match = re.search(r"\s@\s([^|•\n]+)", text)
         if at_match:
             return at_match.group(1).strip(" .") or None
-        if " at " in text:
-            return text.rsplit(" at ", 1)[-1].split("|")[0].strip(" .") or None
+        at_word = re.search(r"(?i)\sat\s([^|•\n]+)", text)
+        if at_word:
+            return at_word.group(1).strip(" .") or None
         return None
 
     @staticmethod
