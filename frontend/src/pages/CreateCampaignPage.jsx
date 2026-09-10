@@ -34,7 +34,7 @@ function buildOfferingEmailDraft(offeringName, offeringDescription) {
   const desc = offeringDescription?.trim() || 'our solution';
   return {
     subject: `Introducing ${offeringName}`,
-    body: `<p>Hi {{name}},</p><p>I wanted to reach out about <strong>${offeringName}</strong>.</p><p>${desc}</p><p>Would you be open to a quick conversation to see if this is a fit for {{company}}?</p>`,
+    body: `<p>Hi {{Name}},</p><p>I wanted to reach out about <strong>${offeringName}</strong>.</p><p>${desc}</p><p>Would you be open to a quick conversation to see if this is a fit for {{Company}}?</p>`,
     closing: 'Best regards,',
     cta: 'Book a call',
   };
