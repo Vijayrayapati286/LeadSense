@@ -21,7 +21,16 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      # Pass GIT_COMMIT=$(git rev-parse --short HEAD) in the deploy script's
+      # environment before `docker compose build`/`up --build`; unset (or a
+      # shell that never exported it) falls back to "unknown" in Dockerfile.
+      # Compose won't rebuild on this changing alone — bump it and rerun
+      # with --build, or --force-recreate, to be sure a redeploy really
+      # picked up new code (see / and /health for what's actually running).
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     restart: unless-stopped
     # App secrets/config (AWS, Groq, JWT secret, Azure AD, ...) come from
     # backend/.env, same file used for non-Docker local dev — never baked

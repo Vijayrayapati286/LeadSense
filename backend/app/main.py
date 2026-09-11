@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -119,11 +120,20 @@ app.include_router(storage_files_router, prefix=API_PREFIX)
 app.include_router(storage_batches_router, prefix=API_PREFIX)
 
 
+# Set by `docker build --build-arg GIT_COMMIT=$(git rev-parse --short HEAD)`
+# (see backend/Dockerfile) — "unknown" for any image built without that arg,
+# e.g. a plain local `docker compose up --build`. Surfaced on / and /health
+# so "is this deploy actually running the commit I pushed?" is one curl
+# away instead of needing shell access to the host.
+GIT_COMMIT = os.environ.get("GIT_COMMIT", "unknown")
+
+
 @app.get("/")
 def root():
     return {
         "app": settings.app_name,
         "version": "1.0.0",
+        "commit": GIT_COMMIT,
         "docs": "/docs",
         "status": "running",
     }
@@ -131,4 +141,4 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "commit": GIT_COMMIT}
