@@ -17,6 +17,7 @@ export default function BlacklistPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [overridingEntry, setOverridingEntry] = useState(null);
   const toast = useToast();
@@ -67,7 +68,11 @@ export default function BlacklistPage() {
 
       <div className="surface-card p-4">
         <SearchInput
-          onChange={debouncedSearch}
+          value={searchInput}
+          onChange={(val) => {
+            setSearchInput(val);
+            debouncedSearch(val);
+          }}
           placeholder="Search by email or company..."
           className="max-w-md"
         />
