@@ -318,6 +318,19 @@ class RecipientCreate(BaseModel):
     group_name: str | None = None
 
 
+class RecipientUpdate(BaseModel):
+    """Edit-in-place for a single prospect's own details — the pencil icon
+    on a campaign's prospect list. Deliberately excludes campaign_id/
+    template_id/group_name from RecipientCreate: editing details never
+    re-tags the prospect into a (possibly different) campaign/list."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    email: EmailStr
+    company: str | None = None
+    designation: str | None = None
+    industry: str | None = None
+
+
 class RecipientListResponse(BaseModel):
     items: list[RecipientResponse]
     total: int

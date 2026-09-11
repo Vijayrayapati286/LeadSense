@@ -17,6 +17,7 @@ from app.schemas.schemas import (
     RecipientCreate,
     RecipientListResponse,
     RecipientResponse,
+    RecipientUpdate,
     ResponseTagRequest,
     ResponseTagResult,
     SavedSearchCreate,
@@ -182,6 +183,30 @@ def create_recipient(
 
     if data.campaign_id is not None:
         campaign_service.tag_recipients(db, data.campaign_id, [recipient.id], data.template_id, group_id=group_id)
+    return RecipientResponse.model_validate(recipient)
+
+
+@router.put("/{recipient_id}", response_model=RecipientResponse)
+def update_recipient(
+    recipient_id: int,
+    data: RecipientUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The pencil-icon edit on a prospect row — updates this recipient's own
+    details in place. Recipients are shared across every campaign/list they
+    were tagged into, so this changes what all of them see, not just the
+    list the edit was opened from."""
+    recipient = db.query(Recipient).filter(Recipient.id == recipient_id).first()
+    if not recipient:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+    recipient.name = data.name
+    recipient.email = data.email
+    recipient.company = data.company
+    recipient.designation = data.designation
+    recipient.industry = data.industry
+    db.commit()
+    db.refresh(recipient)
     return RecipientResponse.model_validate(recipient)
 
 

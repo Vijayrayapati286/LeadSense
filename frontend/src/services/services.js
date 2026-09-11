@@ -72,6 +72,7 @@ export const recipientService = {
     });
   },
   create: (data) => api.post('/recipients', data),
+  update: (id, data) => api.put(`/recipients/${id}`, data),
   getAll: (params) => api.get('/recipients', { params }),
   search: (params) => api.get('/recipients/search', { params }),
   searchIds: (params) => api.get('/recipients/search-ids', { params }),
