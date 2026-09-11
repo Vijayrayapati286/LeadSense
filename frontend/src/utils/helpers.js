@@ -4,11 +4,12 @@ export function extractPlaceholders(text) {
   return [...new Set(matches.map((m) => m.replace(/\{\{|\}\}/g, '')))];
 }
 
-/** Replace {{Key}} placeholders with values */
+/** Replace {{Key}} placeholders with values (known keys match case-insensitively
+ * so {{name}} / {{Name}} both resolve). */
 export function renderTemplate(text, context) {
   let result = text;
   Object.entries(context).forEach(([key, value]) => {
-    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'gi'), value ?? '');
   });
   return result;
 }

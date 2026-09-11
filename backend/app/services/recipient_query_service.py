@@ -10,10 +10,12 @@ Director) AND recipient_group IN (Jira Team) AND tag IN (Decision Maker).
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Query, Session
 
-from app.models import CampaignRecipient, Recipient, RecipientGroupMember, RecipientTag
+from app.config import get_settings
+from app.models import CampaignRecipient, EmailVerification, Recipient, RecipientGroupMember, RecipientTag
+from app.utils.helpers import utc_now
 
 SORTABLE_FIELDS = {
     "name": Recipient.name,
@@ -66,6 +68,8 @@ class RecipientSearchFilters:
     group_ids: list[int] = field(default_factory=list)
     tag_ids: list[int] = field(default_factory=list)
     exclude_suppressed: bool = False
+    # verified | failed | unchecked (MillionVerifier cache / suppression)
+    email_verification: str = ""
 
     campaign_id: int | None = None
     campaign_status: str = ""
@@ -78,6 +82,54 @@ def _multi_ilike(query: Query, column, values: list[str]) -> Query:
     if not values:
         return query
     return query.filter(or_(*[column.ilike(f"%{v}%") for v in values]))
+
+
+def _allowed_verification_results() -> set[str]:
+    raw = get_settings().millionverifier_allowed_results or "ok"
+    return {part.strip().lower() for part in raw.split(",") if part.strip()} or {"ok"}
+
+
+def _apply_email_verification_filter(query: Query, status: str) -> Query:
+    status = (status or "").strip().lower()
+    if status not in {"verified", "failed", "unchecked"}:
+        return query
+
+    now = utc_now()
+    allowed = _allowed_verification_results()
+    email_lower = func.lower(Recipient.email)
+    active_cache = select(EmailVerification.email).where(EmailVerification.expires_at > now)
+
+    if status == "verified":
+        return query.filter(
+            email_lower.in_(
+                select(EmailVerification.email).where(
+                    EmailVerification.expires_at > now,
+                    EmailVerification.result.in_(sorted(allowed)),
+                )
+            )
+        )
+
+    if status == "failed":
+        return query.filter(
+            or_(
+                Recipient.suppression_reason == "email_verification_failed",
+                email_lower.in_(
+                    select(EmailVerification.email).where(
+                        EmailVerification.expires_at > now,
+                        ~EmailVerification.result.in_(sorted(allowed)),
+                    )
+                ),
+            )
+        )
+
+    # unchecked: no active cache and not verification-suppressed
+    return query.filter(
+        or_(
+            Recipient.suppression_reason.is_(None),
+            Recipient.suppression_reason != "email_verification_failed",
+        ),
+        ~email_lower.in_(active_cache),
+    )
 
 
 def build_query(db: Session, filters: RecipientSearchFilters) -> Query:
@@ -121,6 +173,8 @@ def build_query(db: Session, filters: RecipientSearchFilters) -> Query:
 
     if filters.exclude_suppressed:
         query = query.filter(Recipient.is_suppressed == False)  # noqa: E712
+
+    query = _apply_email_verification_filter(query, filters.email_verification)
 
     # Groups/tags use an IN-subquery (not a join) so a recipient belonging to
     # multiple selected groups/tags still appears exactly once in the results.

@@ -74,10 +74,13 @@ def is_known_merge_field(field: str) -> bool:
 
 
 def render_template(text: str, context: dict[str, str]) -> str:
-    """Replace {{Key}} placeholders with context values."""
+    """Replace {{Key}} placeholders with context values.
+
+    Matching is case-insensitive so {{name}} and {{Name}} both resolve when
+    the context provides Name."""
     result = text
     for key, value in context.items():
-        result = result.replace(f"{{{{{key}}}}}", value)
+        result = re.sub(rf"\{{\{{{re.escape(key)}\}}\}}", value or "", result, flags=re.IGNORECASE)
     return result
 
 
@@ -205,11 +208,16 @@ def render_email_body(body: str, content_type: str, context: dict[str, str]) -> 
 
     Manual bodies are already-sanitized HTML from the rich text editor and
     are merge-field-substituted as-is; every other template type keeps the
-    existing markdown-lite rendering (markdown_to_html/markdown_to_plain)."""
+    existing markdown-lite rendering (markdown_to_html/markdown_to_plain).
+
+    Bodies that already look like HTML (e.g. an offering draft saved under
+    the wrong type) are treated as HTML so recipients don't see raw tags."""
     rendered = render_template(body, context)
-    if content_type == "manual":
-        plain_text = bleach.clean(rendered, tags=[], attributes={}, strip=True)
-        return rendered, plain_text
+    treat_as_html = content_type == "manual" or bool(re.match(r"^\s*<", rendered or ""))
+    if treat_as_html:
+        html_body = sanitize_html(rendered) if content_type != "manual" else rendered
+        plain_text = bleach.clean(html_body, tags=[], attributes={}, strip=True)
+        return html_body, plain_text
     return markdown_to_html(rendered), markdown_to_plain(rendered)
 
 

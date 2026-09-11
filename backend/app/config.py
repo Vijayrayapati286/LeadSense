@@ -64,6 +64,21 @@ class Settings(BaseSettings):
     # soft bounces for the same address, it gets suppressed too.
     soft_bounce_threshold: int = 3
 
+    # MillionVerifier — pre-SES email verification (near-zero bounce gate).
+    # When enabled and not mocked, every address is verified (or served from
+    # cache) immediately before SES send; only allowed results proceed.
+    millionverifier_api_key: str = Field("", validation_alias="MILLIONVERIFIER_API_KEY")
+    millionverifier_enabled: bool = Field(True, validation_alias="MILLIONVERIFIER_ENABLED")
+    use_mock_millionverifier: bool = Field(True, validation_alias="USE_MOCK_MILLIONVERIFIER")
+    millionverifier_timeout_seconds: int = Field(10, validation_alias="MILLIONVERIFIER_TIMEOUT_SECONDS")
+    millionverifier_cache_days: int = Field(30, validation_alias="MILLIONVERIFIER_CACHE_DAYS")
+    # Comma-separated MillionVerifier `result` values allowed to send (default: ok only).
+    millionverifier_allowed_results: str = Field("ok", validation_alias="MILLIONVERIFIER_ALLOWED_RESULTS")
+    millionverifier_api_url: str = Field(
+        "https://api.millionverifier.com/api/v3/",
+        validation_alias="MILLIONVERIFIER_API_URL",
+    )
+
     # JSON object mapping each core_users.CORE_USERS email to its password,
     # e.g. {"name@feuji.com": "..."}. Kept out of source (core_users.py has
     # no passwords) since that file is committed to a shared repo.

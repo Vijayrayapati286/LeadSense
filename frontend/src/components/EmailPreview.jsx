@@ -5,7 +5,12 @@ export default function EmailPreview({ subject, recipientName, body, closing, ct
   // Manual templates store real HTML from the rich text editor (already
   // sanitized server-side on save) — render it as-is instead of running it
   // through the markdown-lite path placeholder/AI templates still use.
-  const bodyHtml = type === 'manual' ? DOMPurify.sanitize(body || '') : renderMarkdownLite(body);
+  // Also treat bodies that already look like HTML as HTML so a mis-typed
+  // offering draft (HTML + non-manual type) still previews correctly.
+  const looksLikeHtml = /^\s*</.test(body || '');
+  const bodyHtml = (type === 'manual' || looksLikeHtml)
+    ? DOMPurify.sanitize(body || '')
+    : renderMarkdownLite(body);
 
   return (
     <div className="max-w-2xl mx-auto">

@@ -12,6 +12,7 @@ export const FIELD_DEFS = [
   { key: 'industry', label: 'Industry', type: 'distinct' },
   { key: 'email', label: 'Business Email', type: 'text' },
   { key: 'email_domain', label: 'Email Domain', type: 'text' },
+  { key: 'email_verification', label: 'Email Verification', type: 'select' },
   { key: 'country', label: 'Country', type: 'distinct' },
   { key: 'state', label: 'State', type: 'distinct' },
   { key: 'city', label: 'City', type: 'distinct' },
@@ -33,6 +34,12 @@ const CAMPAIGN_STATUSES = [
 ];
 
 export const RESPONSE_TAGS = ['Cold', 'Negative', 'Warm', 'Hot'];
+
+export const EMAIL_VERIFICATION_OPTIONS = [
+  { value: 'verified', label: 'Verified' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'unchecked', label: 'Not checked yet' },
+];
 
 function AddFilterMenu({ availableFields, onAdd }) {
   const [open, setOpen] = useState(false);
@@ -156,6 +163,22 @@ export default function FilterBuilder({
                     selected={values[f.key] || []}
                     onChange={(vals) => onValueChange(f.key, vals)}
                   />
+                )}
+
+                {f.type === 'select' && f.key === 'email_verification' && (
+                  <div>
+                    <label className="label">{f.label}</label>
+                    <select
+                      className="input-field"
+                      value={values[f.key] || ''}
+                      onChange={(e) => onValueChange(f.key, e.target.value)}
+                    >
+                      <option value="">Any</option>
+                      {EMAIL_VERIFICATION_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
                 )}
 
                 {f.type === 'campaign_status' && (

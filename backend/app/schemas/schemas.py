@@ -303,6 +303,11 @@ class RecipientResponse(BaseModel):
     city: str | None = None
     source: str | None = None
 
+    # MillionVerifier pre-send gate (from cache / suppression).
+    # verified | failed | unchecked
+    email_verification_status: str | None = None
+    email_verification_result: str | None = None
+
 
 class RecipientCreate(BaseModel):
     """Single-prospect "Add Manually" form — optionally tagged straight into
@@ -371,7 +376,7 @@ class ResponseTagResult(BaseModel):
 
 SuppressionReason = Literal[
     "hard_bounce", "soft_bounce_threshold_exceeded", "domain_rejected",
-    "mail_server_blocked", "complaint", "manual",
+    "mail_server_blocked", "complaint", "manual", "email_verification_failed",
 ]
 
 
@@ -506,6 +511,10 @@ class CampaignRecipientResponse(BaseModel):
     recipient_name: str | None = None
     recipient_email: str | None = None
     recipient_company: str | None = None
+    is_suppressed: bool = False
+    suppression_reason: str | None = None
+    email_verification_status: str | None = None
+    email_verification_result: str | None = None
 
 
 class CampaignRecipientListResponse(BaseModel):
@@ -535,6 +544,8 @@ class CampaignListMemberResponse(BaseModel):
     suppression_reason: str | None = None
     status: str
     template_id: int | None = None
+    email_verification_status: str | None = None
+    email_verification_result: str | None = None
 
 
 class RetagListRequest(BaseModel):

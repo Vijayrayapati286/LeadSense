@@ -25,6 +25,7 @@ export const STATUS_BADGE_CLASSES = {
   mail_server_blocked: 'badge-danger',
   complaint: 'badge-warning',
   manual: 'badge-neutral',
+  email_verification_failed: 'badge-danger',
   not_contacted: 'badge-neutral',
   queued: 'badge-info',
   delivered: 'badge-success',
@@ -34,4 +35,7 @@ export const STATUS_BADGE_CLASSES = {
   bounced: 'badge-danger',
   invalid_email: 'badge-danger',
   suppressed: 'badge-warning',
+  email_verified: 'badge-success',
+  email_failed: 'badge-danger',
+  email_unchecked: 'badge-neutral',
 };

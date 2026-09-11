@@ -129,11 +129,15 @@ export default function CreateCampaignPage() {
       department: user?.department || 'Sales',
       target_audience: `Selected prospects (${payload.prospectCount || matchCount + icpCount})`,
     });
+    setTemplateType('manual');
     setEmailContent(buildOfferingEmailDraft(payload.offeringName, payload.offeringDescription));
     setActiveTab('template');
     offeringsService.get(payload.offeringId).then(async (offering) => {
-      await loadPlaceholderTemplates(payload.offeringId);
-      if (!offering.email_template?.subject || !offering.email_template?.body) {
+      if (offering.email_template?.subject && offering.email_template?.body) {
+        await loadPlaceholderTemplates(payload.offeringId);
+      } else {
+        // HTML draft requires Manual type — placeholder/AI path escapes tags
+        setTemplateType('manual');
         setEmailContent(buildOfferingEmailDraft(payload.offeringName, payload.offeringDescription));
       }
     }).catch(() => {});
@@ -205,10 +209,12 @@ export default function CreateCampaignPage() {
         target_audience: prev.target_audience || offering.target_industries?.join(', ') || '',
       }));
 
-      await loadPlaceholderTemplates(offeringId);
-      if (!offering.email_template?.subject || !offering.email_template?.body) {
-        setEmailContent(buildOfferingEmailDraft(offering.name, offering.description || offering.short_description));
+      if (offering.email_template?.subject && offering.email_template?.body) {
+        await loadPlaceholderTemplates(offeringId);
+        setActiveTab('template');
       } else {
+        setTemplateType('manual');
+        setEmailContent(buildOfferingEmailDraft(offering.name, offering.description || offering.short_description));
         setActiveTab('template');
       }
       toast.success(
