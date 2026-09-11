@@ -14,7 +14,7 @@ from app.schemas.schemas import (
     PreviewTemplateResponse,
 )
 from app.services.ai_service import AIService
-from app.utils.helpers import extract_placeholders, markdown_to_html, render_template
+from app.utils.helpers import add_known_field_case_aliases, extract_placeholders, markdown_to_html, render_template
 
 router = APIRouter(prefix="/templates", tags=["Templates"])
 ai_service = AIService()
@@ -123,6 +123,7 @@ def preview_template(
         "Designation": data.recipient_designation,
         "Industry": data.recipient_industry,
     }
+    add_known_field_case_aliases(context)
 
     rendered_subject = render_template(data.subject, context)
     rendered_body = render_template(data.body, context)

@@ -22,7 +22,14 @@ export const KNOWN_MERGE_FIELDS = [
   { key: 'Status', label: 'Status', field: 'status' },
 ];
 
-const KNOWN_KEYS = new Set(KNOWN_MERGE_FIELDS.map((f) => f.key));
+const KNOWN_KEYS_LOWER = new Set(KNOWN_MERGE_FIELDS.map((f) => f.key.toLowerCase()));
+
+/** Case-insensitive check mirroring backend/app/utils/helpers.py's
+ * is_known_merge_field — {{name}} is the same merge field as {{Name}},
+ * not an undefined custom field (see buildRecipientContext below). */
+function isKnownMergeField(key) {
+  return KNOWN_KEYS_LOWER.has(key.toLowerCase());
+}
 
 const SAMPLE_MERGE_VALUES = {
   Name: 'John Doe',
@@ -59,18 +66,24 @@ export function buildSamplePreviewContext(placeholderValues = {}) {
 export function buildRecipientContext(recipient) {
   const context = {};
   KNOWN_MERGE_FIELDS.forEach(({ key, field }) => {
-    context[key] = recipient[field] || '—';
+    const value = recipient[field] || '—';
+    context[key] = value;
+    // Also merge a lowercase {{name}}-style tag — AI-generated offering
+    // email copy doesn't always come back in the PascalCase the template
+    // editor's picker inserts, despite the prompt asking for it.
+    context[key.toLowerCase()] = value;
   });
   return context;
 }
 
 /** Every {{Field}} used across the given template text blocks that isn't a
- * known header or an already-approved custom field name. */
+ * known header (case-insensitive — see isKnownMergeField) or an
+ * already-approved custom field name. */
 export function getUnknownPlaceholders(textBlocks, approvedCustomFieldNames = []) {
   const approved = new Set(approvedCustomFieldNames);
   const used = new Set();
   textBlocks.filter(Boolean).forEach((text) => {
     extractPlaceholders(text).forEach((key) => used.add(key));
   });
-  return [...used].filter((key) => !KNOWN_KEYS.has(key) && !approved.has(key));
+  return [...used].filter((key) => !isKnownMergeField(key) && !approved.has(key));
 }

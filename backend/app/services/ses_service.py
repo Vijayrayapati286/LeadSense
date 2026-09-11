@@ -12,7 +12,7 @@ from email.mime.text import MIMEText
 from email.utils import formataddr, parseaddr
 
 from app.config import get_settings
-from app.utils.helpers import KNOWN_MERGE_FIELDS, render_email_body, render_template
+from app.utils.helpers import KNOWN_MERGE_FIELDS, add_known_field_case_aliases, render_email_body, render_template
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -193,6 +193,7 @@ class SESService:
 
         for recipient in recipients:
             context = {key: recipient.get(field, "") for key, field in KNOWN_MERGE_FIELDS.items()}
+            add_known_field_case_aliases(context)
 
             rendered_subject = render_template(subject_template, context)
             body_html, body_text = render_email_body(body_template, content_type, context)

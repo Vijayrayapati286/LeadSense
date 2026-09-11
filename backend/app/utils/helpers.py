@@ -37,6 +37,8 @@ KNOWN_MERGE_FIELDS: dict[str, str] = {
     "Status": "status",
 }
 
+_KNOWN_MERGE_FIELDS_LOWER: set[str] = {k.lower() for k in KNOWN_MERGE_FIELDS}
+
 
 def build_recipient_context(recipient) -> dict[str, str]:
     """Build the {{Key}}: value context for rendering a template against a
@@ -45,7 +47,30 @@ def build_recipient_context(recipient) -> dict[str, str]:
     context = {key: (getattr(recipient, field, None) or "") for key, field in KNOWN_MERGE_FIELDS.items()}
     for cv in getattr(recipient, "custom_values", []) or []:
         context[cv.custom_field.name] = cv.value or ""
+    add_known_field_case_aliases(context)
     return context
+
+
+def add_known_field_case_aliases(context: dict[str, str]) -> dict[str, str]:
+    """Add a lowercase alias (e.g. "name") for each KNOWN_MERGE_FIELDS key
+    (e.g. "Name") already present in context, so a template written with
+    {{name}}/{{company}} — as AI-generated offering email copy sometimes
+    comes back, despite the prompt asking for PascalCase — still merges
+    instead of rendering literally or being flagged as a missing custom
+    field (see is_known_merge_field). Never overwrites a real custom field
+    that happens to already occupy the lowercase name."""
+    for key in KNOWN_MERGE_FIELDS:
+        lower = key.lower()
+        if lower not in context and key in context:
+            context[lower] = context[key]
+    return context
+
+
+def is_known_merge_field(field: str) -> bool:
+    """Case-insensitive membership check against KNOWN_MERGE_FIELDS, so
+    {{name}} is recognized as the same merge field as {{Name}} instead of
+    being treated as an undefined custom field."""
+    return field.lower() in _KNOWN_MERGE_FIELDS_LOWER
 
 
 def render_template(text: str, context: dict[str, str]) -> str:

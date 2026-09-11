@@ -22,7 +22,7 @@ from app.schemas.schemas import IncompleteRecipientInfo, SendEmailRequest, SendE
 from app.services.app_settings_service import AppSettingsService
 from app.services.campaign_service import CampaignService
 from app.services.ses_service import SESService
-from app.utils.helpers import KNOWN_MERGE_FIELDS, extract_placeholders, utc_now
+from app.utils.helpers import extract_placeholders, is_known_merge_field, utc_now
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/email", tags=["Email"])
@@ -78,7 +78,7 @@ def _filter_incomplete_recipients(
             used_fields = extract_placeholders(
                 " ".join(filter(None, [template.subject, template.body, template.closing, template.cta]))
             )
-            custom_fields_used = [f for f in used_fields if f not in KNOWN_MERGE_FIELDS]
+            custom_fields_used = [f for f in used_fields if not is_known_merge_field(f)]
             missing = [f for f in custom_fields_used if f not in recipient_custom_names.get(recipient.id, set())]
             if missing:
                 incomplete.append(IncompleteRecipientInfo(email=recipient.email, missing_fields=missing))

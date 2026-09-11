@@ -52,6 +52,7 @@ import FilterBuilder from '../components/FilterBuilder';
 import TemplateEditor from '../components/TemplateEditor';
 import {
   formatDate, formatDateTime, renderTemplate, debounce, getMissingUploadColumns, buildDuplicateUploadMessage,
+  apiErrorMessage,
 } from '../utils/helpers';
 
 // Extensions accepted by the prospect-list upload inputs — mirrors the
@@ -608,6 +609,8 @@ export default function CampaignDetailPage() {
     try {
       await recipientService.create({
         ...recipientForm,
+        name: recipientForm.name.trim(),
+        email: recipientForm.email.trim(),
         campaign_id: Number(id),
         template_id: recipientTemplateId || null,
         group_name: addRecipientGroupName,
@@ -620,7 +623,7 @@ export default function CampaignDetailPage() {
         if (openListId) loadListMembers(openListId);
       }
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to add prospect');
+      toast.error(apiErrorMessage(err, 'Failed to add prospect'));
     } finally {
       setSavingRecipient(false);
     }
