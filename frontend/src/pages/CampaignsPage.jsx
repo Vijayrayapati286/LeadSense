@@ -29,6 +29,7 @@ export default function CampaignsPage() {
   const [deleteId, setDeleteId] = useState(null);
   const [tab, setTab] = useState('all');
   const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const toast = useToast();
 
@@ -121,7 +122,11 @@ export default function CampaignsPage() {
         <div className="flex flex-wrap items-center gap-4">
           <SegmentedControl options={tabOptions} value={tab} onChange={setTab} />
           <SearchInput
-            onChange={debouncedSearch}
+            value={searchInput}
+            onChange={(val) => {
+              setSearchInput(val);
+              debouncedSearch(val);
+            }}
             placeholder="Search by name or campaign ID..."
             className="min-w-[200px] flex-1"
           />

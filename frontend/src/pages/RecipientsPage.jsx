@@ -33,6 +33,7 @@ const RESPONSE_TAG_COLORS = {
 
 export default function RecipientsPage() {
   const toast = useToast();
+  const [searchInput, setSearchInput] = useState('');
   const {
     search, setSearch, sortBy, setSortBy, sortOrder, setSortOrder,
     activeFieldKeys, filterValues, distinctOptions, distinctLoading,
@@ -318,7 +319,11 @@ export default function RecipientsPage() {
       <div className="surface-card space-y-4 p-4">
         <div className="flex flex-wrap items-center gap-3">
           <SearchInput
-            onChange={debouncedSearch}
+            value={searchInput}
+            onChange={(val) => {
+              setSearchInput(val);
+              debouncedSearch(val);
+            }}
             placeholder="Quick search (name, email, company)..."
             className="flex-1 min-w-[240px]"
           />
