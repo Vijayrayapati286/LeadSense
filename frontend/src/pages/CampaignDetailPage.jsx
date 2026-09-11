@@ -111,6 +111,7 @@ export default function CampaignDetailPage() {
     handleAddField, handleRemoveField, handleValueChange, clearAllFilters,
   } = useContactSearch({ toast });
 
+  const [searchInput, setSearchInput] = useState('');
   const [selectedIds, setSelectedIds] = useState(preselectedContactIds || []);
   const [selectingAll, setSelectingAll] = useState(false);
 
@@ -1317,7 +1318,11 @@ export default function CampaignDetailPage() {
                   <div className="mt-4 space-y-3">
                     <div className="flex flex-wrap items-start gap-2">
                       <SearchInput
-                        onChange={debouncedSearch}
+                        value={searchInput}
+                        onChange={(val) => {
+                          setSearchInput(val);
+                          debouncedSearch(val);
+                        }}
                         placeholder="Search name, email, company..."
                         className="w-64"
                       />
@@ -1528,6 +1533,7 @@ export default function CampaignDetailPage() {
                         </div>
                         <SearchInput
                           key={openListId}
+                          value={listSearch}
                           onChange={setListSearch}
                           placeholder="Search this list..."
                           className="w-56"
