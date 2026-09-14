@@ -148,11 +148,15 @@ Copy `backend/.env.example` to `backend/.env` and configure:
 | `USE_SQLITE_FALLBACK` | Use SQLite when PostgreSQL unavailable | `true` |
 | `USE_MOCK_SES` | Mock AWS SES sending | `true` |
 | `USE_MOCK_GROQ` | Mock Groq generation | `true` |
+| `USE_MOCK_MILLIONVERIFIER` | Mock email verification (always `ok`) | `false` |
+| `MILLIONVERIFIER_API_KEY` | MillionVerifier API key (required when enabled and not mocked) | — |
+| `MILLIONVERIFIER_ENABLED` | Pre-SES email verification gate | `true` |
 | `AZURE_CLIENT_ID` | Microsoft Azure app client ID | — |
 | `AWS_ACCESS_KEY_ID` | AWS credentials for SES | — |
 | `GROQ_API_KEY` | Groq API key | — |
 
 Set mock flags to `false` and provide real credentials to enable live integrations.
+For UAT/prod MillionVerifier: `USE_MOCK_MILLIONVERIFIER=false` + `MILLIONVERIFIER_API_KEY` set, then recreate the backend container. Diagnostic: `GET /api/settings/millionverifier` (auth required).
 
 ## Database Migrations
 

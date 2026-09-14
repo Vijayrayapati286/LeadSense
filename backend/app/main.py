@@ -45,6 +45,9 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting %s", settings.app_name)
+    from app.services.millionverifier_service import validate_millionverifier_config
+
+    validate_millionverifier_config(settings)
     init_db()
     logger.info("Database initialized with seed data")
     try:
