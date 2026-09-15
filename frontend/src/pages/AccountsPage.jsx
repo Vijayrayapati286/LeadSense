@@ -4,6 +4,7 @@ import {
   FiArrowUp,
   FiBriefcase,
   FiDatabase,
+  FiDownload,
   FiMapPin,
   FiPlus,
   FiUsers,
@@ -16,15 +17,148 @@ import SearchInput from '../components/ui/SearchInput';
 import { useToast } from '../hooks/useToast';
 import { icpService } from '../services/services';
 import { MetricCard, WorkspaceHeader } from '../components/ui/GrowthWorkspace';
-import { debounce } from '../utils/helpers';
+import { debounce, downloadBlob } from '../utils/helpers';
 
 import { getDefaultPageSize } from '../utils/workspaceDefaults';
 
 const PAGE_SIZE = getDefaultPageSize(4);
+const EXPORT_PAGE_SIZE = 100;
 const ROW_HEIGHT_CLASS = 'h-[3.25rem]';
+
+const EXPORT_HEADERS = [
+  'First Name',
+  'Last Name',
+  'Designation',
+  'Department',
+  'Email',
+  'Linked Url',
+  'City',
+  'State',
+  'Country',
+  'Country Code',
+  'Phone no.',
+  'Contact Summary',
+  'Account Name',
+  'Industry',
+  'Website',
+  'Account Linkedin Url',
+  'Account City',
+  'Contact State',
+  'Contact Country',
+  'Annual Revenue',
+  'Employee Count',
+  'Account Summary',
+];
+
+const COUNTRY_CODES = {
+  'united states': 'US',
+  'united states of america': 'US',
+  usa: 'US',
+  us: 'US',
+  'united kingdom': 'GB',
+  uk: 'GB',
+  england: 'GB',
+  india: 'IN',
+  canada: 'CA',
+  australia: 'AU',
+  germany: 'DE',
+  france: 'FR',
+  singapore: 'SG',
+  'united arab emirates': 'AE',
+  uae: 'AE',
+  netherlands: 'NL',
+  ireland: 'IE',
+};
 
 function accountType(row) {
   return row.company_size || row.industry || '—';
+}
+
+function csvEscape(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function splitName(fullName) {
+  const parts = String(fullName || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return { firstName: '', lastName: '' };
+  if (parts.length === 1) return { firstName: parts[0], lastName: '' };
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+}
+
+function parseLocation(location) {
+  const parts = String(location || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) {
+    return { city: '', state: '', country: '', countryCode: '' };
+  }
+  if (parts.length === 1) {
+    const only = parts[0];
+    const countryCode = COUNTRY_CODES[only.toLowerCase()] || '';
+    if (countryCode) {
+      return { city: '', state: '', country: only, countryCode };
+    }
+    return { city: only, state: '', country: '', countryCode: '' };
+  }
+  if (parts.length === 2) {
+    const country = parts[1];
+    return {
+      city: parts[0],
+      state: '',
+      country,
+      countryCode: COUNTRY_CODES[country.toLowerCase()] || '',
+    };
+  }
+
+  const country = parts[parts.length - 1];
+  const state = parts[parts.length - 2];
+  const city = parts.slice(0, -2).join(', ');
+  return {
+    city,
+    state,
+    country,
+    countryCode: COUNTRY_CODES[country.toLowerCase()] || '',
+  };
+}
+
+function contactToExportRow(row) {
+  const { firstName, lastName } = splitName(row.name);
+  const loc = parseLocation(row.location);
+
+  return [
+    firstName,
+    lastName,
+    row.designation || '',
+    '', // Department — not stored in ICP
+    row.email || '',
+    row.linkedin_url || '',
+    loc.city,
+    loc.state,
+    loc.country,
+    loc.countryCode,
+    '', // Phone no. — not stored in ICP
+    row.about || '',
+    row.company_name || '',
+    row.industry || '',
+    row.company_website || '',
+    '', // Account Linkedin Url — not stored in ICP
+    '', // Account City — not stored separately
+    loc.state, // Contact State
+    loc.country, // Contact Country
+    '', // Annual Revenue — not stored in ICP
+    row.company_size || '',
+    '', // Account Summary — not stored in ICP
+  ];
+}
+
+function contactsToCsv(rows) {
+  const lines = rows.map((row) => contactToExportRow(row).map(csvEscape).join(','));
+  return `\uFEFF${[EXPORT_HEADERS.map(csvEscape).join(','), ...lines].join('\n')}`;
 }
 
 export default function AccountsPage() {
@@ -36,6 +170,7 @@ export default function AccountsPage() {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
   const [sortOrder, setSortOrder] = useState('asc');
   const [selected, setSelected] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -75,6 +210,48 @@ export default function AccountsPage() {
     [],
   );
 
+  async function handleDownloadAll() {
+    setDownloading(true);
+    try {
+      const all = [];
+      let exportPage = 1;
+      let exportTotal = Infinity;
+
+      while (all.length < exportTotal) {
+        const data = await icpService.list({
+          page: exportPage,
+          limit: EXPORT_PAGE_SIZE,
+          sort_by: 'company_name',
+          sort_order: 'asc',
+          require_name: true,
+        });
+        const batch = data.items || [];
+        exportTotal = data.total ?? batch.length;
+        all.push(...batch);
+        if (batch.length === 0 || batch.length < EXPORT_PAGE_SIZE) break;
+        exportPage += 1;
+      }
+
+      const sorted = [...all].sort((a, b) => {
+        const companyCmp = (a.company_name || '')
+          .toLowerCase()
+          .localeCompare((b.company_name || '').toLowerCase());
+        if (companyCmp !== 0) return companyCmp;
+        return (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase());
+      });
+
+      downloadBlob(
+        new Blob([contactsToCsv(sorted)], { type: 'text/csv;charset=utf-8;' }),
+        'icp_export.csv',
+      );
+      toast.success(`Downloaded ${sorted.length} contacts`);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   const showSpinner = loading && items.length === 0;
   const contactTotal = items.reduce((sum, row) => sum + (row.contact_count || 0), 0);
 
@@ -86,9 +263,20 @@ export default function AccountsPage() {
           title="Accounts"
           description="Companies grouped from your verified contacts. Each account shows how many people you have on file."
           actions={
-            <button type="button" onClick={() => setAddOpen(true)} className="btn-primary inline-flex items-center gap-2">
-              <FiPlus size={16} /> Add account
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleDownloadAll}
+                disabled={downloading || total === 0}
+                className="btn-secondary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <FiDownload size={16} />
+                {downloading ? 'Downloading…' : 'Download all data'}
+              </button>
+              <button type="button" onClick={() => setAddOpen(true)} className="btn-primary inline-flex items-center gap-2">
+                <FiPlus size={16} /> Add account
+              </button>
+            </div>
           }
         />
 

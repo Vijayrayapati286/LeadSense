@@ -1,6 +1,6 @@
 """Runtime-configurable deliverability settings routes."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -8,6 +8,7 @@ from app.middleware.auth import get_current_user
 from app.models import User
 from app.schemas.schemas import AppSettingResponse, AppSettingUpdate
 from app.services.app_settings_service import AppSettingsService
+from app.services.millionverifier_service import millionverifier_diagnostic
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 app_settings_service = AppSettingsService()
@@ -43,3 +44,15 @@ def update_app_settings(
 ):
     row = app_settings_service.update(db, data.model_dump(exclude_unset=True))
     return _to_response(row)
+
+
+@router.get("/millionverifier")
+def get_millionverifier_status(
+    check_connectivity: bool = Query(
+        False,
+        description="If true, probes the MillionVerifier credits endpoint (uses network).",
+    ),
+    current_user: User = Depends(get_current_user),
+):
+    """Safe MillionVerifier diagnostic — never returns the API key."""
+    return millionverifier_diagnostic(check_connectivity=check_connectivity)

@@ -18,6 +18,7 @@ export default function EmailLogsPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [users, setUsers] = useState([]);
@@ -96,7 +97,11 @@ export default function EmailLogsPage() {
       <div className="surface-card space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-4">
           <SearchInput
-            onChange={debouncedSearch}
+            value={searchInput}
+            onChange={(val) => {
+              setSearchInput(val);
+              debouncedSearch(val);
+            }}
             placeholder="Search by prospect or campaign..."
             className="flex-1 min-w-[200px]"
           />

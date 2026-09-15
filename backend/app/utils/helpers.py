@@ -37,6 +37,8 @@ KNOWN_MERGE_FIELDS: dict[str, str] = {
     "Status": "status",
 }
 
+_KNOWN_MERGE_FIELDS_LOWER: set[str] = {k.lower() for k in KNOWN_MERGE_FIELDS}
+
 
 def build_recipient_context(recipient) -> dict[str, str]:
     """Build the {{Key}}: value context for rendering a template against a
@@ -45,14 +47,40 @@ def build_recipient_context(recipient) -> dict[str, str]:
     context = {key: (getattr(recipient, field, None) or "") for key, field in KNOWN_MERGE_FIELDS.items()}
     for cv in getattr(recipient, "custom_values", []) or []:
         context[cv.custom_field.name] = cv.value or ""
+    add_known_field_case_aliases(context)
     return context
 
 
+def add_known_field_case_aliases(context: dict[str, str]) -> dict[str, str]:
+    """Add a lowercase alias (e.g. "name") for each KNOWN_MERGE_FIELDS key
+    (e.g. "Name") already present in context, so a template written with
+    {{name}}/{{company}} — as AI-generated offering email copy sometimes
+    comes back, despite the prompt asking for PascalCase — still merges
+    instead of rendering literally or being flagged as a missing custom
+    field (see is_known_merge_field). Never overwrites a real custom field
+    that happens to already occupy the lowercase name."""
+    for key in KNOWN_MERGE_FIELDS:
+        lower = key.lower()
+        if lower not in context and key in context:
+            context[lower] = context[key]
+    return context
+
+
+def is_known_merge_field(field: str) -> bool:
+    """Case-insensitive membership check against KNOWN_MERGE_FIELDS, so
+    {{name}} is recognized as the same merge field as {{Name}} instead of
+    being treated as an undefined custom field."""
+    return field.lower() in _KNOWN_MERGE_FIELDS_LOWER
+
+
 def render_template(text: str, context: dict[str, str]) -> str:
-    """Replace {{Key}} placeholders with context values."""
+    """Replace {{Key}} placeholders with context values.
+
+    Matching is case-insensitive so {{name}} and {{Name}} both resolve when
+    the context provides Name."""
     result = text
     for key, value in context.items():
-        result = result.replace(f"{{{{{key}}}}}", value)
+        result = re.sub(rf"\{{\{{{re.escape(key)}\}}\}}", value or "", result, flags=re.IGNORECASE)
     return result
 
 
@@ -180,11 +208,16 @@ def render_email_body(body: str, content_type: str, context: dict[str, str]) -> 
 
     Manual bodies are already-sanitized HTML from the rich text editor and
     are merge-field-substituted as-is; every other template type keeps the
-    existing markdown-lite rendering (markdown_to_html/markdown_to_plain)."""
+    existing markdown-lite rendering (markdown_to_html/markdown_to_plain).
+
+    Bodies that already look like HTML (e.g. an offering draft saved under
+    the wrong type) are treated as HTML so recipients don't see raw tags."""
     rendered = render_template(body, context)
-    if content_type == "manual":
-        plain_text = bleach.clean(rendered, tags=[], attributes={}, strip=True)
-        return rendered, plain_text
+    treat_as_html = content_type == "manual" or bool(re.match(r"^\s*<", rendered or ""))
+    if treat_as_html:
+        html_body = sanitize_html(rendered) if content_type != "manual" else rendered
+        plain_text = bleach.clean(html_body, tags=[], attributes={}, strip=True)
+        return html_body, plain_text
     return markdown_to_html(rendered), markdown_to_plain(rendered)
 
 

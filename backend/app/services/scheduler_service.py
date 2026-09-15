@@ -16,12 +16,44 @@ from sqlalchemy.orm import Session
 from app.database.connection import SessionLocal
 from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template, User
 from app.services.app_settings_service import AppSettingsService
+from app.services.millionverifier_service import millionverifier_service
 from app.services.ses_service import SESService
 from app.utils.helpers import build_recipient_context, render_email_body, render_template, utc_now
 
 logger = logging.getLogger(__name__)
 ses_service = SESService()
 app_settings_service = AppSettingsService()
+
+
+def _gate_before_ses(db: Session, cr: CampaignRecipient, recipient: Recipient, owner: User | None) -> bool:
+    """Return True if SES send may proceed. On definitive reject, mutates rows."""
+    gate = millionverifier_service.verify_email(db, recipient.email)
+    if gate.allowed:
+        return True
+    if gate.definitive_reject:
+        millionverifier_service.apply_rejection(
+            db,
+            recipient=recipient,
+            campaign_id=cr.campaign_id,
+            campaign_recipient=cr,
+            gate=gate,
+            sender_user_id=owner.id if owner else cr.sender_user_id,
+        )
+        db.commit()
+        logger.info(
+            "Blocked send to %s — verification result=%s",
+            recipient.email,
+            gate.result,
+        )
+        return False
+    # Transient API / config failure: leave queued (or due follow-up) for retry.
+    logger.warning(
+        "Deferring send to %s — verification unavailable: %s",
+        recipient.email,
+        gate.detail,
+    )
+    db.commit()
+    return False
 
 # Statuses that should never receive another automated follow-up.
 TERMINAL_STATUSES = {"replied", "suppressed", "bounced", "invalid_email"}
@@ -135,6 +167,9 @@ def process_due_followups() -> None:
                 body = f"{body}\n\n{render_template(stage.closing, context)}"
 
             owner = _resolve_sender(cr)
+            if not _gate_before_ses(db, cr, recipient, owner):
+                continue
+
             result = ses_service.send_email(
                 to_email=recipient.email,
                 subject=subject,
@@ -263,6 +298,9 @@ def process_queued_initial_sends() -> None:
                 body_text = f"{body_text}\n\n{closing}"
 
             owner = _resolve_sender(cr)
+            if not _gate_before_ses(db, cr, recipient, owner):
+                continue
+
             result = ses_service.send_email(
                 to_email=recipient.email,
                 subject=subject,

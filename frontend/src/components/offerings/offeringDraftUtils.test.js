@@ -45,6 +45,25 @@ test('existing values are never silently overwritten', () => {
   assert.deepEqual(result.suggestions.target_industries.current, ['Technology']);
 });
 
+test('full regenerate replaces prior AI-generated fields', () => {
+  const form = {
+    name: 'Revenue Workflow Intelligence',
+    product_type: 'SaaS',
+    short_description: 'Workflow intelligence for modern B2B revenue teams',
+    detailed_description: 'a banking appliaction for lone',
+  };
+  const result = reconcileAiDraft(form, bankingDraft, null, {
+    name: 'ai_generated',
+    product_type: 'ai_generated',
+    short_description: 'ai_generated',
+    detailed_description: 'ai_generated',
+  });
+  assert.equal(result.form.name, bankingDraft.suggested_name);
+  assert.equal(result.form.product_type, 'Financial Services');
+  assert.equal(result.form.short_description, bankingDraft.short_description);
+  assert.deepEqual(result.suggestions, {});
+});
+
 test('one suggestion can be accepted without changing other fields', () => {
   const form = { name: 'Current', product_type: 'SaaS' };
   const reviewed = reconcileAiDraft(form, bankingDraft);

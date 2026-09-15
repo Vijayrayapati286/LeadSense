@@ -331,11 +331,10 @@ class LinkedInProfileExtractor:
             )
         )
 
-        # Headline patterns: "Title @ Company | ..." or "Title at Company"
-        if job_title:
-            derived_company = self._company_from_headline(job_title)
-            if derived_company and not company:
-                company = derived_company
+        # In this scraper, job_title is the top-card headline text. Prefer it
+        # for "Title at Company" when the Current company chip was not found.
+        if not company:
+            company = self._company_from_texts(job_title)
 
         if not full_name:
             doc_title = (page.title() or "").strip()
@@ -383,8 +382,8 @@ class LinkedInProfileExtractor:
                     job_title = line
                     break
 
-        if job_title and not company:
-            company = self._company_from_headline(job_title)
+        if not company:
+            company = self._company_from_texts(job_title, *(useful[:50]))
 
         if not about and full_name:
             # About is usually a long paragraph after the top card chrome.
@@ -403,6 +402,14 @@ class LinkedInProfileExtractor:
             "about": about,
         }
 
+    @classmethod
+    def _company_from_texts(cls, *texts: str | None) -> str | None:
+        for text in texts:
+            company = cls._company_from_headline(text or "")
+            if company:
+                return company
+        return None
+
     @staticmethod
     def _company_from_headline(headline: str) -> str | None:
         text = (headline or "").strip()
@@ -412,9 +419,10 @@ class LinkedInProfileExtractor:
         at_match = re.search(r"\s@\s([^|•\n]+)", text)
         if at_match:
             return at_match.group(1).strip(" .") or None
-        # "Title at Company"
-        if " at " in text:
-            return text.rsplit(" at ", 1)[-1].split("|")[0].strip(" .") or None
+        # "Title at Company" (case-insensitive)
+        at_word = re.search(r"(?i)\sat\s([^|•\n]+)", text)
+        if at_word:
+            return at_word.group(1).strip(" .") or None
         return None
 
     @staticmethod

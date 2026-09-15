@@ -12,6 +12,7 @@ import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import StatusBadge from '../components/ui/StatusBadge';
+import EmailVerificationBadge from '../components/ui/EmailVerificationBadge';
 import UploadErrorModal from '../components/ui/UploadErrorModal';
 import PageHeader from '../components/ui/PageHeader';
 import PageShell from '../components/ui/PageShell';
@@ -32,6 +33,7 @@ const RESPONSE_TAG_COLORS = {
 
 export default function RecipientsPage() {
   const toast = useToast();
+  const [searchInput, setSearchInput] = useState('');
   const {
     search, setSearch, sortBy, setSortBy, sortOrder, setSortOrder,
     activeFieldKeys, filterValues, distinctOptions, distinctLoading,
@@ -317,7 +319,11 @@ export default function RecipientsPage() {
       <div className="surface-card space-y-4 p-4">
         <div className="flex flex-wrap items-center gap-3">
           <SearchInput
-            onChange={debouncedSearch}
+            value={searchInput}
+            onChange={(val) => {
+              setSearchInput(val);
+              debouncedSearch(val);
+            }}
             placeholder="Quick search (name, email, company)..."
             className="flex-1 min-w-[240px]"
           />
@@ -420,6 +426,7 @@ export default function RecipientsPage() {
                     <th className="px-4 py-3 w-10"></th>
                     <th className="px-4 py-3 font-medium">Name</th>
                     <th className="px-4 py-3 font-medium">Email</th>
+                    <th className="px-4 py-3 font-medium">Email Verify</th>
                     <th className="px-4 py-3 font-medium">Company</th>
                     <th className="px-4 py-3 font-medium">Designation</th>
                     <th className="px-4 py-3 font-medium">Industry</th>
@@ -448,6 +455,12 @@ export default function RecipientsPage() {
                       </td>
                       <td className={`px-4 py-3 font-medium ${r.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{r.name}</td>
                       <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{r.email}</td>
+                      <td className="px-4 py-3">
+                        <EmailVerificationBadge
+                          status={r.email_verification_status}
+                          result={r.email_verification_result}
+                        />
+                      </td>
                       <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{r.company || '—'}</td>
                       <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{r.designation || '—'}</td>
                       <td className={`px-4 py-3 ${r.is_suppressed ? '' : 'text-gray-600'}`}>{r.industry || '—'}</td>
@@ -477,7 +490,7 @@ export default function RecipientsPage() {
                   ))}
                   {results.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
+                      <td colSpan={10} className="px-4 py-12 text-center text-gray-400">
                         No prospects found. Upload an Excel file or adjust your filters.
                       </td>
                     </tr>

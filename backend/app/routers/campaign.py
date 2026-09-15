@@ -26,11 +26,31 @@ from app.schemas.schemas import (
     TemplateUpdate,
 )
 from app.services.campaign_service import CampaignService
+from app.services.millionverifier_service import (
+    MillionVerifierService,
+    resolve_verification_status,
+    verification_lookup,
+)
 from app.utils.helpers import utc_now
 
 router = APIRouter(tags=["Campaigns"])
 campaign_service = CampaignService()
 
+
+def _verification_fields(db: Session, emails: list[str], suppression_reasons: list[str | None]) -> list[tuple[str, str | None]]:
+    lookup = verification_lookup(db, emails)
+    allowed = MillionVerifierService()._allowed_results()
+    out: list[tuple[str, str | None]] = []
+    for email, reason in zip(emails, suppression_reasons):
+        out.append(
+            resolve_verification_status(
+                email=email,
+                suppression_reason=reason,
+                cache_row=lookup.get((email or "").strip().lower()),
+                allowed_results=allowed,
+            )
+        )
+    return out
 
 @router.post("/campaign", response_model=CampaignResponse, status_code=201)
 def create_campaign(
@@ -222,11 +242,18 @@ def get_campaign_recipients(
         .all()
     )
     items = []
-    for cr in rows:
+    emails = [cr.recipient.email for cr in rows]
+    reasons = [cr.recipient.suppression_reason for cr in rows]
+    verifications = _verification_fields(db, emails, reasons)
+    for cr, (v_status, v_result) in zip(rows, verifications):
         response = CampaignRecipientResponse.model_validate(cr)
         response.recipient_name = cr.recipient.name
         response.recipient_email = cr.recipient.email
         response.recipient_company = cr.recipient.company
+        response.is_suppressed = cr.recipient.is_suppressed
+        response.suppression_reason = cr.recipient.suppression_reason
+        response.email_verification_status = v_status
+        response.email_verification_result = v_result
         items.append(response)
 
     return CampaignRecipientListResponse(items=items, total=len(items))
@@ -249,6 +276,9 @@ def get_campaign_list_members(
     current_user: User = Depends(get_current_user),
 ):
     rows = campaign_service.get_list_members(db, campaign_id, group_id)
+    emails = [recipient.email for _, recipient in rows]
+    reasons = [recipient.suppression_reason for _, recipient in rows]
+    verifications = _verification_fields(db, emails, reasons)
     return [
         CampaignListMemberResponse(
             id=recipient.id,
@@ -261,8 +291,10 @@ def get_campaign_list_members(
             suppression_reason=recipient.suppression_reason,
             status=cr.status,
             template_id=cr.template_id,
+            email_verification_status=v_status,
+            email_verification_result=v_result,
         )
-        for cr, recipient in rows
+        for (cr, recipient), (v_status, v_result) in zip(rows, verifications)
     ]
 
 

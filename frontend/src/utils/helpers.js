@@ -4,11 +4,12 @@ export function extractPlaceholders(text) {
   return [...new Set(matches.map((m) => m.replace(/\{\{|\}\}/g, '')))];
 }
 
-/** Replace {{Key}} placeholders with values */
+/** Replace {{Key}} placeholders with values (known keys match case-insensitively
+ * so {{name}} / {{Name}} both resolve). */
 export function renderTemplate(text, context) {
   let result = text;
   Object.entries(context).forEach(([key, value]) => {
-    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'gi'), value ?? '');
   });
   return result;
 }
@@ -140,6 +141,35 @@ export function buildDuplicateUploadMessage(total, duplicateCount) {
     `We found that ${duplicateCount} of ${total} prospect(s) already exist in this prospect list. ` +
     `Do you still want to import this file as a new prospect list?`
   );
+}
+
+/** Turn an axios error into a human-readable string.
+ *
+ * FastAPI request-validation failures (422) come back as
+ * `detail: [{ loc, msg, type, ... }]`, not a string — handing that array
+ * straight to `toast.error(...)` makes react-hot-toast try to render an
+ * object as a React child and throws "Minified React error #31", blanking
+ * the page. Flatten those into "field: message" lines instead. */
+export function apiErrorMessage(err, fallback = 'Something went wrong') {
+  const detail = err?.response?.data?.detail;
+  if (typeof detail === 'string' && detail) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d) => {
+        if (typeof d === 'string') return d;
+        const field = Array.isArray(d?.loc)
+          ? d.loc.filter((seg) => seg !== 'body').join('.')
+          : '';
+        const msg = d?.msg || '';
+        return field ? `${field}: ${msg}` : msg;
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join('\n');
+  }
+  if (detail && typeof detail === 'object' && typeof detail.message === 'string') {
+    return detail.message;
+  }
+  return err?.message || fallback;
 }
 
 /** Debounce utility */
