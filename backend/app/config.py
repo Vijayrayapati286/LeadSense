@@ -1,7 +1,7 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -63,6 +63,28 @@ class Settings(BaseSettings):
     # Soft bounces (transient delivery failures) are retried; after this many
     # soft bounces for the same address, it gets suppressed too.
     soft_bounce_threshold: int = 3
+
+    # MillionVerifier — pre-SES email verification (near-zero bounce gate).
+    # When enabled and not mocked, every address is verified (or served from
+    # cache) immediately before SES send; only allowed results proceed.
+    # Default mock=False so UAT/prod cannot silently treat every address as ok
+    # when the env var is omitted; local/dev should set USE_MOCK_MILLIONVERIFIER=true
+    # in .env when not using a real API key (see .env.example).
+    millionverifier_api_key: str = Field("", validation_alias="MILLIONVERIFIER_API_KEY")
+    millionverifier_enabled: bool = Field(True, validation_alias="MILLIONVERIFIER_ENABLED")
+    use_mock_millionverifier: bool = Field(False, validation_alias="USE_MOCK_MILLIONVERIFIER")
+    millionverifier_timeout_seconds: int = Field(
+        30,
+        validation_alias=AliasChoices("MILLIONVERIFIER_TIMEOUT_SECONDS", "MILLIONVERIFIER_TIMEOUT"),
+    )
+    millionverifier_max_retries: int = Field(3, validation_alias="MILLIONVERIFIER_MAX_RETRIES")
+    millionverifier_cache_days: int = Field(30, validation_alias="MILLIONVERIFIER_CACHE_DAYS")
+    # Comma-separated MillionVerifier `result` values allowed to send (default: ok only).
+    millionverifier_allowed_results: str = Field("ok", validation_alias="MILLIONVERIFIER_ALLOWED_RESULTS")
+    millionverifier_api_url: str = Field(
+        "https://api.millionverifier.com/api/v3/",
+        validation_alias=AliasChoices("MILLIONVERIFIER_API_URL", "MILLIONVERIFIER_BASE_URL"),
+    )
 
     # JSON object mapping each core_users.CORE_USERS email to its password,
     # e.g. {"name@feuji.com": "..."}. Kept out of source (core_users.py has

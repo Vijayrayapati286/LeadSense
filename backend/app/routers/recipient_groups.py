@@ -13,8 +13,8 @@ from app.schemas.schemas import (
     RecipientGroupResponse,
     RecipientGroupUpdate,
     RecipientListResponse,
-    RecipientResponse,
 )
+from app.services.millionverifier_service import recipients_to_responses
 from app.services.recipient_group_service import RecipientGroupService
 
 router = APIRouter(prefix="/recipient-groups", tags=["Recipient Groups"])
@@ -105,7 +105,7 @@ def get_group_members(
 
     items, total = group_service.get_members(db, group_id, page=page, page_size=page_size, search=search)
     return RecipientListResponse(
-        items=[RecipientResponse.model_validate(r) for r in items],
+        items=recipients_to_responses(db, items),
         total=total,
         page=page,
         page_size=page_size,

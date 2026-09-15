@@ -165,6 +165,29 @@ class Recipient(Base):
     )
 
 
+class EmailVerification(Base):
+    """Cached MillionVerifier (or mock) result for an email address.
+
+    Checked immediately before SES send so invalid/risky addresses never
+    leave LeadSense. Rows expire after MILLIONVERIFIER_CACHE_DAYS."""
+
+    __tablename__ = "email_verifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    result: Mapped[str] = mapped_column(String(64), nullable=False)  # ok, invalid, catch_all, ...
+    resultcode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="millionverifier")
+    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class SuppressionEntry(Base):
     """Blacklist audit log. Rows are never edited or hard-deleted — an admin
     override sets `overridden_at` instead, so the historical record (why an
@@ -176,7 +199,7 @@ class SuppressionEntry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    reason: Mapped[str] = mapped_column(String(50), nullable=False)  # hard_bounce, soft_bounce_threshold_exceeded, domain_rejected, mail_server_blocked, complaint, manual
+    reason: Mapped[str] = mapped_column(String(50), nullable=False)  # hard_bounce, soft_bounce_threshold_exceeded, domain_rejected, mail_server_blocked, complaint, manual, email_verification_failed
     bounce_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # Permanent, Transient
     smtp_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     campaign_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=True)

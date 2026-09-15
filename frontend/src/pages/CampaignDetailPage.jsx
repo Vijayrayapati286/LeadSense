@@ -39,6 +39,7 @@ import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from
 import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
+import EmailVerificationBadge from '../components/ui/EmailVerificationBadge';
 import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import Modal from '../components/ui/Modal';
@@ -52,6 +53,7 @@ import FilterBuilder from '../components/FilterBuilder';
 import TemplateEditor from '../components/TemplateEditor';
 import {
   formatDate, formatDateTime, renderTemplate, debounce, getMissingUploadColumns, buildDuplicateUploadMessage,
+  apiErrorMessage,
 } from '../utils/helpers';
 
 // Extensions accepted by the prospect-list upload inputs — mirrors the
@@ -109,6 +111,7 @@ export default function CampaignDetailPage() {
     handleAddField, handleRemoveField, handleValueChange, clearAllFilters,
   } = useContactSearch({ toast });
 
+  const [searchInput, setSearchInput] = useState('');
   const [selectedIds, setSelectedIds] = useState(preselectedContactIds || []);
   const [selectingAll, setSelectingAll] = useState(false);
 
@@ -471,6 +474,10 @@ export default function CampaignDetailPage() {
   const [pendingListUpload, setPendingListUpload] = useState(null);
   const [refreshingProspects, setRefreshingProspects] = useState(false);
 
+  const [editingMember, setEditingMember] = useState(null);
+  const [editForm, setEditForm] = useState(EMPTY_RECIPIENT_FORM);
+  const [savingEdit, setSavingEdit] = useState(false);
+
   const handleListNameChange = (value) => {
     setUploadGroupName(value);
     if (value.trim()) setListNameError(false);
@@ -608,6 +615,8 @@ export default function CampaignDetailPage() {
     try {
       await recipientService.create({
         ...recipientForm,
+        name: recipientForm.name.trim(),
+        email: recipientForm.email.trim(),
         campaign_id: Number(id),
         template_id: recipientTemplateId || null,
         group_name: addRecipientGroupName,
@@ -620,9 +629,46 @@ export default function CampaignDetailPage() {
         if (openListId) loadListMembers(openListId);
       }
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to add prospect');
+      toast.error(apiErrorMessage(err, 'Failed to add prospect'));
     } finally {
       setSavingRecipient(false);
+    }
+  };
+
+  // Pencil-icon edit on a prospect row — edits the recipient's own details
+  // (name/email/company/designation/industry), not its tagging into this
+  // campaign/list, so it reuses the same shape as EMPTY_RECIPIENT_FORM.
+  const handleOpenEditMember = (m) => {
+    setEditForm({
+      name: m.name || '',
+      email: m.email || '',
+      company: m.company || '',
+      designation: m.designation || '',
+      industry: m.industry || '',
+    });
+    setEditingMember(m);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editForm.name.trim() || !editForm.email.trim()) {
+      toast.error('Name and Email are required');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await recipientService.update(editingMember.id, {
+        ...editForm,
+        name: editForm.name.trim(),
+        email: editForm.email.trim(),
+      });
+      toast.success('Prospect updated');
+      setEditingMember(null);
+      loadResults();
+      if (browseMode === 'lists' && openListId) loadListMembers(openListId);
+    } catch (err) {
+      toast.error(apiErrorMessage(err, 'Failed to update prospect'));
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -1272,7 +1318,11 @@ export default function CampaignDetailPage() {
                   <div className="mt-4 space-y-3">
                     <div className="flex flex-wrap items-start gap-2">
                       <SearchInput
-                        onChange={debouncedSearch}
+                        value={searchInput}
+                        onChange={(val) => {
+                          setSearchInput(val);
+                          debouncedSearch(val);
+                        }}
                         placeholder="Search name, email, company..."
                         className="w-64"
                       />
@@ -1346,12 +1396,16 @@ export default function CampaignDetailPage() {
                                 <span className="text-xs text-gray-500">{r.company || '—'}</span>
                               </div>
                               <p className={`text-sm ${r.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{r.email}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                <EmailVerificationBadge
+                                  status={r.email_verification_status}
+                                  result={r.email_verification_result}
+                                />
+                                {r.is_suppressed && <StatusBadge status={r.suppression_reason} />}
+                              </div>
                               <p className="text-xs text-gray-500">
                                 {r.designation || '—'} • {r.industry || '—'}
                               </p>
-                              {r.is_suppressed && (
-                                <div className="mt-1"><StatusBadge status={r.suppression_reason} /></div>
-                              )}
                             </div>
                           </label>
                         ))}
@@ -1479,6 +1533,7 @@ export default function CampaignDetailPage() {
                         </div>
                         <SearchInput
                           key={openListId}
+                          value={listSearch}
                           onChange={setListSearch}
                           placeholder="Search this list..."
                           className="w-56"
@@ -1520,7 +1575,21 @@ export default function CampaignDetailPage() {
                               <div className="flex-1">
                                 <div className="flex items-center justify-between gap-3">
                                   <p className={`font-medium ${m.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{m.name}</p>
-                                  <StatusBadge status={m.is_suppressed ? m.suppression_reason : m.status} />
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    <EmailVerificationBadge
+                                      status={m.email_verification_status}
+                                      result={m.email_verification_result}
+                                    />
+                                    <StatusBadge status={m.is_suppressed ? m.suppression_reason : m.status} />
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleOpenEditMember(m); }}
+                                      title="Edit prospect details"
+                                      className="p-1 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                                    >
+                                      <FiEdit2 size={14} />
+                                    </button>
+                                  </div>
                                 </div>
                                 <p className={`text-sm ${m.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{m.email}</p>
                                 <p className="text-xs text-gray-500">{m.company || '—'}</p>
@@ -1543,10 +1612,26 @@ export default function CampaignDetailPage() {
                                   disabled={m.is_suppressed}
                                   className="mt-1 rounded border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
                                 />
-                                <StatusBadge status={m.is_suppressed ? m.suppression_reason : m.status} />
+                                <div className="flex items-center gap-2">
+                                  <StatusBadge status={m.is_suppressed ? m.suppression_reason : m.status} />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditMember(m)}
+                                    title="Edit prospect details"
+                                    className="p-1 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                                  >
+                                    <FiEdit2 size={14} />
+                                  </button>
+                                </div>
                               </div>
                               <p className={`font-medium mt-2 ${m.is_suppressed ? 'text-gray-400' : 'text-gray-900'}`}>{m.name}</p>
                               <p className={`text-sm ${m.is_suppressed ? 'text-gray-400' : 'text-gray-600'}`}>{m.email}</p>
+                              <div className="mt-1">
+                                <EmailVerificationBadge
+                                  status={m.email_verification_status}
+                                  result={m.email_verification_result}
+                                />
+                              </div>
                               <p className="text-xs text-gray-500 mt-1">{m.company || '—'}</p>
                             </div>
                           ))}
@@ -1890,6 +1975,63 @@ export default function CampaignDetailPage() {
             </button>
             <button onClick={handleAddRecipient} disabled={savingRecipient} className="btn-primary flex items-center gap-2">
               {savingRecipient ? <LoadingSpinner size="sm" /> : <FiUserPlus size={16} />} Add Prospect
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!editingMember} onClose={() => setEditingMember(null)} title="Edit Prospect" size="md">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Name *</label>
+              <input
+                className="input-field"
+                value={editForm.name}
+                onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="label">Email *</label>
+              <input
+                type="email"
+                className="input-field"
+                value={editForm.email}
+                onChange={(e) => setEditForm((p) => ({ ...p, email: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Company</label>
+              <input
+                className="input-field"
+                value={editForm.company}
+                onChange={(e) => setEditForm((p) => ({ ...p, company: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Designation</label>
+              <input
+                className="input-field"
+                value={editForm.designation}
+                onChange={(e) => setEditForm((p) => ({ ...p, designation: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Industry</label>
+              <input
+                className="input-field"
+                value={editForm.industry}
+                onChange={(e) => setEditForm((p) => ({ ...p, industry: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setEditingMember(null)} className="btn-secondary" disabled={savingEdit}>
+              Cancel
+            </button>
+            <button onClick={handleSaveEdit} disabled={savingEdit} className="btn-primary flex items-center gap-2">
+              {savingEdit ? <LoadingSpinner size="sm" /> : <FiEdit2 size={16} />} Save Changes
             </button>
           </div>
         </div>

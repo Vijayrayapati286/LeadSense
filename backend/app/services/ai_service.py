@@ -40,7 +40,7 @@ class AIService:
 
         prompt = self._build_prompt(campaign_data)
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {
                     "role": "system",
@@ -56,7 +56,7 @@ class AIService:
             ],
             response_format={"type": "json_object"},
             temperature=0.7,
-            max_tokens=800,
+            max_tokens=2000,
         )
 
         content = response.choices[0].message.content

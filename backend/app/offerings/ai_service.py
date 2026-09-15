@@ -22,7 +22,12 @@ settings = get_settings()
 GENERATE_SYSTEM = (
     "You are a B2B go-to-market analyst. Given a product/service description, "
     "produce a structured Ideal Customer Profile (ICP) and buyer persona as JSON only. "
-    "Do not invent fake company names. Keep lists concise (3-8 items each)."
+    "Do not invent fake company names. Keep lists concise (3-8 items each). "
+    "suggested_name must be a short polished product/offering name (2–6 words), "
+    "derived from the description — never copy the user's raw sentence, typos, "
+    "or informal phrasing into suggested_name. "
+    "short_description and detailed_description should expand the idea into clear "
+    "professional copy; do not paste the prompt verbatim as the offering name."
 )
 
 SEMANTIC_SYSTEM = (
@@ -63,9 +68,23 @@ class OfferingAIService:
                         current_values=current_values,
                     ),
                     temperature=0.4,
-                    max_tokens=1200,
+                    # gpt-oss models spend a large share of the budget on
+                    # reasoning tokens; 1200 left the JSON truncated to a
+                    # couple of keys with suggested_name missing.
+                    max_tokens=4096,
                 )
-                return self._validate_generated(raw)
+                payload = self._validate_generated(raw)
+                # If the model still omitted naming fields, fill them from
+                # the description so the UI never shows a blank offering name.
+                if not (payload.suggested_name or "").strip():
+                    payload.suggested_name = self._mock_suggested_name(description)
+                if not (payload.short_description or "").strip():
+                    payload.short_description = self._mock_short_description(description)
+                if not (payload.detailed_description or payload.description or "").strip():
+                    expanded = self._expand_mock_description(description)
+                    payload.detailed_description = expanded
+                    payload.description = expanded
+                return payload
             except Exception as exc:
                 last_err = exc
                 logger.warning("Offering AI generate attempt %s failed: %s", attempt + 1, exc)
@@ -125,7 +144,7 @@ class OfferingAIService:
             base_url="https://api.groq.com/openai/v1",
         )
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -297,14 +316,17 @@ Each version must use a distinctly different opening angle."""
     ) -> str:
         requested = ", ".join(requested_fields or []) or "all fields"
         context = json.dumps(current_values or {}, ensure_ascii=False)[:3000]
-        return f"""Analyze this offering and return JSON with exactly these keys:
+        return f"""Analyze this offering and return a single JSON object.
+Priority keys (always include these first):
+suggested_name, short_description, detailed_description, description, product_type,
+target_customer, pricing_range.
+
+Then also include:
 industries (array), company_size (object with min, max, label),
 departments, job_titles, seniority, geographies, business_models,
 decision_maker_types, buying_roles, pain_points, business_problems,
 use_cases, desired_outcomes, benefits, selling_points, positive_keywords, negative_keywords,
-must_have_rules, nice_to_have_rules, exclusion_rules,
-suggested_name, short_description, detailed_description, description, product_type,
-target_customer, pricing_range.
+must_have_rules, nice_to_have_rules, exclusion_rules.
 
 Requested fields: {requested}
 Current offering context (keep suggestions coherent, but do not merely copy it):
@@ -312,6 +334,12 @@ Current offering context (keep suggestions coherent, but do not merely copy it):
 
 Offering description:
 {description.strip()}
+
+Rules for naming/copy:
+- suggested_name: invent a concise product name based on the offering (not the raw prompt text).
+- short_description: one professional sentence summarizing the offering.
+- detailed_description: 2–4 sentences expanding what it does and who it helps.
+- Never set suggested_name equal to the offering description prompt.
 """
 
     def _semantic_prompt(self, offering: Any, icp: Any) -> str:
@@ -340,14 +368,127 @@ Industry: {getattr(icp, 'industry', '')}
 About: {(getattr(icp, 'about', '') or '')[:800]}
 """
 
+    @staticmethod
+    def _normalize_prompt(description: str) -> str:
+        return " ".join((description or "").strip().split())
+
+    @classmethod
+    def _detect_mock_domain(cls, description: str) -> str:
+        lower = (description or "").lower()
+        if any(
+            phrase in lower
+            for phrase in (
+                "commercial banking",
+                "commercial lending",
+                "working capital",
+                "equipment financing",
+                "banking",
+                "bank ",
+                "lending",
+                "loan",
+            )
+        ):
+            return "banking"
+        if any(w in lower for w in ("crm", "customer relationship", "sales force", "salesforce")):
+            return "crm"
+        if any(w in lower for w in ("call", "contact center", "bpo", "coaching", "qa")):
+            return "call"
+        if any(w in lower for w in ("hr", "human resource", "talent", "recruit")):
+            return "hr"
+        if any(w in lower for w in ("market", "campaign", "lead gen")):
+            return "marketing"
+        if any(w in lower for w in ("analytic", "dashboard", "bi ", "business intelligence")):
+            return "analytics"
+        return "general"
+
+    @classmethod
+    def _mock_suggested_name(cls, description: str) -> str:
+        """Invent a concise product-style offering name from a rough prompt.
+
+        Never echo the raw sentence the user typed — that belongs in the
+        description fields, not suggested_name.
+        """
+        domain = cls._detect_mock_domain(description)
+        names = {
+            "banking": "Banking Growth Platform",
+            "crm": "Sales CRM Platform",
+            "call": "AI Call Copilot",
+            "hr": "Talent Operations Suite",
+            "marketing": "Demand Generation Platform",
+            "analytics": "Revenue Analytics Suite",
+            "general": "Business Workflow Platform",
+        }
+        return names.get(domain, names["general"])
+
+    @classmethod
+    def _mock_short_description(cls, description: str) -> str:
+        domain = cls._detect_mock_domain(description)
+        shorts = {
+            "banking": "Lending and relationship tools for modern banking and commercial finance teams.",
+            "crm": "CRM software that helps sales teams track pipeline, accounts, and follow-ups.",
+            "call": "AI-powered call coaching and conversation intelligence for contact centers.",
+            "hr": "HR workflows that help people teams hire, retain, and support employees.",
+            "marketing": "Campaign and lead tools that help marketing teams create demand.",
+            "analytics": "Analytics that help revenue teams see pipeline and performance clearly.",
+            "general": "B2B software that helps teams streamline operations and improve outcomes.",
+        }
+        return shorts.get(domain, shorts["general"])
+
+    @classmethod
+    def _expand_mock_description(cls, description: str, *, domain_hint: str | None = None) -> str:
+        """Turn a short prompt into a full detailed description (mock mode only).
+
+        Real Groq generation expands prompts; mock must invent coherent copy
+        instead of pasting the user's rough sentence into every field.
+        """
+        text = cls._normalize_prompt(description)
+        if not text:
+            return (
+                "A B2B solution that helps teams streamline operations, "
+                "improve visibility, and drive better outcomes."
+            )
+        # User already wrote a full description — keep it.
+        if len(text) >= 120:
+            return text
+
+        domain = cls._detect_mock_domain(text)
+        hint = domain_hint or {
+            "banking": "banking and financial-services",
+            "crm": "CRM / sales",
+            "call": "contact-center",
+            "hr": "HR / people-ops",
+            "marketing": "marketing",
+            "analytics": "analytics",
+            "general": "B2B software",
+        }.get(domain, "B2B software")
+
+        return (
+            f"This {hint} offering helps teams run day-to-day work more effectively. "
+            f"Based on the buyer's need around \"{text}\", it addresses gaps in visibility, "
+            f"manual effort, and inconsistent processes. Teams use it to track progress, "
+            f"collaborate across roles, reduce busywork, and scale with a clearer operating "
+            f"picture and stronger customer outcomes."
+        )
+
     def _mock_generate(self, description: str) -> GeneratedIcpPayload:
         lower = description.lower()
-        is_banking = any(
-            phrase in lower
-            for phrase in ("commercial banking", "commercial lending", "working capital", "equipment financing")
-        )
+        prompt = self._normalize_prompt(description)
+        domain = self._detect_mock_domain(description)
+        is_banking = domain == "banking"
+        is_crm = domain == "crm"
+        is_call = domain == "call"
+
         if is_banking:
-            detailed = description.strip()
+            detailed = self._expand_mock_description(
+                description,
+                domain_hint="banking and financial-services",
+            )
+            # Preserve the known banking fixture name when the prompt is clearly
+            # the commercial-lending scenario used in tests / demos.
+            rich_banking = any(
+                phrase in lower
+                for phrase in ("commercial banking", "commercial lending", "working capital", "equipment financing")
+            )
             return GeneratedIcpPayload(
                 industries=["Banking", "Financial Services", "Commercial Lending"],
                 company_size={"min": 200, "max": 10000, "label": "200-10000 employees"},
@@ -391,10 +532,16 @@ About: {(getattr(icp, 'about', '') or '')[:800]}
                 ],
                 positive_keywords=["commercial banking", "lending", "working capital", "portfolio growth"],
                 negative_keywords=["consumer banking", "personal loans"],
-                suggested_name="Commercial Business Growth & Lending Solutions",
+                suggested_name=(
+                    "Commercial Business Growth & Lending Solutions"
+                    if rich_banking
+                    else self._mock_suggested_name(prompt)
+                ),
                 short_description=(
                     "Flexible commercial lending solutions for businesses seeking financing "
                     "for growth and working capital."
+                    if rich_banking
+                    else self._mock_short_description(prompt)
                 ),
                 description=detailed,
                 detailed_description=detailed,
@@ -403,13 +550,60 @@ About: {(getattr(icp, 'about', '') or '')[:800]}
                 pricing_range="Contact sales",
                 is_mock=True,
             )
-        is_call = any(w in lower for w in ("call", "contact center", "bpo", "coaching", "qa"))
+
+        if is_crm:
+            detailed = self._expand_mock_description(description, domain_hint="CRM / sales")
+            return GeneratedIcpPayload(
+                industries=["SaaS", "Technology", "Enterprise Software"],
+                company_size={"min": 50, "max": 5000, "label": "50-5000"},
+                departments=["Sales", "Revenue", "Customer Success"],
+                job_titles=["VP Sales", "CRO", "Head of Revenue", "Sales Director", "Sales Manager"],
+                seniority=["C-level", "VP", "Director", "Manager"],
+                geographies=["United States", "Europe", "India"],
+                business_models=["B2B", "SaaS"],
+                decision_maker_types=["Economic buyer", "Champion"],
+                buying_roles=["Decision maker", "Influencer"],
+                pain_points=["Scattered customer data", "Manual pipeline tracking", "Low forecast accuracy"],
+                business_problems=["Pipeline leakage", "Inconsistent follow-up", "Weak CRM adoption"],
+                use_cases=["Lead tracking", "Opportunity management", "Account visibility"],
+                desired_outcomes=["Higher win rates", "Cleaner pipeline", "Faster follow-up"],
+                benefits=["Centralized contacts", "Pipeline visibility", "Team collaboration"],
+                selling_points=["Fast setup", "Sales-friendly workflows", "Clear reporting"],
+                positive_keywords=["crm", "sales", "pipeline", "accounts"],
+                negative_keywords=["student", "intern", "freelancer"],
+                must_have_rules=["Sales or revenue leadership"],
+                nice_to_have_rules=["Existing CRM or spreadsheet-based tracking"],
+                exclusion_rules=["Individual contributor only", "Unrelated industry"],
+                suggested_name=self._mock_suggested_name(prompt),
+                short_description=self._mock_short_description(prompt),
+                description=detailed,
+                detailed_description=detailed,
+                product_type="SaaS",
+                target_customer="B2B sales and revenue teams that need clearer pipeline and account visibility",
+                pricing_range="Contact sales",
+                is_mock=True,
+            )
+
         industries = ["BPO", "Contact Centers", "SaaS", "Telecom"] if is_call else ["SaaS", "Technology", "Enterprise Software"]
         titles = (
             ["COO", "VP Operations", "Head of Customer Experience", "Contact Center Director", "Sales Director"]
             if is_call
             else ["VP Sales", "CRO", "Head of Revenue", "Sales Director", "COO"]
         )
+        if is_call:
+            detailed = (
+                "An AI platform that analyzes customer calls, provides real-time coaching, "
+                "and evaluates agent performance for contact centers and BPOs."
+            )
+            suggested_name = self._mock_suggested_name(prompt)
+            short_description = self._mock_short_description(prompt)
+            target_customer = "Contact center and BPO operations teams"
+        else:
+            detailed = self._expand_mock_description(description, domain_hint="B2B software")
+            suggested_name = self._mock_suggested_name(prompt)
+            short_description = self._mock_short_description(prompt)
+            target_customer = "B2B teams seeking better workflow visibility and outcomes"
+
         return GeneratedIcpPayload(
             industries=industries,
             company_size={"min": 200, "max": 5000, "label": "200-5000"},
@@ -443,30 +637,12 @@ About: {(getattr(icp, 'about', '') or '')[:800]}
             must_have_rules=["Operations or sales leadership"],
             nice_to_have_rules=["Existing QA or coaching program"],
             exclusion_rules=["Individual contributor only", "Unrelated industry"],
-            suggested_name="AI Call Copilot" if is_call else "Revenue Workflow Intelligence",
-            short_description=(
-                "AI-powered call coaching and conversation intelligence"
-                if is_call
-                else "Workflow intelligence for modern B2B revenue teams"
-            ),
-            description=(
-                "An AI platform that analyzes customer calls, provides real-time coaching, "
-                "and evaluates agent performance for contact centers and BPOs."
-                if is_call
-                else "An AI platform that helps B2B sales teams improve conversion and pipeline visibility."
-            ),
-            detailed_description=(
-                "An AI platform that analyzes customer calls, provides real-time coaching, "
-                "and evaluates agent performance for contact centers and BPOs."
-                if is_call
-                else description.strip()
-            ),
+            suggested_name=suggested_name,
+            short_description=short_description,
+            description=detailed,
+            detailed_description=detailed,
             product_type="SaaS",
-            target_customer=(
-                "Contact center and BPO operations teams"
-                if is_call
-                else "B2B revenue teams seeking better workflow visibility"
-            ),
+            target_customer=target_customer,
             pricing_range="Contact sales",
             is_mock=True,
         )

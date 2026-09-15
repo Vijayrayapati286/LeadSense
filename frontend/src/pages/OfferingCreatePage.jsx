@@ -202,7 +202,7 @@ export default function OfferingCreatePage() {
         requested_fields: requestedFields || [],
         current_values: formToPayload(form),
       });
-      const reconciled = reconcileAiDraft(form, result, requestedFields);
+      const reconciled = reconcileAiDraft(form, result, requestedFields, provenance);
       setForm(reconciled.form);
       setSuggestions((prev) => {
         if (!requestedFields?.length) return reconciled.suggestions;

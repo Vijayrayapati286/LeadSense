@@ -12,6 +12,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Baked in from the host's checked-out commit at build time (see
+# docker-compose.yml's backend.build.args) so /health and / can report
+# exactly what code this image was built from — the fast way to confirm a
+# deploy actually rebuilt, instead of a stale container quietly surviving a
+# `git pull` that never ran `docker compose build`.
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
 # Image already has uid 1000 (pwuser); reuse it instead of creating another.
 RUN mkdir -p /app/outputs/salesnav /app/app/linkedin/outputs /app/app/salesnav/outputs /app/app/profile_extractor/outputs \
     && chown -R pwuser:pwuser /app

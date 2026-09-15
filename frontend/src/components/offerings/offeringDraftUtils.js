@@ -116,17 +116,23 @@ export function draftToFormValues(draft) {
   };
 }
 
-export function reconcileAiDraft(form, draft, requestedFields = null) {
+export function reconcileAiDraft(form, draft, requestedFields = null, currentProvenance = {}) {
   const generated = draftToFormValues(draft);
   const fields = requestedFields?.length ? requestedFields : Object.keys(generated);
   const nextForm = { ...form };
   const suggestions = {};
   const provenance = {};
+  const fullRegenerate = !requestedFields?.length;
 
   fields.forEach((field) => {
     const suggested = normalizeValue(field, generated[field]);
     if (isBlank(suggested) || valuesEqual(field, form[field], suggested)) return;
-    if (isBlank(form[field])) {
+    // Blank fields, or fields still carrying a prior AI draft on a full
+    // "Generate draft", take the new suggestion immediately. User-edited
+    // values stay protected and surface as reviewable suggestions instead.
+    const priorSource = currentProvenance[field];
+    const replacePriorAi = fullRegenerate && (priorSource === 'ai_generated' || priorSource === 'ai_accepted');
+    if (isBlank(form[field]) || replacePriorAi) {
       nextForm[field] = suggested;
       provenance[field] = 'ai_generated';
     } else {
