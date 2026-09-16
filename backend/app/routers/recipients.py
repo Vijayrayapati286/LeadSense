@@ -135,9 +135,11 @@ async def upload_excel(
                     duplicate_count=duplicate_count,
                 )
 
-        imported, updated, recipient_ids = excel_service.import_parsed(db, parsed, field_ids_by_name)
+        imported, updated, recipient_ids = excel_service.import_parsed(
+            db, parsed, field_ids_by_name, org_id=getattr(current_user, "org_id", None)
+        )
 
-        group = group_service.get_or_create(db, group_name.strip())
+        group = group_service.get_or_create(db, group_name.strip(), org_id=getattr(current_user, "org_id", None))
         group_service.add_members(db, group.id, recipient_ids)
 
         if campaign_id is not None:
@@ -174,13 +176,17 @@ def create_recipient(
     already exists) a single recipient, optionally tagging it straight into
     a campaign + template + list in the same call."""
     recipient, _created = excel_service.create_single_recipient(
-        db, {"name": data.name, "email": data.email, "company": data.company,
-             "designation": data.designation, "industry": data.industry}
+        db,
+        {"name": data.name, "email": data.email, "company": data.company,
+         "designation": data.designation, "industry": data.industry},
+        org_id=getattr(current_user, "org_id", None),
     )
 
     group_id = None
     if data.group_name and data.group_name.strip():
-        group = group_service.get_or_create(db, data.group_name.strip())
+        group = group_service.get_or_create(
+            db, data.group_name.strip(), org_id=getattr(current_user, "org_id", None)
+        )
         group_service.add_members(db, group.id, [recipient.id])
         group_id = group.id
 
@@ -203,6 +209,9 @@ def update_recipient(
     recipient = db.query(Recipient).filter(Recipient.id == recipient_id).first()
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
+    org_id = getattr(current_user, "org_id", None)
+    if org_id and recipient.org_id != org_id:
+        raise HTTPException(status_code=404, detail="Recipient not found")
     recipient.name = data.name
     recipient.email = data.email
     recipient.company = data.company
@@ -223,6 +232,9 @@ def list_recipients(
     current_user: User = Depends(get_current_user),
 ):
     query = db.query(Recipient)
+    org_id = getattr(current_user, "org_id", None)
+    if org_id:
+        query = query.filter(Recipient.org_id == org_id)
 
     if search:
         term = f"%{search}%"
@@ -236,7 +248,10 @@ def list_recipients(
         query = query.filter(Recipient.industry.ilike(f"%{industry}%"))
 
     total = query.count()
-    selected_count = db.query(Recipient).filter(Recipient.is_selected == True).count()
+    selected_q = db.query(Recipient).filter(Recipient.is_selected == True)  # noqa: E712
+    if org_id:
+        selected_q = selected_q.filter(Recipient.org_id == org_id)
+    selected_count = selected_q.count()
 
     recipients = (
         query.order_by(Recipient.name)

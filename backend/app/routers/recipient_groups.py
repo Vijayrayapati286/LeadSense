@@ -34,7 +34,9 @@ def create_group(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        group = group_service.create(db, data.name, data.description)
+        group = group_service.create(
+            db, data.name, data.description, org_id=getattr(current_user, "org_id", None)
+        )
         return _to_response(group, 0)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -46,7 +48,7 @@ def list_groups(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    results = group_service.list_groups(db, search=search)
+    results = group_service.list_groups(db, search=search, org_id=getattr(current_user, "org_id", None))
     return [_to_response(r["group"], r["prospect_count"]) for r in results]
 
 
@@ -58,6 +60,9 @@ def get_group(
 ):
     group = group_service.get_by_id(db, group_id)
     if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    org_id = getattr(current_user, "org_id", None)
+    if org_id and group.org_id != org_id:
         raise HTTPException(status_code=404, detail="Group not found")
     _, total = group_service.get_members(db, group_id, page=1, page_size=1)
     return _to_response(group, total)

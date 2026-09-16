@@ -8,6 +8,24 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.connection import Base
 
 
+class Organization(Base):
+    """Tenant organization. Each tenant has a unique org_id and integration_token."""
+
+    __tablename__ = "organizations"
+
+    org_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    org_type: Mapped[str] = mapped_column(String(50), nullable=False, default="TENANT")
+    integration_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    users: Mapped[list["User"]] = relationship("User", back_populates="organization")
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -17,9 +35,43 @@ class User(Base):
     department: Mapped[str] = mapped_column(String(255), default="Sales")
     azure_oid: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
+    role: Mapped[str] = mapped_column(String(50), nullable=False, default="USER")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
+    organization: Mapped["Organization | None"] = relationship("Organization", back_populates="users")
     campaigns: Mapped[list["Campaign"]] = relationship("Campaign", back_populates="owner_user")
+
+
+class Invite(Base):
+    """Tenant membership invite — pending until accepted, cancelled, or expired."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=False, index=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(50), nullable=False, default="USER")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING", index=True)
+    invite_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    invited_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    invited_by: Mapped["User | None"] = relationship("User", foreign_keys=[invited_by_user_id])
 
 
 class Campaign(Base):
@@ -36,6 +88,9 @@ class Campaign(Base):
     status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
     emails_sent: Mapped[int] = mapped_column(Integer, default=0)
     user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # ── Scheduling ─────────────────────────────────────────────────────────
@@ -91,6 +146,9 @@ class Mailer(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     closing: Mapped[str | None] = mapped_column(Text, nullable=True)
     cta: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -100,6 +158,9 @@ class Recipient(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
     designation: Mapped[str | None] = mapped_column(String(255), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -214,10 +275,14 @@ class SuppressionEntry(Base):
 
 class RecipientGroup(Base):
     __tablename__ = "recipient_groups"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_recipient_groups_org_name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     members: Mapped[list["RecipientGroupMember"]] = relationship(
@@ -238,9 +303,13 @@ class RecipientGroupMember(Base):
 
 class Tag(Base):
     __tablename__ = "tags"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_tags_org_name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     recipient_links: Mapped[list["RecipientTag"]] = relationship(

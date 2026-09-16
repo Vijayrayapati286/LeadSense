@@ -7,33 +7,41 @@ from app.models import CampaignRecipient, CampaignRecipientList, Recipient, Reci
 
 
 class RecipientGroupService:
-    def create(self, db: Session, name: str, description: str | None = None) -> RecipientGroup:
-        existing = db.query(RecipientGroup).filter(RecipientGroup.name == name).first()
+    def create(self, db: Session, name: str, description: str | None = None, org_id: str | None = None) -> RecipientGroup:
+        q = db.query(RecipientGroup).filter(RecipientGroup.name == name)
+        if org_id:
+            q = q.filter(RecipientGroup.org_id == org_id)
+        existing = q.first()
         if existing:
             raise ValueError(f"Group '{name}' already exists")
 
-        group = RecipientGroup(name=name, description=description)
+        group = RecipientGroup(name=name, description=description, org_id=org_id)
         db.add(group)
         db.commit()
         db.refresh(group)
         return group
 
-    def get_or_create(self, db: Session, name: str) -> RecipientGroup:
-        group = db.query(RecipientGroup).filter(RecipientGroup.name == name).first()
+    def get_or_create(self, db: Session, name: str, org_id: str | None = None) -> RecipientGroup:
+        q = db.query(RecipientGroup).filter(RecipientGroup.name == name)
+        if org_id:
+            q = q.filter(RecipientGroup.org_id == org_id)
+        group = q.first()
         if group:
             return group
-        group = RecipientGroup(name=name)
+        group = RecipientGroup(name=name, org_id=org_id)
         db.add(group)
         db.commit()
         db.refresh(group)
         return group
 
-    def list_groups(self, db: Session, search: str = "") -> list[dict]:
+    def list_groups(self, db: Session, search: str = "", org_id: str | None = None) -> list[dict]:
         query = db.query(
             RecipientGroup,
             func.count(RecipientGroupMember.recipient_id).label("prospect_count"),
         ).outerjoin(RecipientGroupMember, RecipientGroupMember.group_id == RecipientGroup.id)
 
+        if org_id:
+            query = query.filter(RecipientGroup.org_id == org_id)
         if search:
             query = query.filter(RecipientGroup.name.ilike(f"%{search}%"))
 

@@ -29,11 +29,25 @@ export const authService = {
 
 export const dashboardService = {
   getStats: (params) => api.get('/dashboard/stats', { params }),
+  getAdminStats: () => api.get('/dashboard/admin'),
   exportReport: (params) => api.get('/dashboard/export-report', { params, responseType: 'blob' }),
 };
 
 export const userService = {
   getAll: () => api.get('/users'),
+  create: (data) => api.post('/users', data),
+  update: (id, data) => api.put(`/users/${id}`, data),
+  updateStatus: (id, status) => api.patch(`/users/${id}/status`, { status }),
+  resetPassword: (id, password) => api.post(`/users/${id}/reset-password`, { password }),
+  remove: (id) => api.delete(`/users/${id}`),
+};
+
+export const inviteService = {
+  list: (params) => api.get('/invites', { params }),
+  create: (data) => api.post('/invites', data),
+  cancel: (id) => api.post(`/invites/${id}/cancel`),
+  accept: (id, data) => api.post(`/invites/${id}/accept`, data),
+  remove: (id) => api.delete(`/invites/${id}`),
 };
 
 export const campaignService = {

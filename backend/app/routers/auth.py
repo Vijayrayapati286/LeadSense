@@ -19,6 +19,20 @@ auth_service = AuthService()
 settings = get_settings()
 
 
+def _user_response(user: User) -> UserResponse:
+    org = getattr(user, "organization", None)
+    return UserResponse(
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        department=user.department,
+        org_id=getattr(user, "org_id", None),
+        role=getattr(user, "role", "USER") or "USER",
+        status=getattr(user, "status", "ACTIVE") or "ACTIVE",
+        org_name=org.org_name if org else None,
+    )
+
+
 @router.get("/login")
 def login():
     """Get Microsoft SSO login URL."""
@@ -65,7 +79,7 @@ def dev_login(data: DevLoginRequest | None = None, db: Session = Depends(get_db)
         raise HTTPException(status_code=403, detail=str(exc))
     return AuthCallbackResponse(
         access_token=result["access_token"],
-        user=UserResponse.model_validate(result["user"]),
+        user=_user_response(result["user"]),
     )
 
 
@@ -80,14 +94,14 @@ def password_login(data: PasswordLoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=str(exc))
     return AuthCallbackResponse(
         access_token=result["access_token"],
-        user=UserResponse.model_validate(result["user"]),
+        user=_user_response(result["user"]),
     )
 
 
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     """Get current authenticated user profile."""
-    return UserResponse.model_validate(current_user)
+    return _user_response(current_user)
 
 
 @router.put("/me", response_model=UserResponse)
@@ -101,7 +115,7 @@ def update_me(
         user = auth_service.update_profile(db, current_user, data.model_dump(exclude_unset=True))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return UserResponse.model_validate(user)
+    return _user_response(user)
 
 
 @router.post("/logout")
