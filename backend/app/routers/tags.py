@@ -25,7 +25,7 @@ def create_tag(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    tag = tag_service.get_or_create(db, data.name)
+    tag = tag_service.get_or_create(db, data.name, org_id=getattr(current_user, "org_id", None))
     return _to_response(tag, 0)
 
 
@@ -35,7 +35,7 @@ def list_tags(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    results = tag_service.list_tags(db, search=search)
+    results = tag_service.list_tags(db, search=search, org_id=getattr(current_user, "org_id", None))
     return [_to_response(r["tag"], r["recipient_count"]) for r in results]
 
 

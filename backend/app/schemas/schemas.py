@@ -15,6 +15,34 @@ class UserResponse(BaseModel):
     name: str
     email: str
     department: str
+    org_id: str | None = None
+    role: str = "USER"
+    status: str = "ACTIVE"
+    org_name: str | None = None
+
+
+class UserCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    role: Literal["ADMIN", "USER"] = "USER"
+    department: str = Field(default="Sales", min_length=1, max_length=255)
+    status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
+
+
+class UserAdminUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    department: str | None = Field(None, min_length=1, max_length=255)
+    role: Literal["ADMIN", "USER"] | None = None
+    status: Literal["ACTIVE", "INACTIVE"] | None = None
+
+
+class UserStatusUpdateRequest(BaseModel):
+    status: Literal["ACTIVE", "INACTIVE"]
+
+
+class UserResetPasswordRequest(BaseModel):
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 class UserProfileUpdate(BaseModel):
@@ -86,6 +114,64 @@ class DashboardResponse(BaseModel):
     campaign_status: list[CampaignStatusStat]
     recent_activity: list[RecentActivity]
     recent_campaigns: list[RecentCampaign]
+
+
+class AdminDashboardSummary(BaseModel):
+    total_users: int
+    campaigns: int
+    emails_sent: int
+    delivered: int
+    bounced: int
+    replies: int
+
+
+class AdminUserActivity(BaseModel):
+    user_id: int
+    name: str
+    email: str
+    campaigns: int
+    emails_sent: int
+    status: str
+
+
+class AdminCampaignPerformance(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    sent: int
+    delivered: int
+    bounced: int
+    replied: int
+
+
+class AdminIcpStats(BaseModel):
+    accounts: int
+    contacts: int
+    verified_emails: int
+    invalid_emails: int
+
+
+class AdminLinkedInStats(BaseModel):
+    total_extracted: int
+    successfully_extracted: int
+    failed: int
+    added_to_icp: int
+
+
+class AdminEmailVerificationStats(BaseModel):
+    emails_verified: int
+    valid: int
+    invalid: int
+    risky: int
+
+
+class AdminDashboardResponse(BaseModel):
+    org_id: str
+    summary: AdminDashboardSummary
+    user_activity: list[AdminUserActivity]
+    campaign_performance: list[AdminCampaignPerformance]
+    icp: AdminIcpStats
+    linkedin: AdminLinkedInStats
+    email_verification: AdminEmailVerificationStats
 
 
 # ── Campaign ──────────────────────────────────────────────────────────────────

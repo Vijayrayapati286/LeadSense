@@ -10,11 +10,31 @@ from jose import jwt
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import User
+from app.models import Organization, User
 from app.services.core_users import is_allowed_login
+from app.services.tenant_constants import DEFAULT_TENANT_KEY, TENANT_DEFS
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _default_tenant_org_id(db: Session) -> str | None:
+    """Resolve Tenant One's opaque org_id from the DB (never hardcode TENANT-00x)."""
+    tenant = next((t for t in TENANT_DEFS if t["tenant_key"] == DEFAULT_TENANT_KEY), None)
+    if tenant:
+        org = db.query(Organization).filter(Organization.org_name == tenant["org_name"]).first()
+        if org:
+            return org.org_id
+        for legacy in tenant.get("legacy_org_ids") or ():
+            org = db.query(Organization).filter(Organization.org_id == legacy).first()
+            if org:
+                return org.org_id
+    admin = db.query(User).filter(User.email == "admin1@tenant.com").first()
+    if admin and admin.org_id:
+        return admin.org_id
+    first = db.query(Organization).order_by(Organization.created_at).first()
+    return first.org_id if first else None
+
 
 # In-memory auth state store (use Redis in production)
 _auth_states: dict[str, datetime] = {}
@@ -120,6 +140,8 @@ class AuthService:
         user = db.query(User).filter(User.email == email).first()
         if not user or not user.password_hash or not self.verify_password(password, user.password_hash):
             raise ValueError("Invalid email or password")
+        if getattr(user, "status", "ACTIVE") != "ACTIVE":
+            raise ValueError("User account is not active")
         token = self._create_jwt(user)
         return {"access_token": token, "user": user}
 
@@ -134,18 +156,26 @@ class AuthService:
             raise ValueError(f"{email or '(no email)'} is not authorized to access this application")
 
         user = db.query(User).filter(User.email == email).first()
+        default_org_id = _default_tenant_org_id(db)
         if not user:
             user = User(
                 name=profile.get("displayName", "Unknown"),
                 email=email,
                 department=profile.get("department", "Sales"),
                 azure_oid=oid,
+                org_id=default_org_id,
+                role="USER",
+                status="ACTIVE",
             )
             db.add(user)
         else:
             user.name = profile.get("displayName", user.name)
             user.department = profile.get("department", user.department)
             user.azure_oid = oid
+            if not getattr(user, "org_id", None) and default_org_id:
+                user.org_id = default_org_id
+            if getattr(user, "status", "ACTIVE") != "ACTIVE":
+                raise ValueError("User account is not active")
 
         db.commit()
         db.refresh(user)
@@ -156,6 +186,8 @@ class AuthService:
             "sub": str(user.id),
             "email": user.email,
             "name": user.name,
+            "org_id": getattr(user, "org_id", None),
+            "role": getattr(user, "role", "USER"),
             "exp": datetime.now(timezone.utc) + timedelta(hours=24),
         }
         return jwt.encode(payload, self.settings.secret_key, algorithm="HS256")
@@ -170,7 +202,12 @@ class AuthService:
         payload = self.verify_token(token)
         if not payload:
             return None
-        return db.query(User).filter(User.id == int(payload["sub"])).first()
+        user = db.query(User).filter(User.id == int(payload["sub"])).first()
+        if not user:
+            return None
+        if getattr(user, "status", "ACTIVE") != "ACTIVE":
+            return None
+        return user
 
     def update_profile(self, db: Session, user: User, update_data: dict) -> User:
         if update_data.get("email") and update_data["email"] != user.email:

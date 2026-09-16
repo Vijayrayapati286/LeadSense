@@ -37,6 +37,17 @@ router = APIRouter(tags=["Campaigns"])
 campaign_service = CampaignService()
 
 
+def _org_id(user: User) -> str | None:
+    return getattr(user, "org_id", None)
+
+
+def _campaign_or_404(db: Session, campaign_id: int, user: User) -> Campaign:
+    campaign = campaign_service.get_by_id(db, campaign_id, org_id=_org_id(user))
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
 def _verification_fields(db: Session, emails: list[str], suppression_reasons: list[str | None]) -> list[tuple[str, str | None]]:
     lookup = verification_lookup(db, emails)
     allowed = MillionVerifierService()._allowed_results()
@@ -59,7 +70,9 @@ def create_campaign(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        campaign = campaign_service.create(db, data, user_id=current_user.id)
+        campaign = campaign_service.create(
+            db, data, user_id=current_user.id, org_id=getattr(current_user, "org_id", None)
+        )
         return CampaignResponse.model_validate(campaign)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -72,7 +85,9 @@ def list_campaigns(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaigns = campaign_service.get_all(db, skip=skip, limit=limit)
+    campaigns = campaign_service.get_all(
+        db, skip=skip, limit=limit, org_id=getattr(current_user, "org_id", None)
+    )
     return [CampaignResponse.model_validate(c) for c in campaigns]
 
 
@@ -82,7 +97,9 @@ def get_campaign(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = campaign_service.get_by_id(db, campaign_id)
+    campaign = campaign_service.get_by_id(
+        db, campaign_id, org_id=getattr(current_user, "org_id", None)
+    )
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return CampaignResponse.model_validate(campaign)
@@ -94,6 +111,7 @@ def get_campaign_template(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     template = campaign_service.get_template(db, campaign_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -106,6 +124,7 @@ def list_campaign_templates(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     templates = campaign_service.list_templates(db, campaign_id)
     return [TemplateResponse.model_validate(t) for t in templates]
 
@@ -145,7 +164,9 @@ def update_campaign(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        campaign = campaign_service.update(db, campaign_id, data)
+        campaign = campaign_service.update(
+            db, campaign_id, data, org_id=getattr(current_user, "org_id", None)
+        )
         return CampaignResponse.model_validate(campaign)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -158,7 +179,7 @@ def delete_campaign(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        campaign_service.delete(db, campaign_id)
+        campaign_service.delete(db, campaign_id, org_id=getattr(current_user, "org_id", None))
         return MessageResponse(message="Campaign deleted successfully")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -171,6 +192,7 @@ def save_campaign_template(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     try:
         template = campaign_service.save_template(db, campaign_id, data.model_dump())
         return TemplateResponse.model_validate(template)
@@ -184,6 +206,7 @@ def list_sequence_stages(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     stages = campaign_service.list_sequence_stages(db, campaign_id)
     return [CampaignSequenceStageResponse.model_validate(s) for s in stages]
 
@@ -195,6 +218,7 @@ def create_sequence_stage(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     try:
         stage = campaign_service.create_sequence_stage(db, campaign_id, data)
         return CampaignSequenceStageResponse.model_validate(stage)
@@ -235,6 +259,7 @@ def get_campaign_recipients(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     rows = (
         db.query(CampaignRecipient)
         .filter(CampaignRecipient.campaign_id == campaign_id)
@@ -265,6 +290,7 @@ def list_campaign_lists(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     return campaign_service.list_campaign_lists(db, campaign_id)
 
 
@@ -275,6 +301,7 @@ def get_campaign_list_members(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     rows = campaign_service.get_list_members(db, campaign_id, group_id)
     emails = [recipient.email for _, recipient in rows]
     reasons = [recipient.suppression_reason for _, recipient in rows]
@@ -306,6 +333,7 @@ def retag_campaign_list(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     updated = campaign_service.retag_list(db, campaign_id, group_id, data.template_id)
     return MessageResponse(message=f"Re-tagged {updated} prospect(s)")
 
@@ -318,9 +346,7 @@ def schedule_campaign_list(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    _campaign_or_404(db, campaign_id, current_user)
 
     scheduled_at = data.scheduled_at
     if scheduled_at.tzinfo is None:
