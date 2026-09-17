@@ -20,6 +20,7 @@ import {
   FiAlertCircle,
   FiUsers,
   FiChevronsRight,
+  FiKey,
 } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 
@@ -72,6 +73,7 @@ function getNavItems(user) {
         children: [
           { path: '/users', label: 'Members', icon: FiUsers },
           { path: '/invites', label: 'Invites', icon: FiMail },
+          { path: '/organizations', label: 'Onboard orgs', icon: FiKey },
         ],
       },
       ...NAV_ITEMS.slice(1),

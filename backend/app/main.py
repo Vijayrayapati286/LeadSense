@@ -23,9 +23,11 @@ from app.routers import (
     custom_fields,
     dashboard,
     email,
+    integrations,
     invites,
     logs,
     mailers,
+    organizations,
     recipient_groups,
     recipients,
     salesnav,
@@ -112,6 +114,8 @@ app.include_router(app_settings.router, prefix=API_PREFIX)
 app.include_router(custom_fields.router, prefix=API_PREFIX)
 app.include_router(users.router, prefix=API_PREFIX)
 app.include_router(invites.router, prefix=API_PREFIX)
+app.include_router(organizations.router, prefix=API_PREFIX)
+app.include_router(integrations.router, prefix=API_PREFIX)
 app.include_router(salesnav.router, prefix=API_PREFIX)
 app.include_router(linkedin_router, prefix=API_PREFIX)
 app.include_router(profile_extractor_router, prefix=API_PREFIX)

@@ -50,6 +50,16 @@ export const inviteService = {
   remove: (id) => api.delete(`/invites/${id}`),
 };
 
+export const organizationService = {
+  list: () => api.get('/organizations'),
+  getMe: () => api.get('/organizations/me'),
+  getById: (orgId) => api.get(`/organizations/${orgId}`),
+  create: (data) => api.post('/organizations', data),
+  listTokens: (orgId) => api.get(`/organizations/${orgId}/tokens`),
+  createToken: (orgId, data) => api.post(`/organizations/${orgId}/tokens`, data),
+  revokeToken: (orgId, tokenId) => api.post(`/organizations/${orgId}/tokens/${tokenId}/revoke`),
+};
+
 export const campaignService = {
   create: (data) => api.post('/campaign', data),
   getAll: () => api.get('/campaigns'),
