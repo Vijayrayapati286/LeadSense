@@ -10,6 +10,7 @@ from app.models.models import (
     Invite,
     Mailer,
     Organization,
+    OrganizationToken,
     Recipient,
     RecipientCustomValue,
     RecipientGroup,
@@ -24,6 +25,7 @@ from app.models.models import (
 
 __all__ = [
     "Organization",
+    "OrganizationToken",
     "User",
     "Invite",
     "Campaign",

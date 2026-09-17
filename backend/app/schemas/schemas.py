@@ -739,3 +739,61 @@ class EmailLogListResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
     success: bool = True
+
+
+# ── Organizations + PATs (SmartOps) ───────────────────────────────────────────
+
+class OrganizationCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    type: Literal["TENANT", "PROVIDER"] = "TENANT"
+    pat_name: str | None = Field(default="SmartOps", max_length=255)
+
+
+class OrganizationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    organization_id: str
+    name: str
+    type: str
+    status: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class OrganizationTokenResponse(BaseModel):
+    token_id: str
+    organization_id: str
+    token_prefix: str
+    name: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class OrganizationTokenCreateRequest(BaseModel):
+    name: str | None = Field(None, max_length=255)
+    scopes: list[str] | None = None
+
+
+class OrganizationTokenCreateResponse(OrganizationTokenResponse):
+    """Includes raw PAT — returned only once at creation."""
+
+    token: str
+
+
+class OrganizationCreateResponse(OrganizationResponse):
+    """Org create always includes a one-time PAT for SmartOps handoff."""
+
+    token: OrganizationTokenCreateResponse
+
+
+class IntegrationWhoamiResponse(BaseModel):
+    organization_id: str
+    organization_name: str
+    type: str
+    token_status: str
+    token_id: str | None = None
+    token_name: str | None = None

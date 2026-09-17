@@ -25,6 +25,7 @@ import BulkBackupsPage from './pages/BulkBackupsPage';
 import OfferingsPage from './pages/OfferingsPage';
 import OfferingCreatePage from './pages/OfferingCreatePage';
 import OfferingDetailPage from './pages/OfferingDetailPage';
+import OrganizationsPage from './pages/OrganizationsPage';
 import { useAuth } from './hooks/useAuth';
 
 function DashboardEntry() {
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="/admin-dashboard" element={<AdminDashboardPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/invites" element={<InvitesPage />} />
+          <Route path="/organizations" element={<OrganizationsPage />} />
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/create" element={<CreateCampaignPage />} />
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />

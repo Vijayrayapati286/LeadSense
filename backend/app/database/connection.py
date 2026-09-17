@@ -345,7 +345,7 @@ def _ensure_app_settings_schema() -> None:
 
 def init_db() -> None:
     """Create all tables, seed dummy data if empty, and provision named users."""
-    from app.models import Campaign, EmailLog, Recipient, Template, User
+    from app.models import Campaign, EmailLog, Organization, OrganizationToken, Recipient, Template, User  # noqa: F401
     from app.profile_extractor import models as _profile_extractor_models  # noqa: F401
     from app.linkedin import bulk_models as _linkedin_bulk_models  # noqa: F401
     from app.icp import models as _icp_models  # noqa: F401
@@ -362,6 +362,11 @@ def init_db() -> None:
     db = SessionLocal()
     try:
         provision_tenants(db)
+        from app.services.organization_token_service import migrate_legacy_integration_tokens
+
+        migrated = migrate_legacy_integration_tokens(db)
+        if migrated:
+            logger.info("Migrated %s legacy integration_token(s) into organization_tokens", migrated)
         if db.query(Campaign).count() == 0:
             seed_dummy_data(db)
         provision_core_users(db)
@@ -464,3 +469,75 @@ def _ensure_organizations_schema() -> None:
                 )
             )
             logger.info("Created invites table")
+
+        # organization_tokens + organizations.created_by_user_id (SmartOps PATs)
+        inspector = inspect(engine)
+        org_tables = set(inspector.get_table_names())
+        if "organizations" in org_tables:
+            org_cols = {c["name"] for c in inspector.get_columns("organizations")}
+            if "created_by_user_id" not in org_cols:
+                conn.execute(text("ALTER TABLE organizations ADD COLUMN created_by_user_id INTEGER"))
+                logger.info("Added organizations.created_by_user_id")
+
+        if "organization_tokens" not in org_tables:
+            if dialect == "sqlite":
+                conn.execute(
+                    text(
+                        f"""
+                        CREATE TABLE organization_tokens (
+                            token_id VARCHAR(64) PRIMARY KEY,
+                            organization_id VARCHAR(64) NOT NULL,
+                            token_prefix VARCHAR(32) NOT NULL,
+                            token_hash VARCHAR(128) NOT NULL UNIQUE,
+                            name VARCHAR(255),
+                            scopes TEXT,
+                            status VARCHAR(50) NOT NULL,
+                            expires_at {ts},
+                            created_by_user_id INTEGER,
+                            created_at {ts} DEFAULT CURRENT_TIMESTAMP,
+                            last_used_at {ts},
+                            revoked_at {ts}
+                        )
+                        """
+                    )
+                )
+            else:
+                conn.execute(
+                    text(
+                        f"""
+                        CREATE TABLE organization_tokens (
+                            token_id VARCHAR(64) PRIMARY KEY,
+                            organization_id VARCHAR(64) NOT NULL REFERENCES organizations(org_id),
+                            token_prefix VARCHAR(32) NOT NULL,
+                            token_hash VARCHAR(128) NOT NULL UNIQUE,
+                            name VARCHAR(255),
+                            scopes TEXT,
+                            status VARCHAR(50) NOT NULL,
+                            expires_at {ts},
+                            created_by_user_id INTEGER REFERENCES users(id),
+                            created_at {ts} DEFAULT CURRENT_TIMESTAMP,
+                            last_used_at {ts},
+                            revoked_at {ts}
+                        )
+                        """
+                    )
+                )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_organization_tokens_organization_id "
+                    "ON organization_tokens (organization_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_organization_tokens_token_hash "
+                    "ON organization_tokens (token_hash)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_organization_tokens_status "
+                    "ON organization_tokens (status)"
+                )
+            )
+            logger.info("Created organization_tokens table")
