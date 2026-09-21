@@ -8,20 +8,25 @@ from app.models import RecipientTag, Tag
 
 
 class TagService:
-    def get_or_create(self, db: Session, name: str) -> Tag:
-        tag = db.query(Tag).filter(Tag.name == name).first()
+    def get_or_create(self, db: Session, name: str, org_id: str | None = None) -> Tag:
+        q = db.query(Tag).filter(Tag.name == name)
+        if org_id:
+            q = q.filter(Tag.org_id == org_id)
+        tag = q.first()
         if tag:
             return tag
-        tag = Tag(name=name)
+        tag = Tag(name=name, org_id=org_id)
         db.add(tag)
         db.commit()
         db.refresh(tag)
         return tag
 
-    def list_tags(self, db: Session, search: str = "") -> list[dict]:
+    def list_tags(self, db: Session, search: str = "", org_id: str | None = None) -> list[dict]:
         query = db.query(Tag, func.count(RecipientTag.recipient_id).label("recipient_count")).outerjoin(
             RecipientTag, RecipientTag.tag_id == Tag.id
         )
+        if org_id:
+            query = query.filter(Tag.org_id == org_id)
         if search:
             query = query.filter(Tag.name.ilike(f"%{search}%"))
         query = query.group_by(Tag.id).order_by(Tag.name)

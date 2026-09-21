@@ -20,6 +20,7 @@ import {
   FiAlertCircle,
   FiUsers,
   FiChevronsRight,
+  FiKey,
 } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 
@@ -61,6 +62,25 @@ const NAV_ITEMS = [
     ],
   },
 ];
+
+function getNavItems(user) {
+  if (user?.role === 'ADMIN') {
+    return [
+      { path: '/dashboard', label: 'Admin Dashboard', icon: FiHome },
+      {
+        label: 'Members',
+        icon: FiUsers,
+        children: [
+          { path: '/users', label: 'Members', icon: FiUsers },
+          { path: '/invites', label: 'Invites', icon: FiMail },
+          { path: '/organizations', label: 'Onboard orgs', icon: FiKey },
+        ],
+      },
+      ...NAV_ITEMS.slice(1),
+    ];
+  }
+  return NAV_ITEMS;
+}
 
 function initials(name) {
   return (name || 'U')
@@ -165,7 +185,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
 
       {/* Navigation */}
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-        {NAV_ITEMS.map((item) => {
+        {getNavItems(user).map((item) => {
           if (item.children) {
             return <NavGroup key={item.label} item={item} collapsed={collapsed} />;
           }
@@ -189,7 +209,9 @@ export default function Sidebar({ collapsed = false, onToggle }) {
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-white">{user.name}</p>
               <p className="truncate text-[11px] text-slate-500">{user.email}</p>
-              <p className="truncate text-[11px] text-slate-600">{user.department || 'Sales'}</p>
+              <p className="truncate text-[11px] text-slate-600">
+                {user.org_id ? `${user.org_id} · ${user.role || 'USER'}` : (user.department || 'Sales')}
+              </p>
             </div>
             <FiChevronsRight size={16} className="shrink-0 text-slate-600" />
           </Link>

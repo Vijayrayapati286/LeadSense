@@ -23,7 +23,7 @@ app_settings_service = AppSettingsService()
 
 
 class CampaignService:
-    def create(self, db: Session, data: CampaignCreate, user_id: int | None = None) -> Campaign:
+    def create(self, db: Session, data: CampaignCreate, user_id: int | None = None, org_id: str | None = None) -> Campaign:
         existing = db.query(Campaign).filter(Campaign.campaign_id == data.campaign_id).first()
         if existing:
             raise ValueError(f"Campaign ID '{data.campaign_id}' already exists")
@@ -38,6 +38,7 @@ class CampaignService:
             subject=data.subject,
             status=data.status,
             user_id=user_id,
+            org_id=org_id,
             scheduled_at=data.scheduled_at,
             use_recipient_timezone=data.use_recipient_timezone,
         )
@@ -46,17 +47,23 @@ class CampaignService:
         db.refresh(campaign)
         return campaign
 
-    def get_all(self, db: Session, skip: int = 0, limit: int = 100) -> list[Campaign]:
+    def get_all(self, db: Session, skip: int = 0, limit: int = 100, org_id: str | None = None) -> list[Campaign]:
+        query = db.query(Campaign)
+        if org_id:
+            query = query.filter(Campaign.org_id == org_id)
         return (
-            db.query(Campaign)
+            query
             .order_by(Campaign.created_at.desc())
             .offset(skip)
             .limit(limit)
             .all()
         )
 
-    def get_by_id(self, db: Session, campaign_id: int) -> Campaign | None:
-        return db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    def get_by_id(self, db: Session, campaign_id: int, org_id: str | None = None) -> Campaign | None:
+        query = db.query(Campaign).filter(Campaign.id == campaign_id)
+        if org_id:
+            query = query.filter(Campaign.org_id == org_id)
+        return query.first()
 
     def get_template(self, db: Session, campaign_id: int) -> Template | None:
         """The campaign's primary template — the first one created. With
@@ -101,8 +108,8 @@ class CampaignService:
         db.refresh(template)
         return template
 
-    def update(self, db: Session, campaign_id: int, data: CampaignUpdate) -> Campaign:
-        campaign = self.get_by_id(db, campaign_id)
+    def update(self, db: Session, campaign_id: int, data: CampaignUpdate, org_id: str | None = None) -> Campaign:
+        campaign = self.get_by_id(db, campaign_id, org_id=org_id)
         if not campaign:
             raise ValueError("Campaign not found")
 
@@ -114,8 +121,8 @@ class CampaignService:
         db.refresh(campaign)
         return campaign
 
-    def delete(self, db: Session, campaign_id: int) -> None:
-        campaign = self.get_by_id(db, campaign_id)
+    def delete(self, db: Session, campaign_id: int, org_id: str | None = None) -> None:
+        campaign = self.get_by_id(db, campaign_id, org_id=org_id)
         if not campaign:
             raise ValueError("Campaign not found")
         db.delete(campaign)

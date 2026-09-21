@@ -4,6 +4,9 @@ import MainLayout from './layouts/MainLayout';
 import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import DashboardPage from './pages/DashboardPage';
+import AdminDashboardPage from './pages/AdminDashboardPage';
+import UsersPage from './pages/UsersPage';
+import InvitesPage from './pages/InvitesPage';
 import CampaignsPage from './pages/CampaignsPage';
 import CreateCampaignPage from './pages/CreateCampaignPage';
 import CampaignDetailPage from './pages/CampaignDetailPage';
@@ -22,6 +25,16 @@ import BulkBackupsPage from './pages/BulkBackupsPage';
 import OfferingsPage from './pages/OfferingsPage';
 import OfferingCreatePage from './pages/OfferingCreatePage';
 import OfferingDetailPage from './pages/OfferingDetailPage';
+import OrganizationsPage from './pages/OrganizationsPage';
+import { useAuth } from './hooks/useAuth';
+
+function DashboardEntry() {
+  const { user } = useAuth();
+  if (user?.role === 'ADMIN') {
+    return <AdminDashboardPage />;
+  }
+  return <DashboardPage />;
+}
 
 export default function App() {
   return (
@@ -31,7 +44,11 @@ export default function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route element={<MainLayout />}>
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<DashboardEntry />} />
+          <Route path="/admin-dashboard" element={<AdminDashboardPage />} />
+          <Route path="/users" element={<UsersPage />} />
+          <Route path="/invites" element={<InvitesPage />} />
+          <Route path="/organizations" element={<OrganizationsPage />} />
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/create" element={<CreateCampaignPage />} />
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
