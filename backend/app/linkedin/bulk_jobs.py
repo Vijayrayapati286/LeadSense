@@ -294,12 +294,7 @@ def create_job_with_items(
                 first_by_url[normalized] = item
 
         refresh_job_counters(db, job)
-        try:
-            from app.icp.service import sync_sheet_fields_for_job
-
-            sync_sheet_fields_for_job(db, job.id, user_id=user_id)
-        except Exception:
-            logger.exception("Sheet field sync failed for job=%s", job.id)
+        # Sheet fields stay on bulk items until the user clicks "Add to ICP".
         db.commit()
         db.refresh(job)
         return job
@@ -406,15 +401,7 @@ def copy_canonical_results_to_duplicates(db: Session, job_id: str) -> int:
             match_threshold=int(getattr(get_settings(), "verify_match_threshold", 100)),
             review_threshold=int(getattr(get_settings(), "verify_review_threshold", 75)),
         )
-        try:
-            from app.icp.service import sync_icp_after_extraction
-
-            job = get_job_row(db, item.job_id) if hasattr(item, "job_id") else None
-            sync_icp_after_extraction(
-                db, item, user_id=getattr(job, "user_id", None) if job else None
-            )
-        except Exception:
-            logger.exception("ICP sync failed for duplicate item %s (extraction kept)", item.id)
+        # ICP is added only via explicit "Add to ICP" after verification.
         copied += 1
     return copied
 

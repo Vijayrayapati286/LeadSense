@@ -96,12 +96,27 @@ export default function BulkJobDetailPage() {
     if (!selectedItem) return;
     setBusy(true);
     try {
-      const result = await linkedinProfileService.resolveConflict(jobId, selectedItem.item_id, decisions);
-      toast.success(result?.icp_synced ? 'Resolved and added to ICP Database' : 'Profile resolved');
+      await linkedinProfileService.resolveConflict(jobId, selectedItem.item_id, decisions);
+      toast.success('Profile resolved');
       await load(items.page || 1);
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Could not resolve this profile');
       throw err;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAddToIcp() {
+    setBusy(true);
+    try {
+      const result = await linkedinProfileService.addBulkJobToIcp(jobId);
+      toast.success(
+        `Added to ICP: ${result?.added ?? 0} new, ${result?.updated ?? 0} updated (${result?.eligible ?? 0} verified)`,
+      );
+      await load(items.page || 1);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Could not add profiles to ICP');
     } finally {
       setBusy(false);
     }
@@ -179,6 +194,20 @@ export default function BulkJobDetailPage() {
               <FiDownload size={14} /> Excel
             </button>
           )}
+          <button
+            type="button"
+            onClick={onAddToIcp}
+            disabled={
+              busy || ((job.verified || 0) + (job.resolved || 0) <= 0)
+            }
+            className="btn-secondary inline-flex items-center gap-2"
+            title="Add verified / resolved profiles now; resolve the rest and click again later"
+          >
+            <FiUsers size={14} /> Add to ICP
+            {(job.verified || 0) + (job.resolved || 0) > 0
+              ? ` (${(job.verified || 0) + (job.resolved || 0)})`
+              : ''}
+          </button>
           <button
             type="button"
             onClick={onBackup}

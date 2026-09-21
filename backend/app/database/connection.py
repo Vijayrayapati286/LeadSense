@@ -271,11 +271,28 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "embedding": json_type,
                 "embedding_model": "VARCHAR(100)",
                 "image": "TEXT",
+                "org_id": "VARCHAR(50)",
             }
             for name, ddl in icp_adds.items():
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE icp_records ADD COLUMN {name} {ddl}"))
                     logger.info("Added icp_records.%s", name)
+            # Backfill tenant from owning user when possible.
+            try:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE icp_records
+                        SET org_id = (
+                            SELECT users.org_id FROM users WHERE users.id = icp_records.user_id
+                        )
+                        WHERE (org_id IS NULL OR org_id = '')
+                          AND user_id IS NOT NULL
+                        """
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to backfill icp_records.org_id")
 
         if "offerings" in tables:
             cols = {c["name"] for c in inspector.get_columns("offerings")}

@@ -46,6 +46,7 @@ class IcpRecordUpdate(BaseModel):
 class IcpRecordResponse(BaseModel):
     id: int
     user_id: int | None = None
+    org_id: str | None = None
     name: str | None = None
     email: str | None = None
     company_name: str | None = None

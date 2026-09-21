@@ -48,6 +48,41 @@ TAGS_ALIASES = {"tags", "tag", "labels"}
 EMAIL_ALIASES = {"email", "emailaddress", "email_address", "workemail", "work_email", "contactemail", "contact_email", "e_mail"}
 
 
+def resolve_org_id(
+    db: Session,
+    *,
+    user_id: int | None = None,
+    org_id: str | None = None,
+) -> str | None:
+    """Prefer explicit org_id; otherwise load the user's tenant."""
+    if org_id:
+        return str(org_id).strip() or None
+    if user_id is None:
+        return None
+    from app.models import User
+
+    row = db.query(User.org_id).filter(User.id == user_id).first()
+    if not row:
+        return None
+    value = row[0]
+    return str(value).strip() if value else None
+
+
+def _apply_tenant_scope(query, *, org_id: str | None, user_id: int | None):
+    """Scope ICP queries to the tenant when known; otherwise fall back to user."""
+    if org_id:
+        return query.filter(IcpRecordRow.org_id == org_id)
+    if user_id is not None:
+        return query.filter(IcpRecordRow.user_id == user_id)
+    return query
+
+
+def _org_member_user_ids(db: Session, org_id: str) -> list[int]:
+    from app.models import User
+
+    return [r[0] for r in db.query(User.id).filter(User.org_id == org_id).all()]
+
+
 def _pick_from_row(source: dict[str, Any] | None, aliases: set[str]) -> str | None:
     if not isinstance(source, dict):
         return None
@@ -274,11 +309,13 @@ def _find_existing(
     linkedin_url: str | None,
     dedupe_key: str | None,
     source_record_id: int | None = None,
+    org_id: str | None = None,
 ) -> IcpRecordRow | None:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+
     if linkedin_url:
         q = db.query(IcpRecordRow).filter(IcpRecordRow.linkedin_url == linkedin_url)
-        if user_id is not None:
-            q = q.filter(IcpRecordRow.user_id == user_id)
+        q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
         found = q.first()
         if found:
             return found
@@ -288,8 +325,7 @@ def _find_existing(
             IcpRecordRow.source_record_id == source_record_id,
             IcpRecordRow.source == SOURCE_LINKEDIN_BULK,
         )
-        if user_id is not None:
-            q = q.filter(IcpRecordRow.user_id == user_id)
+        q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
         found = q.first()
         if found:
             return found
@@ -299,8 +335,7 @@ def _find_existing(
             IcpRecordRow.dedupe_key == dedupe_key,
             or_(IcpRecordRow.linkedin_url.is_(None), IcpRecordRow.linkedin_url == ""),
         )
-        if user_id is not None:
-            q = q.filter(IcpRecordRow.user_id == user_id)
+        q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
         return q.first()
 
     return None
@@ -331,15 +366,18 @@ def upsert_icp_sheet_fields_from_bulk_item(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    org_id: str | None = None,
 ) -> IcpRecordRow | None:
     """Upsert sheet-sourced fields (email, name, company, etc.) without waiting for LinkedIn extraction."""
     payload = build_sheet_payload_from_bulk_item(item)
     if not payload:
         return None
 
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     existing = _find_existing(
         db,
         user_id=user_id,
+        org_id=org_id,
         linkedin_url=payload.get("linkedin_url"),
         dedupe_key=payload.get("dedupe_key"),
         source_record_id=item.id,
@@ -350,19 +388,24 @@ def upsert_icp_sheet_fields_from_bulk_item(
         payload.pop("source_record_id", None)
         _apply_payload(existing, payload, create=False)
         existing.user_id = user_id if user_id is not None else existing.user_id
+        if org_id and not existing.org_id:
+            existing.org_id = org_id
         db.flush()
         logger.info("ICP sheet fields updated id=%s from bulk item=%s", existing.id, item.id)
         return existing
 
-    row = IcpRecordRow(user_id=user_id, **payload)
+    row = IcpRecordRow(user_id=user_id, org_id=org_id, **payload)
     db.add(row)
     db.flush()
     logger.info("ICP created from sheet id=%s bulk item=%s", row.id, item.id)
     return row
 
 
-def sync_sheet_fields_for_job(db: Session, job_id: str, *, user_id: int | None) -> int:
+def sync_sheet_fields_for_job(
+    db: Session, job_id: str, *, user_id: int | None, org_id: str | None = None
+) -> int:
     """Persist spreadsheet fields (especially email) for every row in a bulk upload job."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     items = (
         db.query(BulkJobItemRow)
         .filter(
@@ -373,7 +416,7 @@ def sync_sheet_fields_for_job(db: Session, job_id: str, *, user_id: int | None) 
     )
     synced = 0
     for item in items:
-        if upsert_icp_sheet_fields_from_bulk_item(db, item, user_id=user_id):
+        if upsert_icp_sheet_fields_from_bulk_item(db, item, user_id=user_id, org_id=org_id):
             synced += 1
     return synced
 
@@ -383,6 +426,7 @@ def upsert_icp_from_bulk_item(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     fill_empty_only: bool = False,
     require_verified: bool = True,
 ) -> IcpRecordRow:
@@ -406,9 +450,11 @@ def upsert_icp_from_bulk_item(
     if not has_contact_identity(name=payload.get("name")):
         raise ValueError(f"Item {item.id} has no contact name — skipping hollow ICP create")
 
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     existing = _find_existing(
         db,
         user_id=user_id,
+        org_id=org_id,
         linkedin_url=payload.get("linkedin_url"),
         dedupe_key=payload.get("dedupe_key"),
         source_record_id=item.id,
@@ -420,6 +466,8 @@ def upsert_icp_from_bulk_item(
         else:
             _apply_payload(existing, payload, create=False)
         existing.user_id = user_id if user_id is not None else existing.user_id
+        if org_id and not existing.org_id:
+            existing.org_id = org_id
         db.flush()
         logger.info(
             "ICP updated id=%s from bulk item=%s fill_empty_only=%s",
@@ -429,7 +477,7 @@ def upsert_icp_from_bulk_item(
         )
         return existing
 
-    row = IcpRecordRow(user_id=user_id, **payload)
+    row = IcpRecordRow(user_id=user_id, org_id=org_id, **payload)
     db.add(row)
     db.flush()
     logger.info("ICP created id=%s from bulk item=%s", row.id, item.id)
@@ -441,12 +489,13 @@ def sync_icp_if_eligible(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    org_id: str | None = None,
 ) -> IcpRecordRow | None:
     """Upsert when verified/resolved; return None when not eligible."""
     if not item_eligible_for_icp(item):
         return None
     try:
-        return upsert_icp_from_bulk_item(db, item, user_id=user_id)
+        return upsert_icp_from_bulk_item(db, item, user_id=user_id, org_id=org_id)
     except ValueError as exc:
         if "no contact name" in str(exc).lower():
             logger.info("ICP sync skipped item_id=%s: %s", item.id, exc)
@@ -459,6 +508,7 @@ def sync_icp_after_extraction(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    org_id: str | None = None,
 ) -> IcpRecordRow | None:
     """Push extracted LinkedIn fields into Contacts after a successful extraction.
 
@@ -477,6 +527,7 @@ def sync_icp_after_extraction(
             db,
             item,
             user_id=user_id,
+            org_id=org_id,
             fill_empty_only=fill_empty_only,
             require_verified=False,
         )
@@ -492,6 +543,7 @@ def serialize_icp(row: IcpRecordRow) -> dict[str, Any]:
     return {
         "id": row.id,
         "user_id": row.user_id,
+        "org_id": getattr(row, "org_id", None),
         "name": row.name,
         "email": row.email,
         "company_name": row.company_name,
@@ -528,18 +580,25 @@ def _has_name_filter():
     return and_(IcpRecordRow.name.isnot(None), IcpRecordRow.name != "")
 
 
-def purge_empty_icp_records(db: Session, *, user_id: int | None) -> int:
+def purge_empty_icp_records(
+    db: Session, *, user_id: int | None, org_id: str | None = None
+) -> int:
     """Delete ICP contacts that have no person name (hollow upload shells)."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = db.query(IcpRecordRow).filter(_missing_name_filter())
-    if user_id is not None:
-        q = q.filter(IcpRecordRow.user_id == user_id)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
     rows = q.all()
     deleted = len(rows)
     for row in rows:
         db.delete(row)
     if deleted:
         db.flush()
-        logger.info("Purged %s empty ICP contact(s) user_id=%s", deleted, user_id)
+        logger.info(
+            "Purged %s empty ICP contact(s) org_id=%s user_id=%s",
+            deleted,
+            org_id,
+            user_id,
+        )
     return deleted
 
 
@@ -547,11 +606,13 @@ def backfill_icp_from_extracted_items(
     db: Session,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     limit: int = 500,
 ) -> int:
     """Create/fill Contacts from SUCCESS bulk items that already have LinkedIn extraction data."""
     from app.linkedin.bulk_models import BulkExtractJobRow
 
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = (
         db.query(BulkJobItemRow)
         .join(BulkExtractJobRow, BulkExtractJobRow.id == BulkJobItemRow.job_id)
@@ -563,18 +624,38 @@ def backfill_icp_from_extracted_items(
         )
         .order_by(BulkJobItemRow.id.desc())
     )
-    if user_id is not None:
+    if org_id:
+        member_ids = _org_member_user_ids(db, org_id)
+        if member_ids:
+            q = q.filter(BulkExtractJobRow.user_id.in_(member_ids))
+        elif user_id is not None:
+            q = q.filter(BulkExtractJobRow.user_id == user_id)
+    elif user_id is not None:
         q = q.filter(BulkExtractJobRow.user_id == user_id)
 
     synced = 0
     for item in q.limit(max(int(limit), 1)).all():
         try:
-            if sync_icp_after_extraction(db, item, user_id=user_id):
+            owner_id = user_id
+            try:
+                from app.linkedin.bulk_models import BulkExtractJobRow as _Job
+
+                job_row = db.query(_Job.user_id).filter(_Job.id == item.job_id).first()
+                if job_row and job_row[0] is not None:
+                    owner_id = job_row[0]
+            except Exception:
+                pass
+            if sync_icp_after_extraction(db, item, user_id=owner_id, org_id=org_id):
                 synced += 1
         except Exception:
             logger.exception("ICP backfill failed for bulk item %s", item.id)
     if synced:
-        logger.info("ICP backfill synced %s contact(s) user_id=%s", synced, user_id)
+        logger.info(
+            "ICP backfill synced %s contact(s) org_id=%s user_id=%s",
+            synced,
+            org_id,
+            user_id,
+        )
     return synced
 
 
@@ -582,6 +663,7 @@ def list_icp_records(
     db: Session,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     search: str | None = None,
     industry: str | None = None,
     company: str | None = None,
@@ -600,9 +682,9 @@ def list_icp_records(
     page: int = 1,
     page_size: int = 25,
 ) -> dict[str, Any]:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     query = db.query(IcpRecordRow)
-    if user_id is not None:
-        query = query.filter(IcpRecordRow.user_id == user_id)
+    query = _apply_tenant_scope(query, org_id=org_id, user_id=user_id)
 
     if require_name:
         query = query.filter(_has_name_filter())
@@ -683,10 +765,16 @@ def list_icp_records(
     }
 
 
-def get_icp_record(db: Session, record_id: int, *, user_id: int | None) -> IcpRecordRow | None:
+def get_icp_record(
+    db: Session,
+    record_id: int,
+    *,
+    user_id: int | None,
+    org_id: str | None = None,
+) -> IcpRecordRow | None:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = db.query(IcpRecordRow).filter(IcpRecordRow.id == record_id)
-    if user_id is not None:
-        q = q.filter(IcpRecordRow.user_id == user_id)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
     return q.first()
 
 
@@ -695,11 +783,13 @@ def create_icp_record(
     *,
     user_id: int | None,
     data: dict[str, Any],
+    org_id: str | None = None,
 ) -> IcpRecordRow:
     name = _clean(data.get("name"))
     company = _clean(data.get("company_name") or data.get("company"))
     linkedin_url = _normalize_linkedin(data.get("linkedin_url"))
     icp_status = resolve_icp_status(name=name, preferred=data.get("icp_status"))
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     payload = {
         "name": name,
         "email": _clean(data.get("email")),
@@ -734,15 +824,18 @@ def create_icp_record(
     existing = _find_existing(
         db,
         user_id=user_id,
+        org_id=org_id,
         linkedin_url=linkedin_url,
         dedupe_key=payload["dedupe_key"],
     )
     if existing:
         _apply_payload(existing, payload, create=False)
+        if org_id and not existing.org_id:
+            existing.org_id = org_id
         db.flush()
         return existing
 
-    row = IcpRecordRow(user_id=user_id, **payload)
+    row = IcpRecordRow(user_id=user_id, org_id=org_id, **payload)
     db.add(row)
     db.flush()
     return row
@@ -798,12 +891,13 @@ def count_icp_records(
     db: Session,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     without_company: bool = False,
     require_name: bool = True,
 ) -> int:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = db.query(func.count(IcpRecordRow.id))
-    if user_id is not None:
-        q = q.filter(IcpRecordRow.user_id == user_id)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
     if require_name:
         q = q.filter(_has_name_filter())
     if without_company:
@@ -811,12 +905,15 @@ def count_icp_records(
     return int(q.scalar() or 0)
 
 
-def icp_counts_summary(db: Session, *, user_id: int | None) -> dict[str, int]:
-    purged = purge_empty_icp_records(db, user_id=user_id)
+def icp_counts_summary(
+    db: Session, *, user_id: int | None, org_id: str | None = None
+) -> dict[str, int]:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+    purged = purge_empty_icp_records(db, user_id=user_id, org_id=org_id)
     return {
-        "total": count_icp_records(db, user_id=user_id, require_name=True),
+        "total": count_icp_records(db, user_id=user_id, org_id=org_id, require_name=True),
         "without_account": count_icp_records(
-            db, user_id=user_id, without_company=True, require_name=True
+            db, user_id=user_id, org_id=org_id, without_company=True, require_name=True
         ),
         "purged_empty": purged,
     }
@@ -827,15 +924,16 @@ def find_icp_by_linkedin_urls(
     *,
     user_id: int | None,
     urls: list[str],
+    org_id: str | None = None,
 ) -> dict[str, IcpRecordRow]:
     """Batch lookup of ICP records by normalized LinkedIn profile URL."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     normalized = [_normalize_linkedin(u) for u in urls if u]
     normalized = [u for u in normalized if u]
     if not normalized:
         return {}
     q = db.query(IcpRecordRow).filter(IcpRecordRow.linkedin_url.in_(normalized))
-    if user_id is not None:
-        q = q.filter(IcpRecordRow.user_id == user_id)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
     return {row.linkedin_url: row for row in q.all() if row.linkedin_url}
 
 
@@ -857,11 +955,14 @@ def _apply_icp_record_to_bulk_item(item: BulkJobItemRow, icp: IcpRecordRow, *, n
     item.completed_at = now
 
 
-def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | None) -> int:
+def skip_job_items_already_in_icp(
+    db: Session, job_id: str, *, user_id: int | None, org_id: str | None = None
+) -> int:
     """Skip extraction for canonical URLs already present in the ICP Database."""
     from app.linkedin.bulk_jobs import copy_canonical_results_to_duplicates, get_job_row, refresh_job_counters
     from app.linkedin.bulk_models import CLAIMABLE_ITEM_STATUSES, BulkJobItemRow
 
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     job = get_job_row(db, job_id)
     job_created_at = getattr(job, "created_at", None) if job else None
 
@@ -878,7 +979,7 @@ def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | No
         return 0
 
     icp_map = find_icp_by_linkedin_urls(
-        db, user_id=user_id, urls=[item.normalized_url for item in items]
+        db, user_id=user_id, org_id=org_id, urls=[item.normalized_url for item in items]
     )
     if not icp_map:
         return 0
@@ -889,7 +990,6 @@ def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | No
         icp = icp_map.get(item.normalized_url)
         if not icp:
             continue
-        upsert_icp_sheet_fields_from_bulk_item(db, item, user_id=user_id)
         # Only skip LinkedIn extraction when the profile was already in ICP before this upload.
         if job_created_at and icp.created_at and icp.created_at < job_created_at:
             _apply_icp_record_to_bulk_item(item, icp, now=now)
@@ -914,18 +1014,19 @@ def list_accounts_summary(
     db: Session,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     search: str | None = None,
     industry: str | None = None,
     page: int = 1,
     page_size: int = 25,
 ) -> dict[str, Any]:
     """Group existing ICP contacts by company — no separate accounts table."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     base = db.query(IcpRecordRow).filter(
         IcpRecordRow.company_name.isnot(None),
         IcpRecordRow.company_name != "",
     )
-    if user_id is not None:
-        base = base.filter(IcpRecordRow.user_id == user_id)
+    base = _apply_tenant_scope(base, org_id=org_id, user_id=user_id)
 
     if search and search.strip():
         like = f"%{search.strip()}%"
@@ -978,4 +1079,81 @@ def list_accounts_summary(
         "total": int(total),
         "page": page,
         "page_size": page_size,
+    }
+
+
+def add_job_verified_items_to_icp(
+    db: Session,
+    job_id: str,
+    *,
+    user_id: int | None,
+    org_id: str | None = None,
+) -> dict[str, Any]:
+    """Upsert all VERIFIED / RESOLVED bulk items for a job into the tenant ICP pool."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+    items = (
+        db.query(BulkJobItemRow)
+        .filter(
+            BulkJobItemRow.job_id == job_id,
+            BulkJobItemRow.dedupe_of_id.is_(None),
+            BulkJobItemRow.status == ITEM_SUCCESS,
+            func.upper(BulkJobItemRow.verification_status).in_(
+                [VERIFY_VERIFIED, VERIFY_RESOLVED]
+            ),
+        )
+        .order_by(BulkJobItemRow.source_row_number.asc())
+        .all()
+    )
+
+    added = 0
+    updated = 0
+    skipped = 0
+    errors: list[dict[str, Any]] = []
+    record_ids: list[int] = []
+
+    for item in items:
+        try:
+            before = _find_existing(
+                db,
+                user_id=user_id,
+                org_id=org_id,
+                linkedin_url=_normalize_linkedin(
+                    getattr(item, "normalized_url", None) or getattr(item, "profile_url", None)
+                ),
+                dedupe_key=_dedupe_key(getattr(item, "name", None), getattr(item, "company", None)),
+                source_record_id=item.id,
+            )
+            row = upsert_icp_from_bulk_item(
+                db,
+                item,
+                user_id=user_id,
+                org_id=org_id,
+                fill_empty_only=False,
+                require_verified=True,
+            )
+            if row is None:
+                skipped += 1
+                continue
+            record_ids.append(row.id)
+            if before is not None and before.id == row.id:
+                updated += 1
+            else:
+                added += 1
+        except ValueError as exc:
+            skipped += 1
+            errors.append({"item_id": item.id, "error": str(exc)})
+        except Exception as exc:
+            logger.exception("Add-to-ICP failed job=%s item=%s", job_id, item.id)
+            errors.append({"item_id": item.id, "error": str(exc)})
+
+    db.flush()
+    return {
+        "job_id": job_id,
+        "eligible": len(items),
+        "added": added,
+        "updated": updated,
+        "skipped": skipped,
+        "icp_record_ids": record_ids,
+        "errors": errors[:25],
+        "org_id": org_id,
     }

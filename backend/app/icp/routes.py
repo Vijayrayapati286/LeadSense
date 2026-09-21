@@ -16,7 +16,6 @@ from app.icp.schemas import (
     IcpRecordUpdate,
 )
 from app.icp.service import (
-    backfill_icp_from_extracted_items,
     create_icp_record,
     delete_icp_record,
     get_icp_record,
@@ -24,6 +23,7 @@ from app.icp.service import (
     list_accounts_summary,
     list_icp_records,
     purge_empty_icp_records,
+    resolve_org_id,
     serialize_icp,
     update_icp_record,
     upsert_icp_from_bulk_item,
@@ -34,6 +34,12 @@ from app.middleware.auth import get_current_user
 from app.models import User
 
 router = APIRouter(prefix="/icp", tags=["ICP Database"])
+
+
+def _tenant_ids(current_user: User) -> tuple[int | None, str | None]:
+    user_id = getattr(current_user, "id", None)
+    org_id = getattr(current_user, "org_id", None)
+    return user_id, (str(org_id).strip() if org_id else None)
 
 
 def _parse_date(value: str | None) -> datetime | None:
@@ -75,13 +81,13 @@ def list_icp(
     current_user: User = Depends(get_current_user),
 ):
     size = page_size or limit
-    user_id = getattr(current_user, "id", None)
-    # Fill Contacts from any already-extracted LinkedIn profiles, then drop hollow shells.
-    backfill_icp_from_extracted_items(db, user_id=user_id)
-    purge_empty_icp_records(db, user_id=user_id)
+    user_id, org_id = _tenant_ids(current_user)
+    # Do not auto-create ICP from extractions bulk items — user must click "Add to ICP".
+    purge_empty_icp_records(db, user_id=user_id, org_id=org_id)
     result = list_icp_records(
         db,
         user_id=user_id,
+        org_id=org_id,
         search=search or None,
         industry=industry or None,
         company=company or company_name or None,
@@ -116,9 +122,11 @@ def list_accounts(
     current_user: User = Depends(get_current_user),
 ):
     size = page_size or limit
+    user_id, org_id = _tenant_ids(current_user)
     return list_accounts_summary(
         db,
-        user_id=getattr(current_user, "id", None),
+        user_id=user_id,
+        org_id=org_id,
         search=search or None,
         industry=industry or None,
         page=page,
@@ -131,7 +139,8 @@ def icp_count(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    summary = icp_counts_summary(db, user_id=getattr(current_user, "id", None))
+    user_id, org_id = _tenant_ids(current_user)
+    summary = icp_counts_summary(db, user_id=user_id, org_id=org_id)
     db.commit()
     return summary
 
@@ -142,7 +151,8 @@ def get_icp(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    row = get_icp_record(db, record_id, user_id=getattr(current_user, "id", None))
+    user_id, org_id = _tenant_ids(current_user)
+    row = get_icp_record(db, record_id, user_id=user_id, org_id=org_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ICP record not found")
     return serialize_icp(row)
@@ -154,7 +164,10 @@ def create_icp(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    row = create_icp_record(db, user_id=getattr(current_user, "id", None), data=body.model_dump())
+    user_id, org_id = _tenant_ids(current_user)
+    row = create_icp_record(
+        db, user_id=user_id, org_id=org_id, data=body.model_dump()
+    )
     db.commit()
     db.refresh(row)
     return serialize_icp(row)
@@ -167,7 +180,8 @@ def update_icp(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    row = get_icp_record(db, record_id, user_id=getattr(current_user, "id", None))
+    user_id, org_id = _tenant_ids(current_user)
+    row = get_icp_record(db, record_id, user_id=user_id, org_id=org_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ICP record not found")
     update_icp_record(db, row, body.model_dump(exclude_unset=True))
@@ -182,7 +196,8 @@ def delete_icp(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    row = get_icp_record(db, record_id, user_id=getattr(current_user, "id", None))
+    user_id, org_id = _tenant_ids(current_user)
+    row = get_icp_record(db, record_id, user_id=user_id, org_id=org_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ICP record not found")
     delete_icp_record(db, row)
@@ -197,7 +212,7 @@ def sync_from_bulk_item(
     current_user: User = Depends(get_current_user),
 ):
     """Retry ICP sync for a verified/resolved bulk job item."""
-    user_id = getattr(current_user, "id", None)
+    user_id, org_id = _tenant_ids(current_user)
     item = db.query(BulkJobItemRow).filter(BulkJobItemRow.id == item_id).first()
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bulk item not found")
@@ -205,9 +220,17 @@ def sync_from_bulk_item(
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     if user_id is not None and job.user_id is not None and job.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        # Same-tenant coworkers may sync each other's job items into the shared ICP pool.
+        job_org = resolve_org_id(db, user_id=job.user_id)
+        if not org_id or not job_org or job_org != org_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     try:
-        row = upsert_icp_from_bulk_item(db, item, user_id=job.user_id or user_id)
+        row = upsert_icp_from_bulk_item(
+            db,
+            item,
+            user_id=job.user_id or user_id,
+            org_id=org_id or resolve_org_id(db, user_id=job.user_id or user_id),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.commit()

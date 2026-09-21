@@ -152,11 +152,15 @@ def list_matches_for_icp(
 ):
     """Top recommended offerings for a verified ICP record."""
     from app.icp.models import IcpRecordRow
+    from app.icp.service import resolve_org_id
     from app.offerings.matching_service import list_recommendations_for_icp
 
     user_id = getattr(current_user, "id", None)
+    org_id = resolve_org_id(db, user_id=user_id, org_id=getattr(current_user, "org_id", None))
     icp_q = db.query(IcpRecordRow).filter(IcpRecordRow.id == icp_record_id)
-    if user_id is not None:
+    if org_id:
+        icp_q = icp_q.filter(IcpRecordRow.org_id == org_id)
+    elif user_id is not None:
         icp_q = icp_q.filter(IcpRecordRow.user_id == user_id)
     if not icp_q.first():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ICP record not found")

@@ -9,6 +9,7 @@ import {
   FiSearch,
   FiUpload,
   FiUser,
+  FiUsers,
 } from 'react-icons/fi';
 import { useToast } from '../hooks/useToast';
 import { linkedinProfileService } from '../services/services';
@@ -92,6 +93,7 @@ export default function LinkedInProfileExtractorPage() {
   const [bulkJobId, setBulkJobId] = useState(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkDownloading, setBulkDownloading] = useState(false);
+  const [icpAdding, setIcpAdding] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [reviewItems, setReviewItems] = useState([]);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -224,6 +226,31 @@ export default function LinkedInProfileExtractorPage() {
     }
   };
 
+  const handleAddBulkJobToIcp = async (jobId) => {
+    if (!jobId) return;
+    setIcpAdding(true);
+    try {
+      const result = await linkedinProfileService.addBulkJobToIcp(jobId);
+      const added = result?.added ?? 0;
+      const updated = result?.updated ?? 0;
+      const status = await linkedinProfileService.getBulkJob(jobId);
+      setBulkJob(status);
+      const remaining = status?.needs_review || 0;
+      toast.success(
+        `Added to ICP: ${added} new, ${updated} updated (${result?.eligible ?? 0} verified)` +
+          (remaining > 0 ? ` — ${remaining} still need review` : ''),
+      );
+    } catch (err) {
+      toast.error(
+        (typeof err.response?.data?.detail === 'string' && err.response.data.detail) ||
+          err.message ||
+          'Could not add profiles to ICP',
+      );
+    } finally {
+      setIcpAdding(false);
+    }
+  };
+
   const ingestResults = async (jobId) => {
     await refreshReviewItems(jobId);
   };
@@ -278,11 +305,7 @@ export default function LinkedInProfileExtractorPage() {
     setReviewBusy(true);
     try {
       const result = await linkedinProfileService.resolveConflict(bulkJobId, item.item_id, decisions);
-      if (result?.icp_synced) {
-        toast.success('Resolved and added to ICP Database');
-      } else {
-        toast.success('Record resolved');
-      }
+      toast.success('Record resolved');
       await refreshReviewItems(bulkJobId);
       const status = await linkedinProfileService.getBulkJob(bulkJobId);
       setBulkJob(status);
@@ -679,11 +702,36 @@ export default function LinkedInProfileExtractorPage() {
                         <div className="flex flex-wrap justify-center gap-2">
                           <button
                             type="button"
+                            onClick={() => handleAddBulkJobToIcp(bulkJobId)}
+                            disabled={
+                              icpAdding ||
+                              ((bulkJob.verified || 0) + (bulkJob.resolved || 0) <= 0)
+                            }
+                            className="btn-primary inline-flex items-center gap-2"
+                            title="Add verified / resolved profiles to the ICP Database (you can click again after resolving more)"
+                          >
+                            {icpAdding ? (
+                              <>
+                                <LoadingSpinner size="sm" />
+                                Adding to ICP…
+                              </>
+                            ) : (
+                              <>
+                                <FiUsers size={16} />
+                                Add to ICP
+                                {(bulkJob.verified || 0) + (bulkJob.resolved || 0) > 0
+                                  ? ` (${(bulkJob.verified || 0) + (bulkJob.resolved || 0)})`
+                                  : ''}
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => handleDownloadBulkJob(bulkJobId)}
                             disabled={
                               bulkDownloading || !bulkJob.download_ready || openConflicts > 0
                             }
-                            className="btn-primary inline-flex items-center gap-2"
+                            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                           >
                             {bulkDownloading && !openConflicts ? (
                               <>
@@ -709,6 +757,15 @@ export default function LinkedInProfileExtractorPage() {
                             </button>
                           )}
                         </div>
+                        {((bulkJob.verified || 0) + (bulkJob.resolved || 0) > 0) ? (
+                          <p className="text-xs text-gray-600">
+                            Click Add to ICP to save verified contacts now
+                            {openConflicts > 0
+                              ? ` (${openConflicts} still need review — add those later after resolve)`
+                              : ''}
+                            .
+                          </p>
+                        ) : null}
                       </div>
                     );
                   })()}

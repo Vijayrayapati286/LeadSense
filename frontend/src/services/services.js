@@ -3,7 +3,10 @@ import api from './api';
 async function downloadViaMeta(metaEndpoint, fallbackFilename) {
   const meta = await api.get(metaEndpoint, { timeout: 120_000 }).then((r) => r.data);
   const filename = meta.filename || fallbackFilename;
-  if (meta.file_id && String(meta.download_url || '').includes('/api/files/')) {
+  // Prefer authenticated API proxy. Direct fetch of S3 presigned URLs fails in the
+  // browser when the bucket has no CORS Allow-Origin for this app origin (status 200,
+  // body blocked → "Failed to fetch").
+  if (meta.file_id) {
     const { data: blob } = await api.get(`/files/${meta.file_id}/content`, {
       responseType: 'blob',
       timeout: 120_000,
@@ -151,6 +154,8 @@ export const linkedinProfileService = {
   },
   getBulkJob: (jobId) => api.get(`/linkedin/bulk-jobs/${jobId}`).then((r) => r.data),
   downloadBulkJob: (jobId) => downloadViaMeta(`/linkedin/bulk-jobs/${jobId}/download`, `bulk_${jobId}.xlsx`),
+  addBulkJobToIcp: (jobId) =>
+    api.post(`/linkedin/bulk-jobs/${jobId}/add-to-icp`, null, { timeout: 120_000 }).then((r) => r.data),
   listBulkJobs: (params = {}) =>
     api.get('/linkedin/bulk-jobs', { params }).then((r) => r.data),
   listBulkJobItems: (jobId, params = {}) =>

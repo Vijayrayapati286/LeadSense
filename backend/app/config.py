@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     apify_batch_size: int = Field(10, validation_alias="APIFY_BATCH_SIZE")
     processing_window: int = Field(100, validation_alias="PROCESSING_WINDOW")
     # Max extraction attempts per URL (attempt 1 + retries). Success stops immediately.
-    apify_max_retries: int = Field(5, validation_alias="APIFY_MAX_RETRIES")
+    apify_max_retries: int = Field(3, validation_alias="APIFY_MAX_RETRIES")
     max_bulk_urls: int = Field(5000, validation_alias="MAX_BULK_URLS")
     bulk_retry_base_delay_seconds: float = Field(5.0, validation_alias="BULK_RETRY_BASE_DELAY_SECONDS")
     bulk_retry_backoff_multiplier: float = Field(2.0, validation_alias="BULK_RETRY_BACKOFF_MULTIPLIER")

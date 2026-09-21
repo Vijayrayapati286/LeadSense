@@ -17,6 +17,7 @@ class User(Base):
     department: Mapped[str] = mapped_column(String(255), default="Sales")
     azure_oid: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    org_id: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     campaigns: Mapped[list["Campaign"]] = relationship("Campaign", back_populates="owner_user")
