@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { FiAlertCircle, FiCheckCircle, FiLayers, FiPlus, FiRefreshCw, FiSearch, FiX, FiXCircle } from 'react-icons/fi';
+import {
+  FiAlertCircle,
+  FiCheckCircle,
+  FiDownload,
+  FiLayers,
+  FiPlus,
+  FiRefreshCw,
+  FiSearch,
+  FiX,
+  FiXCircle,
+} from 'react-icons/fi';
 import HistoryJobCard from '../components/bulk/HistoryJobCard';
 import Pagination from '../components/ui/Pagination';
 import {
@@ -12,8 +22,10 @@ import {
 } from '../components/ui/GrowthWorkspace';
 import { useToast } from '../hooks/useToast';
 import { linkedinProfileService } from '../services/services';
+import { downloadBlob, formatDateTime } from '../utils/helpers';
 
 const PAGE_SIZE = 20;
+const RECENT_VERIFIED_LIMIT = 5;
 
 const FILTERS = [
   { key: 'all', label: 'All', params: {}, dot: 'bg-slate-400', idle: 'text-slate-500 hover:bg-white hover:text-slate-900', active: 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200' },
@@ -38,6 +50,8 @@ export default function BulkHistoryPage() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState({ total: 0, items: [], page: 1 });
   const [counts, setCounts] = useState({ all: 0, completed: 0, needs_review: 0, failed: 0 });
+  const [recentVerified, setRecentVerified] = useState([]);
+  const [downloadingId, setDownloadingId] = useState(null);
 
   useEffect(() => {
     setDraftQ(appliedQ);
@@ -74,6 +88,38 @@ export default function BulkHistoryPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Recent completed jobs with a verified Excel ready to download.
+  useEffect(() => {
+    let cancelled = false;
+    linkedinProfileService
+      .listBulkJobs({ status: 'done', needs_review: false, page: 1, page_size: RECENT_VERIFIED_LIMIT })
+      .then((payload) => {
+        if (cancelled) return;
+        const ready = (payload.items || []).filter((job) => job.download_ready);
+        setRecentVerified(ready);
+      })
+      .catch(() => {
+        if (!cancelled) setRecentVerified([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.total]);
+
+  async function handleDownload(job) {
+    if (!job?.job_id || downloadingId) return;
+    setDownloadingId(job.job_id);
+    try {
+      const { blob, filename } = await linkedinProfileService.downloadBulkJob(job.job_id);
+      downloadBlob(blob, filename || `bulk_${job.job_id}.xlsx`);
+      toast.success('Verified sheet downloaded');
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Excel not ready');
+    } finally {
+      setDownloadingId(null);
+    }
+  }
 
   // Bucket totals come from the API rather than the current page, so the
   // headline numbers stay true once history spans more than one page.
@@ -194,6 +240,62 @@ export default function BulkHistoryPage() {
         />
       </div>
 
+      {recentVerified.length > 0 ? (
+        <section className="surface-card overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">Recent verified sheets</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Download clean result Excels from your latest completed extractions.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => applyParams('completed', appliedQ)}
+              className="text-xs font-semibold text-primary-600 hover:text-primary-700"
+            >
+              View all completed
+            </button>
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {recentVerified.map((job) => {
+              const title = job.original_file_name || 'Untitled upload';
+              const verifiedCount = (job.verified || 0) + (job.resolved || 0);
+              const busy = downloadingId === job.job_id;
+              return (
+                <li
+                  key={job.job_id}
+                  className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+                >
+                  <div className="min-w-0">
+                    <Link
+                      to={`/linkedin-history/${job.job_id}`}
+                      className="truncate text-sm font-semibold text-slate-900 hover:text-primary-700"
+                    >
+                      {title}
+                    </Link>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {verifiedCount > 0 ? `${verifiedCount.toLocaleString()} verified` : `${(job.total || 0).toLocaleString()} profiles`}
+                      <span aria-hidden="true"> · </span>
+                      {formatDateTime(job.completed_at || job.updated_at || job.created_at)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(job)}
+                    disabled={busy || !!downloadingId}
+                    className="btn-primary inline-flex shrink-0 items-center gap-2 self-start sm:self-auto"
+                  >
+                    <FiDownload size={14} />
+                    {busy ? 'Downloading…' : 'Download verified sheet'}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
       <section className="surface-card overflow-hidden">
         <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:p-5">
           <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
@@ -273,7 +375,11 @@ export default function BulkHistoryPage() {
             <div className="space-y-2">
               {items.map((job, index) => (
                 <div key={job.job_id} className="stagger-item" style={{ '--item-index': index }}>
-                  <HistoryJobCard job={job} />
+                  <HistoryJobCard
+                    job={job}
+                    onDownload={handleDownload}
+                    downloading={downloadingId === job.job_id}
+                  />
                 </div>
               ))}
               {total > PAGE_SIZE ? (

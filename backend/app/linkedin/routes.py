@@ -562,23 +562,7 @@ def resolve_bulk_conflict(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         refresh_job_after_resolutions(db, job)
 
-        icp_record_id = None
-        icp_synced = False
-        try:
-            from app.icp.service import sync_icp_if_eligible
-
-            icp_row = sync_icp_if_eligible(db, item, user_id=job.user_id or user_id)
-            if icp_row is not None:
-                icp_record_id = icp_row.id
-                icp_synced = True
-        except Exception as exc:
-            logger.exception("ICP sync failed after resolve job_id=%s item_id=%s", job_id, item_id)
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Resolve succeeded locally but ICP Database sync failed: {exc}",
-            ) from exc
-
+        # ICP is added only via explicit "Add to ICP" after verification — not on resolve.
         try:
             refresh_job_result_excel(db, job, excel_service=bulk_excel_service)
         except Exception:
@@ -591,8 +575,8 @@ def resolve_bulk_conflict(
             "needs_review": job.needs_review_count or 0,
             "resolved": job.resolved_count or 0,
             "phase": job.phase,
-            "icp_synced": icp_synced,
-            "icp_record_id": icp_record_id,
+            "icp_synced": False,
+            "icp_record_id": None,
         }
     except HTTPException:
         db.rollback()
@@ -644,17 +628,7 @@ def bulk_resolve_conflicts(
             if not scoped:
                 continue
             resolve_item_fields(db, item, decisions=scoped, user_id=user_id, user=current_user)
-            try:
-                from app.icp.service import sync_icp_if_eligible
-
-                sync_icp_if_eligible(db, item, user_id=job.user_id or user_id)
-            except Exception as exc:
-                logger.exception("ICP sync failed during bulk-resolve item_id=%s", item_id)
-                db.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"ICP Database sync failed for item {item_id}: {exc}",
-                ) from exc
+            # ICP is added only via explicit "Add to ICP" after verification.
             updated += 1
         refresh_job_after_resolutions(db, job)
         refresh_job_result_excel(db, job, excel_service=bulk_excel_service)
@@ -672,6 +646,80 @@ def bulk_resolve_conflicts(
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
+
+
+@router.post("/bulk-jobs/{job_id}/add-to-icp")
+def add_bulk_job_to_icp(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Add all VERIFIED / RESOLVED items from a finished job into the tenant ICP Database."""
+    from app.icp.service import add_job_verified_items_to_icp, resolve_org_id
+
+    user_id = getattr(current_user, "id", None)
+    org_id = getattr(current_user, "org_id", None)
+    _require_bulk_job(job_id, user_id)
+
+    db = SessionLocal()
+    try:
+        job = get_job_row(db, job_id)
+        if not job:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+        needs_review = int(getattr(job, "needs_review_count", 0) or 0)
+        # Open conflicts are fine — only VERIFIED / RESOLVED rows are added; the rest can be added later.
+
+        completed = int(getattr(job, "success_count", 0) or 0)
+        failed = int(getattr(job, "failed_count", 0) or 0)
+        status_text = (getattr(job, "status", "") or "").lower()
+        if status_text not in {"done", "failed"} and (completed + failed) <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Extraction is still running — wait until some profiles are verified",
+            )
+
+        owner_id = job.user_id or user_id
+        tenant_org = resolve_org_id(
+            db, user_id=owner_id, org_id=str(org_id).strip() if org_id else None
+        )
+        result = add_job_verified_items_to_icp(
+            db,
+            job_id,
+            user_id=owner_id,
+            org_id=tenant_org,
+        )
+        if result["eligible"] <= 0:
+            detail = "No verified or resolved profiles are ready to add to ICP"
+            if needs_review > 0:
+                detail += (
+                    f" — resolve {needs_review} open conflict(s) first, then click Add to ICP again"
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=detail,
+            )
+        db.commit()
+        logger.info(
+            "Add-to-ICP job_id=%s user_id=%s org_id=%s added=%s updated=%s",
+            job_id,
+            user_id,
+            tenant_org,
+            result.get("added"),
+            result.get("updated"),
+        )
+        return result
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Add-to-ICP failed job_id=%s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to add profiles to ICP: {exc}",
+        ) from exc
     finally:
         db.close()
 

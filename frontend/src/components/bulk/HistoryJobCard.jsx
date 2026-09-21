@@ -21,7 +21,7 @@ function shortDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function HistoryJobCard({ job, onSelect }) {
+export default function HistoryJobCard({ job, onSelect, onDownload, downloading = false }) {
   const total = job.total || 0;
   const success = job.completed ?? job.success ?? 0;
   const failed = job.failed || 0;
@@ -45,6 +45,30 @@ export default function HistoryJobCard({ job, onSelect }) {
 
   const className =
     'group block w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-left transition-all hover:border-slate-300 hover:shadow-sm focus:outline-none focus:ring-4 focus:ring-primary-100 sm:px-5';
+
+  const downloadButton =
+    job.download_ready && onDownload ? (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDownload(job);
+        }}
+        disabled={downloading}
+        title={needsReview > 0 ? 'Download verified sheet (includes open conflicts)' : 'Download verified sheet'}
+        aria-label={`Download verified sheet for ${title}`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-2.5 py-1.5 text-xs font-semibold text-primary-700 transition-colors hover:bg-primary-100 disabled:cursor-wait disabled:opacity-60"
+      >
+        <FiDownload size={12} aria-hidden="true" />
+        {downloading ? '…' : 'Excel'}
+      </button>
+    ) : job.download_ready ? (
+      <span className="hidden items-center gap-1 text-xs font-medium text-primary-600 xl:inline-flex">
+        <FiDownload size={12} aria-hidden="true" />
+        Excel
+      </span>
+    ) : null;
 
   const body = (
     <>
@@ -98,14 +122,9 @@ export default function HistoryJobCard({ job, onSelect }) {
         </p>
       </div>
 
-      {/* Download hint + chevron */}
+      {/* Download + chevron */}
       <div className="flex shrink-0 items-center gap-2">
-        {job.download_ready ? (
-          <span className="hidden items-center gap-1 text-xs font-medium text-primary-600 xl:inline-flex">
-            <FiDownload size={12} aria-hidden="true" />
-            Excel
-          </span>
-        ) : null}
+        {downloadButton}
         <StatusBadge status={statusKey} className="sm:hidden" />
         <FiChevronRight
           className="text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500"

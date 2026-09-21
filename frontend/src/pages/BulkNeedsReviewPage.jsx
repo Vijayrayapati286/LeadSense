@@ -92,11 +92,7 @@ export default function BulkNeedsReviewPage() {
     setBusy(true);
     try {
       const result = await linkedinProfileService.resolveConflict(selectedJob, item.item_id, decisions);
-      if (result?.icp_synced) {
-        toast.success('Resolved and added to ICP Database');
-      } else {
-        toast.success('Record resolved');
-      }
+      toast.success('Record resolved');
       await loadItems(selectedJob);
       await loadJobs();
       const remaining = await linkedinProfileService.getBulkConflicts(selectedJob, {

@@ -67,6 +67,7 @@ class User(Base):
     department: Mapped[str] = mapped_column(String(255), default="Sales")
     azure_oid: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    org_id: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     org_id: Mapped[str | None] = mapped_column(
         String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
     )

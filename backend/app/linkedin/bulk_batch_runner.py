@@ -516,21 +516,7 @@ class BulkBatchRunner:
             verification.status,
             verification.score,
         )
-        try:
-            from app.icp.service import sync_icp_after_extraction
-            from app.linkedin.bulk_jobs import get_job_row
-
-            job = get_job_row(db, item.job_id)
-            sync_icp_after_extraction(
-                db, item, user_id=getattr(job, "user_id", None) if job else None
-            )
-        except Exception:
-            # Do not fail the extraction batch if ICP sync fails; resolve/retry can repair.
-            logger.exception(
-                "[JOB-%s] [URL-%s] ICP sync failed after extraction (extraction kept)",
-                item.job_id,
-                item.id,
-            )
+        # ICP is added only via explicit "Add to ICP" after verification — not during extraction.
 
     def _mark_failure(
         self,
