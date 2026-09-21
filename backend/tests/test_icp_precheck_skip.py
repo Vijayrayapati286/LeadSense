@@ -14,9 +14,9 @@ from app.icp.models import IcpRecordRow
 from app.linkedin.validator import normalize_profile_url
 
 
-EXISTING_URL = "https://www.linkedin.com/in/existing-user/"
-NEW_URL = "https://www.linkedin.com/in/brand-new/"
-EMAIL_SYNC_URL = "https://www.linkedin.com/in/josh-hailey-b3392064/"
+EXISTING_URL = f"https://www.linkedin.com/in/existing-user-{__import__('uuid').uuid4().hex[:8]}/"
+NEW_URL = f"https://www.linkedin.com/in/brand-new-{__import__('uuid').uuid4().hex[:8]}/"
+EMAIL_SYNC_URL = f"https://www.linkedin.com/in/josh-hailey-{__import__('uuid').uuid4().hex[:8]}/"
 
 
 @pytest.fixture(autouse=True)

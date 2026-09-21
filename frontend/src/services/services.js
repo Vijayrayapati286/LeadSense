@@ -182,6 +182,8 @@ export const linkedinProfileService = {
     api.post(`/linkedin/bulk-jobs/${jobId}/add-to-icp`, null, { timeout: 120_000 }).then((r) => r.data),
   listBulkJobs: (params = {}) =>
     api.get('/linkedin/bulk-jobs', { params }).then((r) => r.data),
+  listRecentDownloads: (params = {}) =>
+    api.get('/linkedin/recent-downloads', { params }).then((r) => r.data),
   listBulkJobItems: (jobId, params = {}) =>
     api.get(`/linkedin/bulk-jobs/${jobId}/items`, { params }).then((r) => r.data),
   getBulkConflicts: (jobId, params = {}) =>

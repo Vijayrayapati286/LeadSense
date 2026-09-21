@@ -66,6 +66,23 @@ _RETRYABLE_MARKERS = (
     "connection",
     "apify",
     "server error",
+    "5xx",
+)
+
+_PERMANENT_MARKERS = (
+    "invalid url",
+    "must be a linkedin",
+    "malformed",
+    "profile not found",
+    "not found",
+    "404",
+    "private",
+    "unavailable",
+    "does not exist",
+    "not a linkedin",
+    "permanently unavailable",
+    "not configured",
+    "apify_token",
 )
 
 
@@ -102,18 +119,25 @@ def is_valid_extraction(result: dict[str, Any] | None) -> bool:
     return any(_nonempty(v) for v in (name, company, designation, about, headline))
 
 
-def is_retryable_error(message: str | None, *, non_retryable_csv: str = "") -> bool:
-    """Default retryable; only clearly permanent errors skip remaining attempts."""
+def classify_extraction_error(
+    message: str | None, *, non_retryable_csv: str = ""
+) -> tuple[bool, str]:
+    """Return (retryable, category) for logging and retry decisions."""
     text = (message or "").strip().lower()
     if not text:
-        return True
+        return True, "unknown_empty"
     configured = [p.strip().lower() for p in (non_retryable_csv or "").split(",") if p.strip()]
     if any(p in text for p in configured):
-        return False
-    if "invalid url" in text or "must be a linkedin" in text or "malformed" in text:
-        return False
-    if "not configured" in text or "apify_token" in text:
-        return False
+        return False, "configured_permanent"
+    if any(m in text for m in _PERMANENT_MARKERS):
+        return False, "permanent"
     if any(m in text for m in _RETRYABLE_MARKERS):
-        return True
-    return True
+        return True, "transient"
+    # Ambiguous Apify/network failures — allow limited retries.
+    return True, "unknown_transient"
+
+
+def is_retryable_error(message: str | None, *, non_retryable_csv: str = "") -> bool:
+    """True when another attempt may succeed; permanent failures skip remaining attempts."""
+    retryable, _category = classify_extraction_error(message, non_retryable_csv=non_retryable_csv)
+    return retryable

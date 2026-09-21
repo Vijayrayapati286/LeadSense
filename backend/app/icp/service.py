@@ -77,6 +77,20 @@ def _apply_tenant_scope(query, *, org_id: str | None, user_id: int | None):
     return query
 
 
+def _apply_tenant_scope_with_legacy(
+    query, *, org_id: str | None, user_id: int | None
+):
+    """Org scope plus legacy rows (org_id NULL) owned by the same user."""
+    if org_id and user_id is not None:
+        return query.filter(
+            or_(
+                IcpRecordRow.org_id == org_id,
+                and_(IcpRecordRow.org_id.is_(None), IcpRecordRow.user_id == user_id),
+            )
+        )
+    return _apply_tenant_scope(query, org_id=org_id, user_id=user_id)
+
+
 def _org_member_user_ids(db: Session, org_id: str) -> list[int]:
     from app.models import User
 
@@ -933,7 +947,7 @@ def find_icp_by_linkedin_urls(
     if not normalized:
         return {}
     q = db.query(IcpRecordRow).filter(IcpRecordRow.linkedin_url.in_(normalized))
-    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
+    q = _apply_tenant_scope_with_legacy(q, org_id=org_id, user_id=user_id)
     return {row.linkedin_url: row for row in q.all() if row.linkedin_url}
 
 
@@ -964,7 +978,6 @@ def skip_job_items_already_in_icp(
 
     org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     job = get_job_row(db, job_id)
-    job_created_at = getattr(job, "created_at", None) if job else None
 
     items = (
         db.query(BulkJobItemRow)
@@ -990,17 +1003,15 @@ def skip_job_items_already_in_icp(
         icp = icp_map.get(item.normalized_url)
         if not icp:
             continue
-        # Only skip LinkedIn extraction when the profile was already in ICP before this upload.
-        if job_created_at and icp.created_at and icp.created_at < job_created_at:
-            _apply_icp_record_to_bulk_item(item, icp, now=now)
-            skipped += 1
-            logger.info(
-                "ICP skip job=%s item=%s url=%s icp_id=%s",
-                job_id,
-                item.id,
-                item.normalized_url,
-                icp.id,
-            )
+        _apply_icp_record_to_bulk_item(item, icp, now=now)
+        skipped += 1
+        logger.info(
+            "SKIP_APIFY reason=ALREADY_IN_ICP job_id=%s item_id=%s profile_url=%s icp_id=%s",
+            job_id,
+            item.id,
+            item.normalized_url,
+            icp.id,
+        )
 
     if skipped:
         copy_canonical_results_to_duplicates(db, job_id)

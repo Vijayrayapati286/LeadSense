@@ -37,8 +37,12 @@ from app.linkedin.bulk_models import (
     PHASE_EXTRACTING,
     BulkJobItemRow,
 )
-from app.linkedin.validator import is_retryable_error, is_valid_extraction
+from app.linkedin.validator import classify_extraction_error, is_valid_extraction
 from app.linkedin.verification import apply_verification
+from app.linkedin.cost_guard import (
+    apply_cost_guard_to_claimed_items,
+    log_apify_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -357,9 +361,50 @@ class BulkBatchRunner:
             if not items:
                 return
 
+            job = get_job_row(db, job_id)
+            user_id = getattr(job, "user_id", None) if job else None
             max_attempts = max(int(self.settings.apify_max_retries), 1)
+            match_threshold = int(getattr(self.settings, "verify_match_threshold", 100))
+            review_threshold = int(getattr(self.settings, "verify_review_threshold", 75))
+
+            eligible = items
+            guard_stats = None
+            if bool(getattr(self.settings, "apify_enable_cost_guard", True)):
+                guarded = apply_cost_guard_to_claimed_items(
+                    db,
+                    job_id=job_id,
+                    items=items,
+                    user_id=user_id,
+                    match_threshold=match_threshold,
+                    review_threshold=review_threshold,
+                )
+                eligible = guarded.eligible_items
+                guard_stats = guarded.stats
+                if guard_stats.eligible < guard_stats.claimed:
+                    copy_canonical_results_to_duplicates(db, job_id)
+                    if job:
+                        refresh_job_counters(db, job)
+                        self._write_excel(db, job)
+                    db.commit()
+
+            if not eligible:
+                if guard_stats is not None:
+                    log_apify_request(
+                        job_id=job_id,
+                        batch_id=batch_id,
+                        stats=guard_stats,
+                        batch_size=max(int(self.settings.apify_batch_size), 1),
+                        urls_sent=0,
+                    )
+                logger.info(
+                    "[JOB-%s] [BATCH-%s] No URLs eligible for Apify after cost guard",
+                    job_id,
+                    batch_id,
+                )
+                return
+
             started = datetime.now(timezone.utc)
-            for item in items:
+            for item in eligible:
                 item.attempt_count = int(item.attempt_count or 0) + 1
                 logger.info(
                     "[JOB-%s] [URL-%s] [ATTEMPT-%s] [WORKER-%s] [BATCH-%s] Extraction started url=%s",
@@ -371,7 +416,23 @@ class BulkBatchRunner:
                     item.normalized_url,
                 )
 
-            urls = [item.normalized_url for item in items]
+            urls = [item.normalized_url for item in eligible]
+            if guard_stats is not None:
+                log_apify_request(
+                    job_id=job_id,
+                    batch_id=batch_id,
+                    stats=guard_stats,
+                    batch_size=max(int(self.settings.apify_batch_size), 1),
+                    urls_sent=len(urls),
+                )
+            else:
+                logger.info(
+                    "APIFY_REQUEST job_id=%s batch_id=%s new_urls=%s cost_guard=off",
+                    job_id,
+                    batch_id,
+                    len(urls),
+                )
+
             sema = _apify_limit(self.settings)
             acquired = sema.acquire()
             try:
@@ -384,7 +445,7 @@ class BulkBatchRunner:
             duration_ms = int((finished - started).total_seconds() * 1000)
             apify_run_id = outcome.actor_run_id
 
-            for item in items:
+            for item in eligible:
                 result = outcome.results_by_url.get(item.normalized_url) or {
                     "status": "failed",
                     "data": None,
@@ -449,6 +510,8 @@ class BulkBatchRunner:
                 max_attempts = max(int(self.settings.apify_max_retries), 1)
                 for item in items:
                     if item.status == ITEM_SUCCESS:
+                        continue
+                    if item.status != ITEM_PROCESSING:
                         continue
                     self._mark_failure(
                         db,
@@ -530,7 +593,20 @@ class BulkBatchRunner:
         finished: datetime,
         max_attempts: int,
     ) -> None:
-        retryable = is_retryable_error(error, non_retryable_csv=self.settings.bulk_non_retryable_errors)
+        retryable, category = classify_extraction_error(
+            error, non_retryable_csv=self.settings.bulk_non_retryable_errors
+        )
+        will_retry = retryable and item.attempt_count < max_attempts
+        logger.info(
+            "RETRY_DECISION job_id=%s item_id=%s url=%s attempt=%s category=%s retry=%s error=%s",
+            item.job_id,
+            item.id,
+            item.normalized_url,
+            item.attempt_count,
+            category,
+            will_retry,
+            (error or "")[:200],
+        )
         item.last_error = error
         item.extraction_response = response
         add_attempt(

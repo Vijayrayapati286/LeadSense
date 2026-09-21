@@ -105,10 +105,12 @@ class Settings(BaseSettings):
     # Bulk LinkedIn extract: concurrent Apify batch processing
     max_concurrent_apify_runs: int = Field(10, validation_alias="MAX_CONCURRENT_APIFY_RUNS")
     max_concurrent_batches: int = Field(10, validation_alias="MAX_CONCURRENT_BATCHES")
-    apify_batch_size: int = Field(10, validation_alias="APIFY_BATCH_SIZE")
+    apify_batch_size: int = Field(50, validation_alias="APIFY_BATCH_SIZE")
     processing_window: int = Field(100, validation_alias="PROCESSING_WINDOW")
     # Max extraction attempts per URL (attempt 1 + retries). Success stops immediately.
-    apify_max_retries: int = Field(3, validation_alias="APIFY_MAX_RETRIES")
+    apify_max_retries: int = Field(2, validation_alias="APIFY_MAX_RETRIES")
+    # Final ICP / reuse / in-flight checks immediately before every Apify batch.
+    apify_enable_cost_guard: bool = Field(True, validation_alias="APIFY_ENABLE_COST_GUARD")
     max_bulk_urls: int = Field(5000, validation_alias="MAX_BULK_URLS")
     bulk_retry_base_delay_seconds: float = Field(5.0, validation_alias="BULK_RETRY_BASE_DELAY_SECONDS")
     bulk_retry_backoff_multiplier: float = Field(2.0, validation_alias="BULK_RETRY_BACKOFF_MULTIPLIER")
@@ -117,7 +119,8 @@ class Settings(BaseSettings):
     verify_review_threshold: int = Field(100, validation_alias="VERIFY_REVIEW_THRESHOLD")
     # Comma-separated substrings; matching errors skip further retries.
     bulk_non_retryable_errors: str = Field(
-        "invalid url,malformed,permanently unavailable,profile not found,not a linkedin",
+        "invalid url,malformed,permanently unavailable,profile not found,not a linkedin,"
+        "private profile,unavailable,does not exist,404",
         validation_alias="BULK_NON_RETRYABLE_ERRORS",
     )
 
