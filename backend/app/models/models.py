@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -16,9 +16,14 @@ class Organization(Base):
     org_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     org_name: Mapped[str] = mapped_column(String(255), nullable=False)
     org_type: Mapped[str] = mapped_column(String(50), nullable=False, default="TENANT")
+    client_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     integration_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="ACTIVE")
     created_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    owner_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -29,6 +34,9 @@ class Organization(Base):
     )
     tokens: Mapped[list["OrganizationToken"]] = relationship(
         "OrganizationToken", back_populates="organization", cascade="all, delete-orphan"
+    )
+    leads: Mapped[list["Lead"]] = relationship(
+        "Lead", back_populates="organization", cascade="all, delete-orphan"
     )
 
 
@@ -58,6 +66,32 @@ class OrganizationToken(Base):
     organization: Mapped["Organization"] = relationship("Organization", back_populates="tokens")
 
 
+class Lead(Base):
+    """Org-scoped lead / work item for SmartOps pull/push. Isolation key is organization_id."""
+
+    __tablename__ = "leads"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("organizations.org_id"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="open", index=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    company: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="leads")
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -73,6 +107,9 @@ class User(Base):
     )
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="USER")
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="ACTIVE")
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -98,6 +135,7 @@ class Invite(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING", index=True)
     invite_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     invited_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    role_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("roles.id"), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_note: Mapped[str | None] = mapped_column(String(500), nullable=True)

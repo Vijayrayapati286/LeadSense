@@ -111,7 +111,7 @@ def accept_invite(
     *,
     name: str,
     password: str,
-    actor: User,
+    actor: User | None = None,
 ) -> tuple[Invite, User]:
     _expire_stale(db, invite.org_id)
     db.refresh(invite)
@@ -124,6 +124,7 @@ def accept_invite(
     if existing:
         raise ValueError("A user with that email already exists")
 
+    actor_name = actor.name if actor else name.strip() or invite.email
     user = User(
         name=name.strip() or invite.email.split("@")[0],
         email=invite.email,
@@ -136,7 +137,7 @@ def accept_invite(
     db.add(user)
     invite.status = STATUS_ACCEPTED
     invite.resolved_at = utc_now()
-    invite.resolved_note = f"Accepted by {actor.name} on {utc_now().strftime('%m/%d/%Y')}"
+    invite.resolved_note = f"Accepted by {actor_name} on {utc_now().strftime('%m/%d/%Y')}"
     db.commit()
     db.refresh(invite)
     db.refresh(user)

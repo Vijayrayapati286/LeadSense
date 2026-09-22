@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { FiMoreVertical, FiPlus, FiSearch } from 'react-icons/fi';
 import { inviteService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
+import { hasPermission } from '../utils/permissions';
 import { useToast } from '../hooks/useToast';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import PageShell from '../components/ui/PageShell';
@@ -48,8 +49,7 @@ export default function InvitesPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteForm, setInviteForm] = useState({ email: '', role: 'USER' });
 
-  const [acceptInvite, setAcceptInvite] = useState(null);
-  const [acceptForm, setAcceptForm] = useState({ name: '', password: '' });
+  const [resendInvite, setResendInvite] = useState(null);
   const [cancelInvite, setCancelInvite] = useState(null);
   const [menuId, setMenuId] = useState(null);
 
@@ -79,7 +79,7 @@ export default function InvitesPage() {
     return invites.filter((row) => row.status === tab);
   }, [invites, tab]);
 
-  if (user?.role !== 'ADMIN') {
+  if (!hasPermission(user, 'members:invite')) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -91,7 +91,7 @@ export default function InvitesPage() {
     setSaving(true);
     try {
       await inviteService.create(inviteForm);
-      toast.success('Invite sent');
+      toast.success('Verification email sent');
       setInviteOpen(false);
       setInviteForm({ email: '', role: 'USER' });
       setTab('PENDING');
@@ -118,18 +118,15 @@ export default function InvitesPage() {
     }
   };
 
-  const handleAccept = async (event) => {
-    event.preventDefault();
-    if (!acceptInvite) return;
+  const handleResend = async () => {
+    if (!resendInvite) return;
     setSaving(true);
     try {
-      await inviteService.accept(acceptInvite.id, acceptForm);
-      toast.success('Member created from invite');
-      setAcceptInvite(null);
-      setAcceptForm({ name: '', password: '' });
-      await load();
+      await inviteService.resend(resendInvite.id);
+      toast.success('Verification email resent');
+      setResendInvite(null);
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to accept invite');
+      toast.error(err?.response?.data?.detail || 'Failed to resend invite');
     } finally {
       setSaving(false);
     }
@@ -255,11 +252,10 @@ export default function InvitesPage() {
                                     className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
                                     onClick={() => {
                                       setMenuId(null);
-                                      setAcceptInvite(row);
-                                      setAcceptForm({ name: row.email.split('@')[0], password: '' });
+                                      setResendInvite(row);
                                     }}
                                   >
-                                    Accept & create
+                                    Resend email
                                   </button>
                                   <button
                                     type="button"
@@ -340,41 +336,14 @@ export default function InvitesPage() {
         </form>
       </Modal>
 
-      <Modal isOpen={Boolean(acceptInvite)} onClose={() => setAcceptInvite(null)} title="Accept invite">
-        <form className="space-y-4" onSubmit={handleAccept}>
-          <p className="text-sm text-slate-500">
-            Create an account for <span className="font-medium text-slate-800">{acceptInvite?.email}</span>
-          </p>
-          <label className="block text-sm font-medium text-slate-700">
-            Name
-            <input
-              required
-              className={fieldClass}
-              value={acceptForm.name}
-              onChange={(e) => setAcceptForm((f) => ({ ...f, name: e.target.value }))}
-            />
-          </label>
-          <label className="block text-sm font-medium text-slate-700">
-            Temporary password
-            <input
-              type="password"
-              required
-              minLength={8}
-              className={fieldClass}
-              value={acceptForm.password}
-              onChange={(e) => setAcceptForm((f) => ({ ...f, password: e.target.value }))}
-            />
-          </label>
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={() => setAcceptInvite(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-              Cancel
-            </button>
-            <button type="submit" disabled={saving} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60">
-              {saving ? 'Creating…' : 'Create member'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      <ConfirmDialog
+        isOpen={Boolean(resendInvite)}
+        title="Resend verification?"
+        message={resendInvite ? `Send the verification email again to ${resendInvite.email}?` : ''}
+        confirmText="Resend email"
+        onConfirm={handleResend}
+        onClose={() => setResendInvite(null)}
+      />
 
       <ConfirmDialog
         isOpen={Boolean(cancelInvite)}

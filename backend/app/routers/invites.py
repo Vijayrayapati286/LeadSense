@@ -6,11 +6,11 @@ from sqlalchemy.orm import Session
 from typing import Literal
 
 from app.database.connection import get_db
-from app.middleware.tenant import require_admin_user, require_org_id
-from app.models import Invite, User
+from app.middleware.tenant import require_org_id, require_permission
+from app.models import Invite, Organization, User
 from app.schemas.schemas import MessageResponse, UserResponse
 from app.routers.auth import _user_response
-from app.services import invite_service
+from app.services import invite_service, onboard_service
 
 router = APIRouter(prefix="/invites", tags=["Invites"])
 
@@ -56,7 +56,7 @@ def list_invites(
     status: str | None = Query(None),
     search: str = Query(""),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:invite")),
 ):
     org_id = require_org_id(current_user)
     rows = invite_service.list_invites(db, org_id, status=status, search=search)
@@ -67,7 +67,7 @@ def list_invites(
 def create_invite(
     data: InviteCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:invite")),
 ):
     org_id = require_org_id(current_user)
     try:
@@ -76,6 +76,8 @@ def create_invite(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    org = db.query(Organization).filter(Organization.org_id == org_id).first()
+    onboard_service.send_invite_verification_email(invite, org)
     return InviteResponse(**invite_service.invite_to_dict(invite))
 
 
@@ -83,7 +85,7 @@ def create_invite(
 def cancel_invite(
     invite_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:invite")),
 ):
     org_id = require_org_id(current_user)
     invite = _get_org_invite(db, invite_id, org_id)
@@ -94,12 +96,27 @@ def cancel_invite(
     return InviteResponse(**invite_service.invite_to_dict(invite))
 
 
+@router.post("/{invite_id}/resend", response_model=InviteResponse)
+def resend_invite(
+    invite_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("members:invite")),
+):
+    org_id = require_org_id(current_user)
+    invite = _get_org_invite(db, invite_id, org_id)
+    if invite.status != invite_service.STATUS_PENDING:
+        raise HTTPException(status_code=400, detail="Only pending invites can be resent")
+    org = db.query(Organization).filter(Organization.org_id == org_id).first()
+    onboard_service.send_invite_verification_email(invite, org)
+    return InviteResponse(**invite_service.invite_to_dict(invite))
+
+
 @router.post("/{invite_id}/accept", response_model=InviteAcceptResponse)
 def accept_invite(
     invite_id: int,
     data: InviteAcceptRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:invite")),
 ):
     """Admin completes an invite by creating the member account."""
     org_id = require_org_id(current_user)
@@ -120,7 +137,7 @@ def accept_invite(
 def delete_invite(
     invite_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:invite")),
 ):
     org_id = require_org_id(current_user)
     invite = _get_org_invite(db, invite_id, org_id)

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { FiPlus, FiUsers } from 'react-icons/fi';
-import { userService } from '../services/services';
+import { userService, inviteService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
+import { hasPermission } from '../utils/permissions';
 import { useToast } from '../hooks/useToast';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Button from '../components/ui/Button';
@@ -13,12 +14,8 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import SearchInput from '../components/ui/SearchInput';
 
 const EMPTY_CREATE = {
-  name: '',
   email: '',
-  password: '',
   role: 'USER',
-  department: 'Sales',
-  status: 'ACTIVE',
 };
 
 function initials(name) {
@@ -94,7 +91,7 @@ export default function UsersPage() {
     );
   }, [users, search]);
 
-  if (user?.role !== 'ADMIN') {
+  if (!hasPermission(user, 'members:read')) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -105,8 +102,8 @@ export default function UsersPage() {
     event.preventDefault();
     setSaving(true);
     try {
-      await userService.create(createForm);
-      toast.success('Member added');
+      await inviteService.create({ email: createForm.email, role: createForm.role });
+      toast.success('Verification email sent');
       setCreateOpen(false);
       setCreateForm(EMPTY_CREATE);
       await loadUsers();
@@ -173,24 +170,26 @@ export default function UsersPage() {
             {user?.org_name || user?.org_id || 'your organization'}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
-          >
-            <FiPlus size={16} />
-            Add User
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/invites')}
-            className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
-          >
-            <FiPlus size={16} />
-            Invite Member
-          </button>
-        </div>
+        {hasPermission(user, 'members:invite') ? (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <FiPlus size={16} />
+              Add User
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/invites')}
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+            >
+              <FiPlus size={16} />
+              Invite Member
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -302,34 +301,24 @@ export default function UsersPage() {
 
       <Modal isOpen={createOpen} onClose={() => setCreateOpen(false)} title="Add User">
         <form className="space-y-4" onSubmit={handleCreate}>
-          <label className="block text-sm font-medium text-slate-700">
-            Name
-            <input className={fieldClass} required value={createForm.name} onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))} />
-          </label>
+          <p className="text-sm text-slate-600">
+            They receive a verification email, then set their own password. They join{' '}
+            <span className="font-medium">{user?.org_name || 'your organization'}</span> only.
+          </p>
           <label className="block text-sm font-medium text-slate-700">
             Email
             <input type="email" className={fieldClass} required value={createForm.email} onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))} />
           </label>
           <label className="block text-sm font-medium text-slate-700">
-            Password
-            <input type="password" className={fieldClass} required minLength={8} value={createForm.password} onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))} />
+            Role
+            <select className={fieldClass} value={createForm.role} onChange={(e) => setCreateForm((f) => ({ ...f, role: e.target.value }))}>
+              <option value="USER">User</option>
+              <option value="ADMIN">Admin</option>
+            </select>
           </label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block text-sm font-medium text-slate-700">
-              Role
-              <select className={fieldClass} value={createForm.role} onChange={(e) => setCreateForm((f) => ({ ...f, role: e.target.value }))}>
-                <option value="USER">User</option>
-                <option value="ADMIN">Admin</option>
-              </select>
-            </label>
-            <label className="block text-sm font-medium text-slate-700">
-              Department
-              <input className={fieldClass} value={createForm.department} onChange={(e) => setCreateForm((f) => ({ ...f, department: e.target.value }))} />
-            </label>
-          </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>Add User</Button>
+            <Button type="submit" loading={saving}>Send verification</Button>
           </div>
         </form>
       </Modal>

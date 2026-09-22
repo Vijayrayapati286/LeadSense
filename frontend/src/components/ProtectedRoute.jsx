@@ -1,6 +1,7 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import LoadingSpinner from '../components/ui/LoadingSpinner';
+import { hasPermission } from '../utils/permissions';
+import LoadingSpinner from './ui/LoadingSpinner';
 
 export default function ProtectedRoute() {
   const { user, loading } = useAuth();
@@ -17,5 +18,13 @@ export default function ProtectedRoute() {
     return <Navigate to="/login" replace />;
   }
 
+  return <Outlet />;
+}
+
+export function RequirePermission({ permission }) {
+  const { user } = useAuth();
+  if (!hasPermission(user, permission)) {
+    return <Navigate to="/dashboard" replace />;
+  }
   return <Outlet />;
 }

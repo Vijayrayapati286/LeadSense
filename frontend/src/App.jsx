@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute from './components/ProtectedRoute';
+import ProtectedRoute, { RequirePermission } from './components/ProtectedRoute';
 import MainLayout from './layouts/MainLayout';
 import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
@@ -26,11 +26,14 @@ import OfferingsPage from './pages/OfferingsPage';
 import OfferingCreatePage from './pages/OfferingCreatePage';
 import OfferingDetailPage from './pages/OfferingDetailPage';
 import OrganizationsPage from './pages/OrganizationsPage';
+import RolesAccessPage from './pages/RolesAccessPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 import { useAuth } from './hooks/useAuth';
+import { hasPermission } from './utils/permissions';
 
 function DashboardEntry() {
   const { user } = useAuth();
-  if (user?.role === 'ADMIN') {
+  if (hasPermission(user, 'members:read') || hasPermission(user, 'orgs:onboard')) {
     return <AdminDashboardPage />;
   }
   return <DashboardPage />;
@@ -41,14 +44,25 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/auth/callback" element={<AuthCallbackPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage kind="owner" />} />
+      <Route path="/accept-invite" element={<VerifyEmailPage kind="invite" />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<MainLayout />}>
           <Route path="/dashboard" element={<DashboardEntry />} />
           <Route path="/admin-dashboard" element={<AdminDashboardPage />} />
-          <Route path="/users" element={<UsersPage />} />
-          <Route path="/invites" element={<InvitesPage />} />
-          <Route path="/organizations" element={<OrganizationsPage />} />
+          <Route element={<RequirePermission permission="members:read" />}>
+            <Route path="/users" element={<UsersPage />} />
+          </Route>
+          <Route element={<RequirePermission permission="members:invite" />}>
+            <Route path="/invites" element={<InvitesPage />} />
+          </Route>
+          <Route element={<RequirePermission permission="orgs:onboard" />}>
+            <Route path="/organizations" element={<OrganizationsPage />} />
+          </Route>
+          <Route element={<RequirePermission permission="access:read" />}>
+            <Route path="/access" element={<RolesAccessPage />} />
+          </Route>
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/create" element={<CreateCampaignPage />} />
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />

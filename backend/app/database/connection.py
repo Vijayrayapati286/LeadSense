@@ -362,24 +362,39 @@ def _ensure_app_settings_schema() -> None:
 
 def init_db() -> None:
     """Create all tables, seed dummy data if empty, and provision named users."""
-    from app.models import Campaign, EmailLog, Organization, OrganizationToken, Recipient, Template, User  # noqa: F401
+    from app.models import (  # noqa: F401
+        Campaign,
+        EmailLog,
+        Lead,
+        Organization,
+        OrganizationToken,
+        Permission,
+        Recipient,
+        Role,
+        Template,
+        User,
+        UserRole,
+    )
     from app.profile_extractor import models as _profile_extractor_models  # noqa: F401
     from app.linkedin import bulk_models as _linkedin_bulk_models  # noqa: F401
     from app.icp import models as _icp_models  # noqa: F401
     from app.offerings import models as _offerings_models  # noqa: F401
     from app.storage import models as _storage_models  # noqa: F401
-    from app.services.seed_service import provision_core_users, provision_tenants, seed_dummy_data
+    from app.services.seed_service import provision_core_users, provision_provider, provision_tenants, seed_dummy_data
 
     Base.metadata.create_all(bind=engine)
     _ensure_linkedin_bulk_schema()
     _ensure_offerings_recommendation_schema()
     _ensure_app_settings_schema()
     _ensure_organizations_schema()
+    _ensure_rbac_schema()
 
     db = SessionLocal()
     try:
         provision_tenants(db)
+        provision_provider(db)
         from app.services.organization_token_service import migrate_legacy_integration_tokens
+        from app.services.rbac_service import provision_rbac
 
         migrated = migrate_legacy_integration_tokens(db)
         if migrated:
@@ -387,6 +402,7 @@ def init_db() -> None:
         if db.query(Campaign).count() == 0:
             seed_dummy_data(db)
         provision_core_users(db)
+        provision_rbac(db)
     finally:
         db.close()
 
@@ -558,3 +574,54 @@ def _ensure_organizations_schema() -> None:
                 )
             )
             logger.info("Created organization_tokens table")
+
+
+def _ensure_rbac_schema() -> None:
+    """Add RBAC / session columns when create_all cannot ALTER existing tables."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    dialect = engine.dialect.name
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME"
+    bool_true = "BOOLEAN DEFAULT 1" if dialect == "sqlite" else "BOOLEAN DEFAULT true"
+
+    with engine.begin() as conn:
+        if "organizations" in tables:
+            cols = {c["name"] for c in inspector.get_columns("organizations")}
+            org_adds = {
+                "owner_user_id": "INTEGER",
+                "is_active": bool_true,
+                "suspended_at": ts,
+                "suspended_by_user_id": "INTEGER",
+                "client_name": "VARCHAR(255)",
+            }
+            for name, ddl in org_adds.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE organizations ADD COLUMN {name} {ddl}"))
+                    logger.info("Added organizations.%s", name)
+
+        if "users" in tables:
+            cols = {c["name"] for c in inspector.get_columns("users")}
+            user_adds = {
+                "email_verified_at": ts,
+                "failed_login_attempts": "INTEGER DEFAULT 0",
+                "locked_until": ts,
+            }
+            for name, ddl in user_adds.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {ddl}"))
+                    logger.info("Added users.%s", name)
+
+        if "invites" in tables:
+            cols = {c["name"] for c in inspector.get_columns("invites")}
+            if "role_id" not in cols:
+                conn.execute(text("ALTER TABLE invites ADD COLUMN role_id VARCHAR(64)"))
+                logger.info("Added invites.role_id")
+
+        leftover = set(inspect(engine).get_table_names())
+        for extra in ("sectors", "manager_assignments"):
+            if extra in leftover:
+                conn.execute(text(f"DROP TABLE IF EXISTS {extra}"))
+                logger.info("Dropped unused table %s", extra)
+

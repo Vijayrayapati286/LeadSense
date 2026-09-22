@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import msal
 from jose import jwt
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
 from app.models import Organization, User
@@ -137,7 +137,12 @@ class AuthService:
         """Email+password login for named team members provisioned with a
         set password (see seed_service.provision_core_users), independent of
         both Azure AD and the unauthenticated dev-login fallback."""
-        user = db.query(User).filter(User.email == email).first()
+        user = (
+            db.query(User)
+            .options(joinedload(User.organization))
+            .filter(User.email == email)
+            .first()
+        )
         if not user or not user.password_hash or not self.verify_password(password, user.password_hash):
             raise ValueError("Invalid email or password")
         if getattr(user, "status", "ACTIVE") != "ACTIVE":
@@ -202,7 +207,7 @@ class AuthService:
         payload = self.verify_token(token)
         if not payload:
             return None
-        user = db.query(User).filter(User.id == int(payload["sub"])).first()
+        user = db.query(User).options(joinedload(User.organization)).filter(User.id == int(payload["sub"])).first()
         if not user:
             return None
         if getattr(user, "status", "ACTIVE") != "ACTIVE":
