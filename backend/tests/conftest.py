@@ -13,7 +13,8 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB.as_posix()}"
 os.environ["USE_SQLITE_FALLBACK"] = "true"
 os.environ["SKIP_BULK_RESUME"] = "1"
 os.environ.setdefault("BULK_RETRY_BASE_DELAY_SECONDS", "0")
-os.environ.setdefault("APIFY_MAX_RETRIES", "3")
+os.environ.setdefault("APIFY_MAX_RETRIES", "2")
+os.environ.setdefault("APIFY_ENABLE_COST_GUARD", "true")
 os.environ.setdefault("USE_MOCK_SES", "true")
 os.environ.setdefault("USE_MOCK_GROQ", "true")
 os.environ.setdefault("USE_MOCK_S3", "true")

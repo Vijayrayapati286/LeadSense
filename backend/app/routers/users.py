@@ -4,8 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
-from app.middleware.auth import get_current_user
-from app.middleware.tenant import require_admin_user, require_org_id
+from app.middleware.tenant import require_org_id, require_permission
 from app.models import User
 from app.routers.auth import _user_response
 from app.schemas.schemas import (
@@ -17,6 +16,7 @@ from app.schemas.schemas import (
     UserStatusUpdateRequest,
 )
 from app.services.auth_service import AuthService
+from app.services.rbac_service import assign_system_role
 from app.services.tenant_constants import ROLE_ADMIN, STATUS_ACTIVE
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -33,7 +33,7 @@ def _tenant_user_or_404(db: Session, user_id: int, org_id: str) -> User:
 @router.get("", response_model=list[UserResponse])
 def list_users(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("members:read")),
 ):
     """List users in the caller's tenant only — never cross-tenant."""
     org_id = require_org_id(current_user)
@@ -50,7 +50,7 @@ def list_users(
 def create_user(
     data: UserCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:manage")),
 ):
     """Create a user in the admin's tenant only."""
     org_id = require_org_id(current_user)
@@ -69,6 +69,8 @@ def create_user(
         password_hash=AuthService.hash_password(data.password),
     )
     db.add(user)
+    db.flush()
+    assign_system_role(db, user, "admin" if user.role == ROLE_ADMIN else "user")
     db.commit()
     db.refresh(user)
     return _user_response(user)
@@ -79,7 +81,7 @@ def update_user(
     user_id: int,
     data: UserAdminUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:manage")),
 ):
     """Edit name / department / role / status for a user in this tenant."""
     org_id = require_org_id(current_user)
@@ -106,7 +108,7 @@ def update_user_status(
     user_id: int,
     data: UserStatusUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:manage")),
 ):
     """Activate or deactivate a tenant user."""
     org_id = require_org_id(current_user)
@@ -124,7 +126,7 @@ def reset_user_password(
     user_id: int,
     data: UserResetPasswordRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:manage")),
 ):
     """Set a new password for a user in this tenant."""
     org_id = require_org_id(current_user)
@@ -138,7 +140,7 @@ def reset_user_password(
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_permission("members:manage")),
 ):
     """Delete a user from this tenant. Admins cannot delete themselves."""
     org_id = require_org_id(current_user)

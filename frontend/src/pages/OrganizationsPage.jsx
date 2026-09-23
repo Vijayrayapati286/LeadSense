@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { FiCopy, FiPlus } from 'react-icons/fi';
 import { organizationService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
+import { hasPermission } from '../utils/permissions';
 import { useToast } from '../hooks/useToast';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Button from '../components/ui/Button';
@@ -76,7 +77,11 @@ export default function OrganizationsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: '', type: 'TENANT' });
+  const [createForm, setCreateForm] = useState({
+    name: '',
+    owner_name: '',
+    owner_email: '',
+  });
   /** One-time handoff after create — never listed again on this page. */
   const [handoff, setHandoff] = useState(null);
 
@@ -94,37 +99,44 @@ export default function OrganizationsPage() {
   }, [toast]);
 
   useEffect(() => {
-    if (user?.role !== 'ADMIN') return;
+    if (!hasPermission(user, 'orgs:onboard')) return;
     loadOrgs();
-  }, [user?.role, user?.org_id, loadOrgs]);
+  }, [user?.role, user?.org_id, user?.org_type, user?.permissions, loadOrgs]);
 
-  if (user?.role !== 'ADMIN') {
+  if (!hasPermission(user, 'orgs:onboard')) {
     return <Navigate to="/dashboard" replace />;
   }
 
   const handleCreateOrg = async (e) => {
     e.preventDefault();
-    if (!createForm.name.trim()) {
-      toast.error('Organization name is required');
+    if (!createForm.name.trim() || !createForm.owner_name.trim() || !createForm.owner_email.trim()) {
+      toast.error('Tenant org name, admin name, and admin email are required');
       return;
     }
     setSaving(true);
     try {
+      const adminName = createForm.owner_name.trim();
       const { data } = await organizationService.create({
         name: createForm.name.trim(),
-        type: createForm.type,
-        pat_name: createForm.type === 'PROVIDER' ? 'Provider' : 'SmartOps',
+        owner_name: adminName,
+        owner_email: createForm.owner_email.trim(),
+        client_name: adminName,
+        type: 'TENANT',
+        pat_name: 'SmartOps',
       });
       setCreateOpen(false);
-      setCreateForm({ name: '', type: 'TENANT' });
+      setCreateForm({ name: '', owner_name: '', owner_email: '' });
       if (!data?.token?.token) {
         toast.error('Organization created but credentials were not returned');
       } else {
         setHandoff({
           name: data.name,
+          client_name: data.client_name,
           type: data.type,
           organization_id: data.organization_id,
           token: data.token.token,
+          owner_email: data.owner_email,
+          owner_verify_url: data.owner_verify_url,
         });
       }
       await loadOrgs();
@@ -139,11 +151,10 @@ export default function OrganizationsPage() {
     <PageShell>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Onboard organization</h1>
+          <h1 className="text-2xl font-semibold text-slate-900">Onboard tenant</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
-            Enter name and type (<span className="font-medium">TENANT</span> or{' '}
-            <span className="font-medium">PROVIDER</span>). We create the org and a PAT automatically.
-            Credentials are shown <span className="font-medium">once</span> after create — not stored on this page.
+            Each tenant org has one admin (the client). That admin belongs only to this org and can
+            add users there. We email them a verification link to set their password.
           </p>
         </div>
         <Button type="button" onClick={() => setCreateOpen(true)} className="inline-flex items-center gap-2">
@@ -162,6 +173,7 @@ export default function OrganizationsPage() {
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500">
                   <th className="px-5 py-3 font-semibold">Name</th>
+                  <th className="px-5 py-3 font-semibold">Admin</th>
                   <th className="px-5 py-3 font-semibold">Type</th>
                   <th className="px-5 py-3 font-semibold">Organization ID</th>
                   <th className="px-5 py-3 font-semibold">Status</th>
@@ -171,6 +183,7 @@ export default function OrganizationsPage() {
                 {orgs.map((org) => (
                   <tr key={org.organization_id} className="border-b border-slate-50">
                     <td className="px-5 py-3.5 font-medium text-slate-900">{org.name}</td>
+                    <td className="px-5 py-3.5 text-slate-700">{org.client_name || '—'}</td>
                     <td className="px-5 py-3.5">
                       <TypePill type={org.type} />
                     </td>
@@ -201,7 +214,7 @@ export default function OrganizationsPage() {
                 ))}
                 {!orgs.length ? (
                   <tr>
-                    <td colSpan={4} className="px-5 py-14 text-center text-slate-500">
+                    <td colSpan={5} className="px-5 py-14 text-center text-slate-500">
                       No organizations yet. Onboard one to get started.
                     </td>
                   </tr>
@@ -215,29 +228,40 @@ export default function OrganizationsPage() {
       <Modal isOpen={createOpen} onClose={() => !saving && setCreateOpen(false)} title="Onboard organization">
         <form onSubmit={handleCreateOrg} className="space-y-4">
           <p className="text-sm text-slate-600">
-            Creates the organization and issues a PAT in one step. You will copy both values once on the next screen.
+            Creates the tenant org and its admin (the client). Access is only for this org. A
+            verification email is sent so they can set a password.
           </p>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Organization name</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Tenant org name</label>
             <input
               className="input-field w-full"
               value={createForm.name}
               onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="e.g. Acme Corp"
+              placeholder="e.g. Deloitte"
               required
               autoFocus
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Type</label>
-            <select
+            <label className="mb-1 block text-sm font-medium text-slate-700">Admin name</label>
+            <input
               className="input-field w-full"
-              value={createForm.type}
-              onChange={(e) => setCreateForm((f) => ({ ...f, type: e.target.value }))}
-            >
-              <option value="TENANT">TENANT</option>
-              <option value="PROVIDER">PROVIDER</option>
-            </select>
+              value={createForm.owner_name}
+              onChange={(e) => setCreateForm((f) => ({ ...f, owner_name: e.target.value }))}
+              placeholder="e.g. Sreelatha"
+              required
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Admin email</label>
+            <input
+              type="email"
+              className="input-field w-full"
+              value={createForm.owner_email}
+              onChange={(e) => setCreateForm((f) => ({ ...f, owner_email: e.target.value }))}
+              placeholder="admin@client.com"
+              required
+            />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" disabled={saving} onClick={() => setCreateOpen(false)}>
@@ -258,14 +282,18 @@ export default function OrganizationsPage() {
         {handoff ? (
           <div className="space-y-4">
             <p className="text-sm text-slate-600">
-              <span className="font-medium text-slate-800">{handoff.name}</span> ({handoff.type}) is ready.
-              Paste into SmartOps: Organization ID → <span className="font-medium">Tenant Id</span>, PAT → API token.
+              <span className="font-medium text-slate-800">{handoff.name}</span> is ready.
+              Admin <span className="font-medium">{handoff.client_name || handoff.owner_email}</span> got a
+              verification email at <span className="font-medium">{handoff.owner_email}</span>.
             </p>
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               The PAT is not stored on this page and will not be shown again. Copy it before closing.
             </p>
             <CopyField label="Organization ID (Tenant Id)" value={handoff.organization_id} />
             <CopyField label="PAT" value={handoff.token} />
+            {handoff.owner_verify_url ? (
+              <CopyField label="Admin verify link" value={handoff.owner_verify_url} mono={false} />
+            ) : null}
             <div className="flex justify-end">
               <Button type="button" onClick={() => setHandoff(null)}>
                 Done

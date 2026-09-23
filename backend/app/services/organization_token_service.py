@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Organization, OrganizationToken
 from app.services.seed_service import _new_integration_token, _new_org_id
-from app.services.tenant_constants import ORG_TYPE_TENANT, STATUS_ACTIVE
+from app.services.tenant_constants import ORG_TYPE_PROVIDER, ORG_TYPE_TENANT, ROLE_ADMIN, STATUS_ACTIVE
 
 TOKEN_STATUS_ACTIVE = "ACTIVE"
 TOKEN_STATUS_REVOKED = "REVOKED"
@@ -64,11 +64,14 @@ def normalize_org_type(org_type: str | None) -> str:
 
 
 def can_manage_org(user, org: Organization) -> bool:
-    """Tenant admin of this org, or the LeadSense admin who created it (ops handoff)."""
-    if getattr(user, "role", None) != "ADMIN":
-        return False
+    """Tenant admin of this org, the creator, or a provider admin."""
     if getattr(user, "status", STATUS_ACTIVE) != STATUS_ACTIVE:
         return False
+    if getattr(user, "role", None) != "ADMIN":
+        return False
+    user_org = getattr(user, "organization", None)
+    if getattr(user_org, "org_type", None) == ORG_TYPE_PROVIDER:
+        return True
     if getattr(user, "org_id", None) and user.org_id == org.org_id:
         return True
     if org.created_by_user_id and org.created_by_user_id == getattr(user, "id", None):
@@ -81,6 +84,7 @@ def create_organization(
     *,
     name: str,
     org_type: str = ORG_TYPE_TENANT,
+    client_name: str | None = None,
     created_by_user_id: int | None = None,
     mint_pat: bool = True,
     pat_name: str | None = None,
@@ -94,6 +98,7 @@ def create_organization(
         org_id=_new_org_id(),
         org_name=cleaned_name,
         org_type=normalize_org_type(org_type),
+        client_name=(client_name or "").strip() or None,
         integration_token=_new_integration_token(),
         status=STATUS_ACTIVE,
         created_by_user_id=created_by_user_id,

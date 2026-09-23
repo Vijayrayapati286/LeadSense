@@ -23,63 +23,79 @@ import {
   FiKey,
 } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
+import { hasAnyPermission, hasPermission } from '../utils/permissions';
 
 const NAV_ITEMS = [
-  { path: '/dashboard', label: 'Dashboard', icon: FiHome },
+  { path: '/dashboard', label: 'Dashboard', icon: FiHome, permission: 'dashboard:read' },
   {
     label: 'Lead Generation',
     icon: FiMail,
     children: [
-      { path: '/campaigns', label: 'Campaigns', icon: FiMail },
-      { path: '/logs', label: 'Email Logs', icon: FiList },
+      { path: '/campaigns', label: 'Campaigns', icon: FiMail, permission: 'campaigns:read' },
+      { path: '/logs', label: 'Email Logs', icon: FiList, permission: 'logs:read' },
     ],
   },
   {
     label: 'ICP Database',
     icon: FiDatabase,
     children: [
-      { path: '/icp-accounts', label: 'Accounts', icon: FiBriefcase },
-      { path: '/icp-contacts', label: 'Contacts', icon: FiUsers },
+      { path: '/icp-accounts', label: 'Accounts', icon: FiBriefcase, permission: 'icp:read' },
+      { path: '/icp-contacts', label: 'Contacts', icon: FiUsers, permission: 'icp:read' },
     ],
   },
   {
     label: 'Profile Extraction',
     icon: FiUser,
     children: [
-      { path: '/linkedin-extractor', label: 'Extract', icon: FiUser },
-      { path: '/linkedin-history', label: 'History', icon: FiClock },
-      { path: '/linkedin-needs-review', label: 'Needs Review', icon: FiAlertCircle },
+      { path: '/linkedin-extractor', label: 'Extract', icon: FiUser, permission: 'linkedin:extract' },
+      { path: '/linkedin-history', label: 'History', icon: FiClock, permission: 'linkedin:read' },
+      { path: '/linkedin-needs-review', label: 'Needs Review', icon: FiAlertCircle, permission: 'linkedin:read' },
     ],
   },
-  { path: '/offerings', label: 'Offerings', icon: FiBriefcase },
+  { path: '/offerings', label: 'Offerings', icon: FiBriefcase, permission: 'offerings:read' },
   {
     label: 'Settings',
     icon: FiSettings,
     children: [
-      { path: '/settings', label: 'General', icon: FiSliders },
-      { path: '/blacklist', label: 'Blacklist', icon: FiShield },
-      { path: '/templates', label: 'Mailers', icon: FiFileText },
+      { path: '/settings', label: 'General', icon: FiSliders, permission: 'settings:read' },
+      { path: '/blacklist', label: 'Blacklist', icon: FiShield, permission: 'blacklist:read' },
+      { path: '/templates', label: 'Mailers', icon: FiFileText, permission: 'mailers:read' },
+    ],
+  },
+  {
+    label: 'Members',
+    icon: FiUsers,
+    children: [
+      { path: '/users', label: 'Members', icon: FiUsers, permission: 'members:read' },
+      { path: '/invites', label: 'Invites', icon: FiMail, permission: 'members:invite' },
+      { path: '/organizations', label: 'Onboard orgs', icon: FiKey, permission: 'orgs:onboard' },
+      { path: '/access', label: 'Roles & access', icon: FiShield, permission: 'access:read' },
     ],
   },
 ];
 
+function filterNavItems(items, user) {
+  return items
+    .map((item) => {
+      if (item.children) {
+        const children = item.children.filter((child) => hasPermission(user, child.permission));
+        if (!children.length) return null;
+        return { ...item, children };
+      }
+      if (item.permission && !hasPermission(user, item.permission)) return null;
+      return item;
+    })
+    .filter(Boolean);
+}
+
 function getNavItems(user) {
-  if (user?.role === 'ADMIN') {
-    return [
-      { path: '/dashboard', label: 'Admin Dashboard', icon: FiHome },
-      {
-        label: 'Members',
-        icon: FiUsers,
-        children: [
-          { path: '/users', label: 'Members', icon: FiUsers },
-          { path: '/invites', label: 'Invites', icon: FiMail },
-          { path: '/organizations', label: 'Onboard orgs', icon: FiKey },
-        ],
-      },
-      ...NAV_ITEMS.slice(1),
-    ];
-  }
-  return NAV_ITEMS;
+  const items = NAV_ITEMS.map((item) => {
+    if (item.path === '/dashboard' && hasAnyPermission(user, ['members:read', 'orgs:onboard'])) {
+      return { ...item, label: 'Admin Dashboard' };
+    }
+    return item;
+  });
+  return filterNavItems(items, user);
 }
 
 function initials(name) {

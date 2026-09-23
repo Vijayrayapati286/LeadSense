@@ -651,6 +651,45 @@ def list_jobs(
         db.close()
 
 
+def list_recent_downloads(*, user_id: int | None, limit: int = 30) -> list[dict[str, Any]]:
+    """Jobs with a downloadable Excel — no Apify, stored results only."""
+    db = SessionLocal()
+    try:
+        query = db.query(BulkExtractJobRow).filter(
+            BulkExtractJobRow.excel_finalized.is_(True),
+            BulkExtractJobRow.success_count > 0,
+        )
+        if user_id is not None:
+            query = query.filter(BulkExtractJobRow.user_id == user_id)
+        rows = (
+            query.order_by(
+                BulkExtractJobRow.completed_at.desc(),
+                BulkExtractJobRow.created_at.desc(),
+            )
+            .limit(min(max(int(limit), 1), 100))
+            .all()
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            completed = row.completed_at or row.updated_at or row.created_at
+            name = row.original_file_name or f"LinkedIn_{row.id[:8]}.xlsx"
+            if not str(name).lower().endswith((".xlsx", ".xls", ".csv")):
+                name = f"{name}.xlsx"
+            out.append(
+                {
+                    "job_id": row.id,
+                    "filename": name,
+                    "record_count": int(row.success_count or 0),
+                    "total_urls": int(row.total_urls or 0),
+                    "completed_at": completed.isoformat() if completed else None,
+                    "download_ready": bool(row.excel_finalized),
+                }
+            )
+        return out
+    finally:
+        db.close()
+
+
 def list_job_items(
     job_id: str,
     *,

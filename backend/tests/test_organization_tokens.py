@@ -139,6 +139,63 @@ def test_whoami_accepts_valid_pat(client):
     assert body["token_status"] == "active"
 
 
+def test_auth_me_accepts_valid_pat(client):
+    test_client, org_id, pat = client
+    resp = test_client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {pat}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["organization_id"] == org_id
+    assert body["organization_name"] == "Whoami Test Org"
+    assert body["type"] == "TENANT"
+    assert body["token_status"] == "active"
+
+
+def test_auth_me_rejects_bad_pat(client):
+    test_client, _org_id, _pat = client
+    resp = test_client.get(
+        "/api/auth/me",
+        headers={"Authorization": "Bearer pat_this_is_not_valid_xxxxxxxxxx"},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid or expired token"
+
+
+def test_organizations_list_accepts_pat(client):
+    test_client, org_id, pat = client
+    resp = test_client.get(
+        "/api/organizations",
+        headers={"Authorization": f"Bearer {pat}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["organization_id"] == org_id
+    assert body[0]["type"] == "TENANT"
+
+
+def test_organizations_get_accepts_pat(client):
+    test_client, org_id, pat = client
+    resp = test_client.get(
+        f"/api/organizations/{org_id}",
+        headers={"Authorization": f"Bearer {pat}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["organization_id"] == org_id
+
+
+def test_organizations_list_rejects_bad_pat(client):
+    test_client, _org_id, _pat = client
+    resp = test_client.get(
+        "/api/organizations",
+        headers={"Authorization": "Bearer pat_this_is_not_valid_xxxxxxxxxx"},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid or expired token"
+
+
 def test_revoke_then_whoami_401(client):
     test_client, org_id, pat = client
     tokens = test_client.get(f"/api/organizations/{org_id}/tokens").json()

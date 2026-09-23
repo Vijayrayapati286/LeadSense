@@ -4,14 +4,24 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
+from app.middleware.pat_auth import get_raw_bearer, security as bearer_security, try_pat_principal, whoami_response
 from app.models import User
-from app.schemas.schemas import AuthCallbackResponse, DevLoginRequest, PasswordLoginRequest, UserProfileUpdate, UserResponse
+from app.schemas.schemas import (
+    AuthCallbackResponse,
+    DevLoginRequest,
+    IntegrationWhoamiResponse,
+    PasswordLoginRequest,
+    UserProfileUpdate,
+    UserResponse,
+)
 from app.services.auth_service import AuthService
+from app.services.rbac_service import user_permissions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -19,8 +29,11 @@ auth_service = AuthService()
 settings = get_settings()
 
 
-def _user_response(user: User) -> UserResponse:
+def _user_response(user: User, db: Session | None = None) -> UserResponse:
     org = getattr(user, "organization", None)
+    permissions: list[str] = []
+    if db is not None:
+        permissions = sorted(user_permissions(db, user))
     return UserResponse(
         id=user.id,
         name=user.name,
@@ -30,6 +43,9 @@ def _user_response(user: User) -> UserResponse:
         role=getattr(user, "role", "USER") or "USER",
         status=getattr(user, "status", "ACTIVE") or "ACTIVE",
         org_name=org.org_name if org else None,
+        org_type=org.org_type if org else None,
+        client_name=org.client_name if org else None,
+        permissions=permissions,
     )
 
 
@@ -79,7 +95,7 @@ def dev_login(data: DevLoginRequest | None = None, db: Session = Depends(get_db)
         raise HTTPException(status_code=403, detail=str(exc))
     return AuthCallbackResponse(
         access_token=result["access_token"],
-        user=_user_response(result["user"]),
+        user=_user_response(result["user"], db),
     )
 
 
@@ -94,14 +110,41 @@ def password_login(data: PasswordLoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=str(exc))
     return AuthCallbackResponse(
         access_token=result["access_token"],
-        user=_user_response(result["user"]),
+        user=_user_response(result["user"], db),
     )
 
 
-@router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
-    """Get current authenticated user profile."""
-    return _user_response(current_user)
+@router.get("/me")
+def get_me(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
+    db: Session = Depends(get_db),
+) -> UserResponse | IntegrationWhoamiResponse:
+    """User profile (JWT) or SmartOps whoami (PAT).
+
+    SmartOps Test connection must send ``Authorization: Bearer <pat_…>``.
+    A valid PAT returns 200 with organization_id / token_status.
+    Invalid or revoked PAT → 401.
+    """
+    raw = get_raw_bearer(credentials)
+    if not raw:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    principal = try_pat_principal(db, raw)
+    if principal:
+        return whoami_response(principal)
+
+    user = auth_service.get_current_user(db, raw)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return _user_response(user, db)
 
 
 @router.put("/me", response_model=UserResponse)
@@ -115,7 +158,7 @@ def update_me(
         user = auth_service.update_profile(db, current_user, data.model_dump(exclude_unset=True))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _user_response(user)
+    return _user_response(user, db)
 
 
 @router.post("/logout")

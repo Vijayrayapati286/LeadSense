@@ -50,7 +50,23 @@ export const inviteService = {
   create: (data) => api.post('/invites', data),
   cancel: (id) => api.post(`/invites/${id}/cancel`),
   accept: (id, data) => api.post(`/invites/${id}/accept`, data),
+  resend: (id) => api.post(`/invites/${id}/resend`),
   remove: (id) => api.delete(`/invites/${id}`),
+};
+
+export const onboardService = {
+  previewVerify: (token) => api.get(`/onboard/verify/${encodeURIComponent(token)}`),
+  completeVerify: (token, data) => api.post(`/onboard/verify/${encodeURIComponent(token)}`, data),
+  previewInvite: (token) => api.get(`/onboard/invite/${encodeURIComponent(token)}`),
+  completeInvite: (token, data) => api.post(`/onboard/invite/${encodeURIComponent(token)}`, data),
+};
+
+export const rbacService = {
+  listRoles: () => api.get('/rbac/roles'),
+  listPermissions: () => api.get('/rbac/permissions'),
+  listAssignments: () => api.get('/rbac/assignments'),
+  assignRole: (data) => api.post('/rbac/assignments', data),
+  removeAssignment: (id) => api.delete(`/rbac/assignments/${id}`),
 };
 
 export const organizationService = {
@@ -182,6 +198,8 @@ export const linkedinProfileService = {
     api.post(`/linkedin/bulk-jobs/${jobId}/add-to-icp`, null, { timeout: 120_000 }).then((r) => r.data),
   listBulkJobs: (params = {}) =>
     api.get('/linkedin/bulk-jobs', { params }).then((r) => r.data),
+  listRecentDownloads: (params = {}) =>
+    api.get('/linkedin/recent-downloads', { params }).then((r) => r.data),
   listBulkJobItems: (jobId, params = {}) =>
     api.get(`/linkedin/bulk-jobs/${jobId}/items`, { params }).then((r) => r.data),
   getBulkConflicts: (jobId, params = {}) =>

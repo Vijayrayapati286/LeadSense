@@ -13,6 +13,31 @@ STATUS_ACTIVE = "ACTIVE"
 STATUS_INACTIVE = "INACTIVE"
 
 ORG_TYPE_TENANT = "TENANT"
+ORG_TYPE_PROVIDER = "PROVIDER"
+
+PROVIDER_DEF = {
+    "org_name": "Feuji",
+    "client_name": "Feuji",
+    "org_type": ORG_TYPE_PROVIDER,
+    "status": STATUS_ACTIVE,
+}
+
+PROVIDER_USERS = (
+    {
+        "email": "provider.admin@feuji.com",
+        "name": "Provider Admin",
+        "password": "Provider@123",
+        "role": ROLE_ADMIN,
+        "status": STATUS_ACTIVE,
+    },
+    {
+        "email": "provider.user@feuji.com",
+        "name": "Provider User",
+        "password": "ProviderUser@123",
+        "role": ROLE_USER,
+        "status": STATUS_ACTIVE,
+    },
+)
 
 # Stable logical keys — match orgs by org_name / tenant_key, never by TENANT-00x.
 TENANT_DEFS = (

@@ -17,8 +17,12 @@ from app.services.core_users import CORE_USERS
 from app.services.tenant_constants import (
     ADMIN_DEFS,
     DEFAULT_TENANT_KEY,
+    PROVIDER_DEF,
+    PROVIDER_USERS,
+    ROLE_ADMIN,
     TENANT_DEFS,
 )
+from app.utils.helpers import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +111,11 @@ def rename_organization_id(db: Session, old_id: str, new_id: str) -> None:
         org_id=new_id,
         org_name=org.org_name,
         org_type=org.org_type,
+        client_name=getattr(org, "client_name", None),
         integration_token=kept_token,
         status=org.status,
+        created_by_user_id=getattr(org, "created_by_user_id", None),
+        owner_user_id=getattr(org, "owner_user_id", None),
         created_at=org.created_at,
         updated_at=org.updated_at,
     )
@@ -218,6 +225,72 @@ def get_default_tenant_org_id(db: Session) -> str | None:
         return admin.org_id
     first = db.query(Organization).order_by(Organization.created_at).first()
     return first.org_id if first else None
+
+
+def provision_provider(db: Session) -> None:
+    """Ensure one PROVIDER org exists with an admin and a regular user."""
+    org = (
+        db.query(Organization)
+        .filter(Organization.org_name == PROVIDER_DEF["org_name"])
+        .first()
+    )
+    if not org:
+        org = (
+            db.query(Organization)
+            .filter(Organization.org_type == PROVIDER_DEF["org_type"])
+            .order_by(Organization.created_at)
+            .first()
+        )
+    if not org:
+        org = Organization(
+            org_id=_new_org_id(),
+            org_name=PROVIDER_DEF["org_name"],
+            client_name=PROVIDER_DEF["client_name"],
+            org_type=PROVIDER_DEF["org_type"],
+            integration_token=_new_integration_token(),
+            status=PROVIDER_DEF["status"],
+        )
+        db.add(org)
+        logger.info("Created provider organization %s (%s)", org.org_id, org.org_name)
+    else:
+        org.org_name = PROVIDER_DEF["org_name"]
+        org.org_type = PROVIDER_DEF["org_type"]
+        org.client_name = PROVIDER_DEF["client_name"]
+        org.status = PROVIDER_DEF["status"]
+        if _is_weak_integration_token(org.integration_token, org.org_id):
+            org.integration_token = _new_integration_token()
+
+    db.flush()
+
+    for spec in PROVIDER_USERS:
+        user = db.query(User).filter(User.email == spec["email"]).first()
+        if not user:
+            user = User(
+                name=spec["name"],
+                email=spec["email"],
+                department="Admin" if spec["role"] == ROLE_ADMIN else "Sales",
+                org_id=org.org_id,
+                role=spec["role"],
+                status=spec["status"],
+                password_hash=AuthService.hash_password(spec["password"]),
+                email_verified_at=utc_now(),
+            )
+            db.add(user)
+            logger.info("Created provider %s %s → %s", spec["role"], spec["email"], org.org_id)
+        else:
+            user.name = spec["name"]
+            user.org_id = org.org_id
+            user.role = spec["role"]
+            user.status = spec["status"]
+            user.password_hash = AuthService.hash_password(spec["password"])
+            if not user.email_verified_at:
+                user.email_verified_at = utc_now()
+
+    db.flush()
+    admin = db.query(User).filter(User.email == PROVIDER_USERS[0]["email"]).first()
+    if admin:
+        org.owner_user_id = admin.id
+    db.commit()
 
 
 def provision_tenants(db: Session) -> None:
