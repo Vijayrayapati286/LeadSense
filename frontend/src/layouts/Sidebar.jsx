@@ -23,7 +23,7 @@ import {
   FiKey,
 } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
-import { hasAnyPermission, hasPermission } from '../utils/permissions';
+import { hasAnyPermission, hasPermission, isProviderOrg } from '../utils/permissions';
 
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: FiHome, permission: 'dashboard:read' },
@@ -68,10 +68,17 @@ const NAV_ITEMS = [
     children: [
       { path: '/users', label: 'Members', icon: FiUsers, permission: 'members:read' },
       { path: '/invites', label: 'Invites', icon: FiMail, permission: 'members:invite' },
-      { path: '/organizations', label: 'Onboard orgs', icon: FiKey, permission: 'orgs:onboard' },
       { path: '/access', label: 'Roles & access', icon: FiShield, permission: 'access:read' },
     ],
   },
+];
+
+const PROVIDER_NAV_ITEMS = [
+  { path: '/dashboard', label: 'Dashboard', icon: FiHome, permission: 'dashboard:read' },
+  { path: '/organizations', label: 'Organizations', icon: FiBriefcase, permission: 'orgs:onboard' },
+  { path: '/users', label: 'Users', icon: FiUsers, permission: 'members:read' },
+  { path: '/invites', label: 'Invites', icon: FiMail, permission: 'members:invite' },
+  { path: '/access', label: 'Roles', icon: FiShield, permission: 'access:read' },
 ];
 
 function filterNavItems(items, user) {
@@ -89,8 +96,11 @@ function filterNavItems(items, user) {
 }
 
 function getNavItems(user) {
+  if (isProviderOrg(user)) {
+    return filterNavItems(PROVIDER_NAV_ITEMS, user);
+  }
   const items = NAV_ITEMS.map((item) => {
-    if (item.path === '/dashboard' && hasAnyPermission(user, ['members:read', 'orgs:onboard'])) {
+    if (item.path === '/dashboard' && hasPermission(user, 'members:read')) {
       return { ...item, label: 'Admin Dashboard' };
     }
     return item;
@@ -179,6 +189,7 @@ function NavGroup({ item, collapsed }) {
 
 export default function Sidebar({ collapsed = false, onToggle }) {
   const { user, logout } = useAuth();
+  const profilePath = isProviderOrg(user) ? '/dashboard' : '/settings';
 
   return (
     <aside
@@ -213,7 +224,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
       <div className="border-t border-white/[0.08] p-3">
         {!collapsed && user ? (
           <Link
-            to="/settings"
+            to={profilePath}
             className="mb-2 flex items-center gap-3 rounded-xl bg-white/[0.05] p-3 transition-colors hover:bg-white/[0.08]"
           >
             <div className="relative shrink-0">
@@ -226,14 +237,14 @@ export default function Sidebar({ collapsed = false, onToggle }) {
               <p className="truncate text-sm font-semibold text-white">{user.name}</p>
               <p className="truncate text-[11px] text-slate-500">{user.email}</p>
               <p className="truncate text-[11px] text-slate-600">
-                {user.org_id ? `${user.org_id} · ${user.role || 'USER'}` : (user.department || 'Sales')}
+                {user.org_name || user.department || (user.role || '').replaceAll('_', ' ') || 'Member'}
               </p>
             </div>
             <FiChevronsRight size={16} className="shrink-0 text-slate-600" />
           </Link>
         ) : collapsed && user ? (
           <Link
-            to="/settings"
+            to={profilePath}
             title={user.name}
             className="mb-2 flex justify-center"
           >

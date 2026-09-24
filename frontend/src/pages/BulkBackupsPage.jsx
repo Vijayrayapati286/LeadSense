@@ -46,7 +46,7 @@ export default function BulkBackupsPage() {
     setBusy(true);
     try {
       const result = await linkedinProfileService.restoreBulkBackup(file);
-      toast.success(`Restored as new job ${result.job_id}`);
+      toast.success('Backup restored as a new job');
       await load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Restore failed');
@@ -97,7 +97,7 @@ export default function BulkBackupsPage() {
                   <FiArchive size={18} />
                 </span>
                 <div className="min-w-0">
-                <p className="truncate font-semibold text-slate-900">{b.original_file_name || b.job_id}</p>
+                <p className="truncate font-semibold text-slate-900">{b.original_file_name || 'Backup'}</p>
                 <p className="mt-1 text-xs text-slate-500">
                   Version {b.backup_version} · {formatDateTime(b.created_at)}
                 </p>
