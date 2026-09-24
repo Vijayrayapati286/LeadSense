@@ -15,6 +15,7 @@ import {
 } from 'react-icons/fi';
 import { dashboardService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
+import { hasPermission } from '../utils/permissions';
 import { useToast } from '../hooks/useToast';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Button from '../components/ui/Button';
@@ -185,7 +186,7 @@ export default function AdminDashboardPage() {
   }
 
   const { summary, icp, linkedin, email_verification: mv } = data;
-  const tenantLabel = user?.org_name || data.org_id;
+  const tenantLabel = user?.org_name || 'Your organization';
   const verifyPct = mv.emails_verified ? Math.round((mv.valid / mv.emails_verified) * 100) : 0;
 
   const sparkColors = ['#0ea5e9', '#8b5cf6', '#10b981', '#14b8a6', '#f43f5e', '#f59e0b'];
@@ -203,10 +204,18 @@ export default function AdminDashboardPage() {
           <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-primary-600">Admin Dashboard</p>
           <h1 className="mt-1 text-[2rem] font-bold tracking-tight text-slate-950">{tenantLabel}</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Tenant: {data.org_id} — overall activity for your organization only.
+            Overall activity for your organization only.
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {hasPermission(user, 'orgs:onboard') ? (
+            <Link
+              to="/organizations"
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+            >
+              Onboard tenant
+            </Link>
+          ) : null}
           <button
             type="button"
             className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50"

@@ -170,7 +170,6 @@ export default function CampaignsPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate font-semibold text-slate-950">{c.campaign_name}</p>
-                      <p className="mt-0.5 font-mono text-caption text-slate-400">{c.campaign_id}</p>
                     </div>
                     <StatusBadge status={c.status} />
                   </div>

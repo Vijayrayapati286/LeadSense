@@ -204,10 +204,10 @@ export default function EmailLogsPage() {
                   {logs.map((log) => (
                     <tr key={log.id}>
                       <td className="px-6 py-4">
-                        <p className="font-medium text-gray-900">{log.recipient_name || `Prospect #${log.recipient_id}`}</p>
+                        <p className="font-medium text-gray-900">{log.recipient_name || log.recipient_email || 'Prospect'}</p>
                         <p className="text-xs text-gray-500">{log.recipient_email}</p>
                       </td>
-                      <td className="px-6 py-4 text-gray-600">{log.campaign_name || `Campaign #${log.campaign_id}`}</td>
+                      <td className="px-6 py-4 text-gray-600">{log.campaign_name || 'Campaign'}</td>
                       <td className="px-6 py-4 text-gray-600">
                         {log.sender_name || <span className="text-gray-400">—</span>}
                         {log.sender_email && <p className="text-xs text-gray-400">{log.sender_email}</p>}

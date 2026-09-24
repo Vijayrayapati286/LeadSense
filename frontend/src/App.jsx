@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute, { RequirePermission } from './components/ProtectedRoute';
+import ProtectedRoute, { RequirePermission, TenantProductRoute } from './components/ProtectedRoute';
 import MainLayout from './layouts/MainLayout';
 import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
@@ -63,30 +63,32 @@ export default function App() {
           <Route element={<RequirePermission permission="access:read" />}>
             <Route path="/access" element={<RolesAccessPage />} />
           </Route>
-          <Route path="/campaigns" element={<CampaignsPage />} />
-          <Route path="/campaigns/create" element={<CreateCampaignPage />} />
-          <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
-          <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />
-          <Route path="/recipients" element={<RecipientsPage />} />
-          <Route path="/recipient-groups" element={<Navigate to="/recipients" replace />} />
-          <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
-          <Route path="/templates" element={<TemplatesPage />} />
-          <Route path="/logs" element={<EmailLogsPage />} />
-          <Route path="/blacklist" element={<BlacklistPage />} />
-          <Route path="/icp-accounts" element={<AccountsPage />} />
-          <Route path="/icp-contacts" element={<ContactsPage />} />
-          <Route path="/icp-database" element={<Navigate to="/icp-contacts" replace />} />
-          <Route path="/salesnav" element={<Navigate to="/linkedin-extractor" replace />} />
-          <Route path="/linkedin-extractor" element={<LinkedInProfileExtractorPage />} />
-          <Route path="/linkedin-history" element={<BulkHistoryPage />} />
-          <Route path="/linkedin-history/:jobId" element={<BulkJobDetailPage />} />
-          <Route path="/linkedin-needs-review" element={<BulkNeedsReviewPage />} />
-          <Route path="/linkedin-backups" element={<BulkBackupsPage />} />
-          <Route path="/offerings" element={<OfferingsPage />} />
-          <Route path="/offerings/new" element={<OfferingCreatePage />} />
-          <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />
-          <Route path="/offerings/:id" element={<OfferingDetailPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route element={<TenantProductRoute />}>
+            <Route path="/campaigns" element={<CampaignsPage />} />
+            <Route path="/campaigns/create" element={<CreateCampaignPage />} />
+            <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
+            <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />
+            <Route path="/recipients" element={<RecipientsPage />} />
+            <Route path="/recipient-groups" element={<Navigate to="/recipients" replace />} />
+            <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
+            <Route path="/templates" element={<TemplatesPage />} />
+            <Route path="/logs" element={<EmailLogsPage />} />
+            <Route path="/blacklist" element={<BlacklistPage />} />
+            <Route path="/icp-accounts" element={<AccountsPage />} />
+            <Route path="/icp-contacts" element={<ContactsPage />} />
+            <Route path="/icp-database" element={<Navigate to="/icp-contacts" replace />} />
+            <Route path="/salesnav" element={<Navigate to="/linkedin-extractor" replace />} />
+            <Route path="/linkedin-extractor" element={<LinkedInProfileExtractorPage />} />
+            <Route path="/linkedin-history" element={<BulkHistoryPage />} />
+            <Route path="/linkedin-history/:jobId" element={<BulkJobDetailPage />} />
+            <Route path="/linkedin-needs-review" element={<BulkNeedsReviewPage />} />
+            <Route path="/linkedin-backups" element={<BulkBackupsPage />} />
+            <Route path="/offerings" element={<OfferingsPage />} />
+            <Route path="/offerings/new" element={<OfferingCreatePage />} />
+            <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />
+            <Route path="/offerings/:id" element={<OfferingDetailPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Route>
         </Route>
       </Route>
 

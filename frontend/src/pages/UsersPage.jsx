@@ -167,7 +167,7 @@ export default function UsersPage() {
           <h1 className="text-[2rem] font-bold tracking-tight text-slate-950">Members</h1>
           <p className="mt-1 text-sm text-slate-500">
             {users.length} member{users.length === 1 ? '' : 's'} in{' '}
-            {user?.org_name || user?.org_id || 'your organization'}
+            {user?.org_name || 'your organization'}
           </p>
         </div>
         {hasPermission(user, 'members:invite') ? (

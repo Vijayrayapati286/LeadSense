@@ -157,7 +157,7 @@ export default function BulkNeedsReviewPage() {
             <option value="">Select a job…</option>
             {jobs.map((j) => (
               <option key={j.job_id} value={j.job_id}>
-                {(j.original_file_name || j.job_id).slice(0, 48)} ({j.needs_review} open)
+                {(j.original_file_name || 'Job').slice(0, 48)} ({j.needs_review} open)
               </option>
             ))}
           </select>
