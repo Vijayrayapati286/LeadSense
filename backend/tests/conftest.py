@@ -39,7 +39,7 @@ def client(monkeypatch):
     get_settings.cache_clear()
 
     from app import main as main_module
-    from app.middleware.auth import get_current_user
+    from app.middleware.auth import get_current_user, get_optional_user
     from app.models import User
     from fastapi.testclient import TestClient
 
@@ -50,6 +50,7 @@ def client(monkeypatch):
         return User(id=1, name="Test User", email="test@example.com", department="Test")
 
     main_module.app.dependency_overrides[get_current_user] = _override_current_user
+    main_module.app.dependency_overrides[get_optional_user] = _override_current_user
     from app.linkedin.rate_limit import bulk_extract_limiter, profile_extract_limiter
 
     bulk_extract_limiter._hits.clear()
