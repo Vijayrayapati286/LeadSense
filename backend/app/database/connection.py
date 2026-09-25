@@ -305,11 +305,27 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "target_customer": "TEXT",
                 "target_company_size": json_type,
                 "selling_points": json_type,
+                "offering_id": "VARCHAR(64)",
+                "organization_id": "VARCHAR(64)",
+                "smartops_offering_id": "VARCHAR(128)",
+                "file_format": "VARCHAR(16)",
+                "file_name": "VARCHAR(500)",
+                "file_url": "TEXT",
+                "doc_count": "INTEGER DEFAULT 0",
             }
             for name, ddl in offering_adds.items():
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE offerings ADD COLUMN {name} {ddl}"))
                     logger.info("Added offerings.%s", name)
+            try:
+                conn.execute(
+                    text(
+                        "UPDATE offerings SET offering_id = 'ls_off_' || CAST(id AS TEXT) "
+                        "WHERE offering_id IS NULL OR offering_id = ''"
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to backfill offerings.offering_id")
 
         if "offering_matches" in tables:
             cols = {c["name"] for c in inspector.get_columns("offering_matches")}

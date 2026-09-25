@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 
@@ -239,11 +240,28 @@ def serialize_offering(row: OfferingRow, *, stats: dict[str, int] | None = None)
     return out
 
 
-def get_offering(db: Session, offering_id: int, *, user_id: int | None) -> OfferingRow | None:
-    q = db.query(OfferingRow).filter(OfferingRow.id == offering_id)
+def new_public_offering_id() -> str:
+    return f"ls_off_{secrets.token_hex(12)}"
+
+
+def get_offering(
+    db: Session,
+    offering_id: int | str,
+    *,
+    user_id: int | None,
+    organization_id: str | None = None,
+) -> OfferingRow | None:
+    q = db.query(OfferingRow)
     if user_id is not None:
         q = q.filter(OfferingRow.user_id == user_id)
-    return q.first()
+    if organization_id:
+        q = q.filter(OfferingRow.organization_id == organization_id)
+    ref = str(offering_id)
+    if ref.startswith("ls_off_"):
+        return q.filter(OfferingRow.offering_id == ref).first()
+    if ref.isdigit():
+        return q.filter(OfferingRow.id == int(ref)).first()
+    return q.filter(OfferingRow.offering_id == ref).first()
 
 
 def list_offerings(
@@ -341,7 +359,19 @@ def offering_stats(db: Session, offering_id: int) -> dict[str, int]:
 
 
 def _apply_fields(row: OfferingRow, data: dict[str, Any]) -> None:
-    skip = {"id", "user_id", "created_at", "updated_at", "definition_version", "definition_hash"}
+    skip = {
+        "id",
+        "user_id",
+        "created_at",
+        "updated_at",
+        "definition_version",
+        "definition_hash",
+        "offering_id",
+        "organization_id",
+        "smartops_offering_id",
+        "docs",
+        "doc_count",
+    }
     for key, value in data.items():
         if key in skip or not hasattr(row, key):
             continue
@@ -350,7 +380,13 @@ def _apply_fields(row: OfferingRow, data: dict[str, Any]) -> None:
         setattr(row, key, value)
 
 
-def create_offering(db: Session, *, user_id: int | None, data: dict[str, Any]) -> OfferingRow:
+def create_offering(
+    db: Session,
+    *,
+    user_id: int | None,
+    data: dict[str, Any],
+    organization_id: str | None = None,
+) -> OfferingRow:
     data = _normalize_payload(data)
     payload = {
         k: v
@@ -358,7 +394,12 @@ def create_offering(db: Session, *, user_id: int | None, data: dict[str, Any]) -
         if v is not None or k in LIST_FIELDS or k in NULLABLE_JSON_FIELDS
     }
     _validate_create_payload(payload)
-    row = OfferingRow(user_id=user_id, definition_version=1)
+    row = OfferingRow(
+        user_id=user_id,
+        definition_version=1,
+        offering_id=new_public_offering_id(),
+        organization_id=organization_id,
+    )
     _apply_fields(row, payload)
     row.definition_hash = compute_definition_hash(serialize_offering(row))
     ensure_offering_embedding(row)

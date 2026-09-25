@@ -76,10 +76,21 @@ class OfferingRow(Base):
     __table_args__ = (
         Index("ix_offerings_user_status", "user_id", "status"),
         Index("ix_offerings_user_updated", "user_id", "updated_at"),
+        Index(
+            "uq_offerings_smartops_id",
+            "organization_id",
+            "smartops_offering_id",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    offering_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    organization_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
+    smartops_offering_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     short_description: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -128,6 +139,10 @@ class OfferingRow(Base):
     profile_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     vouchers: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     email_template: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    file_format: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    file_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    file_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    doc_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=OFFERING_STATUS_ACTIVE)
     definition_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -137,6 +152,22 @@ class OfferingRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class OfferingDocumentRow(Base):
+    """SmartOps documents attached to an offering (many per offering)."""
+
+    __tablename__ = "offering_documents"
+    __table_args__ = (Index("idx_offering_docs_offering", "offering_id"),)
+
+    doc_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    offering_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("offerings.offering_id", ondelete="CASCADE"), nullable=False
+    )
+    file_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_format: Mapped[str] = mapped_column(String(16), nullable=False)
+    s3_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class OfferingMatchRow(Base):

@@ -64,6 +64,14 @@ class OfferingCreate(BaseModel):
     vouchers: list[OfferingVoucherMeta] | None = None
     email_template: OfferingEmailTemplateMeta | None = None
     status: str | None = "active"
+    organization_id: str | None = None
+    file_format: str | None = None
+    file_name: str | None = None
+    file_url: str | None = None
+    smartops_offering_id: str | None = None
+    created_at: str | None = None
+    doc_count: int | None = None
+    docs: list[dict] | None = None
 
     @field_validator(
         "name",
@@ -440,3 +448,16 @@ class RecommendationFeedbackResponse(BaseModel):
     action: str
     score_at_action: int | None = None
     created_at: str | None = None
+
+
+class SmartOpsOfferingResponse(BaseModel):
+    offering_id: str
+    organization_id: str
+    name: str
+    status: str
+    doc_count: int = 0
+    created_at: str | None = None
+
+
+class SmartOpsOfferingListResponse(BaseModel):
+    items: list[SmartOpsOfferingResponse]
