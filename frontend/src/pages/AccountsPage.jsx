@@ -127,32 +127,39 @@ function parseLocation(location) {
 }
 
 function contactToExportRow(row) {
-  const { firstName, lastName } = splitName(row.name);
+  const split = splitName(row.name);
   const loc = parseLocation(row.location);
+  const city = row.city || loc.city;
+  const state = row.state || row.contact_state || loc.state;
+  const country = row.country || row.contact_country || loc.country;
+  const countryCode = row.country_code || loc.countryCode;
+  const accountCity = row.account_city || row.company_city || '';
+  const companyLinkedin = row.account_linkedin_url || row.company_linkedin_url || '';
+  const accountSummary = row.account_summary || row.company_summary || '';
 
   return [
-    firstName,
-    lastName,
+    split.firstName,
+    split.lastName,
     row.designation || '',
-    '', // Department — not stored in ICP
+    row.department || '',
     row.email || '',
     row.linkedin_url || '',
-    loc.city,
-    loc.state,
-    loc.country,
-    loc.countryCode,
-    '', // Phone no. — not stored in ICP
+    city,
+    state,
+    country,
+    countryCode,
+    row.phone || '',
     row.about || '',
     row.company_name || '',
     row.industry || '',
     row.company_website || '',
-    '', // Account Linkedin Url — not stored in ICP
-    '', // Account City — not stored separately
-    loc.state, // Contact State
-    loc.country, // Contact Country
-    '', // Annual Revenue — not stored in ICP
+    companyLinkedin,
+    accountCity,
+    state,
+    country,
+    row.annual_revenue || '',
     row.company_size || '',
-    '', // Account Summary — not stored in ICP
+    accountSummary,
   ];
 }
 

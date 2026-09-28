@@ -193,7 +193,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
 
   return (
     <aside
-      className={`fixed left-0 top-0 z-40 flex h-full flex-col border-r border-white/[0.06] bg-[#0b1220] text-white transition-all duration-300 ${
+      className={`fixed left-0 top-0 z-[60] flex h-full flex-col border-r border-white/[0.06] bg-[#0b1220] text-white transition-all duration-300 ${
         collapsed ? 'w-[72px]' : 'w-64'
       }`}
     >

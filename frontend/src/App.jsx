@@ -10,6 +10,7 @@ import InvitesPage from './pages/InvitesPage';
 import CampaignsPage from './pages/CampaignsPage';
 import CreateCampaignPage from './pages/CreateCampaignPage';
 import CampaignDetailPage from './pages/CampaignDetailPage';
+import UpdateListPage from './pages/UpdateListPage';
 import RecipientsPage from './pages/RecipientsPage';
 import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
@@ -89,6 +90,31 @@ export default function App() {
             <Route path="/offerings/:id" element={<OfferingDetailPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
+          <Route path="/campaigns" element={<CampaignsPage />} />
+          <Route path="/campaigns/create" element={<CreateCampaignPage />} />
+          <Route path="/campaigns/update-list" element={<UpdateListPage />} />
+          <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
+          <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />
+          <Route path="/recipients" element={<RecipientsPage />} />
+          <Route path="/recipient-groups" element={<Navigate to="/recipients" replace />} />
+          <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
+          <Route path="/templates" element={<TemplatesPage />} />
+          <Route path="/logs" element={<EmailLogsPage />} />
+          <Route path="/blacklist" element={<BlacklistPage />} />
+          <Route path="/icp-accounts" element={<AccountsPage />} />
+          <Route path="/icp-contacts" element={<ContactsPage />} />
+          <Route path="/icp-database" element={<Navigate to="/icp-contacts" replace />} />
+          <Route path="/salesnav" element={<Navigate to="/linkedin-extractor" replace />} />
+          <Route path="/linkedin-extractor" element={<LinkedInProfileExtractorPage />} />
+          <Route path="/linkedin-history" element={<BulkHistoryPage />} />
+          <Route path="/linkedin-history/:jobId" element={<BulkJobDetailPage />} />
+          <Route path="/linkedin-needs-review" element={<BulkNeedsReviewPage />} />
+          <Route path="/linkedin-backups" element={<BulkBackupsPage />} />
+          <Route path="/offerings" element={<OfferingsPage />} />
+          <Route path="/offerings/new" element={<OfferingCreatePage />} />
+          <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />
+          <Route path="/offerings/:id" element={<OfferingDetailPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>
 

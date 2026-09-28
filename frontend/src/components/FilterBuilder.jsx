@@ -30,7 +30,7 @@ export const FIELD_DEFS = [
 
 const CAMPAIGN_STATUSES = [
   'not_contacted', 'queued', 'sent', 'delivered', 'opened', 'clicked',
-  'replied', 'bounced', 'invalid_email', 'suppressed',
+  'replied', 'bounced', 'out_of_office', 'invalid_email', 'suppressed',
 ];
 
 export const RESPONSE_TAGS = ['Cold', 'Negative', 'Warm', 'Hot'];

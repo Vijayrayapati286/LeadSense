@@ -63,11 +63,6 @@ export default function HistoryJobCard({ job, onSelect, onDownload, downloading 
         <FiDownload size={12} aria-hidden="true" />
         {downloading ? '…' : 'Excel'}
       </button>
-    ) : job.download_ready ? (
-      <span className="hidden items-center gap-1 text-xs font-medium text-primary-600 xl:inline-flex">
-        <FiDownload size={12} aria-hidden="true" />
-        Excel
-      </span>
     ) : null;
 
   const body = (

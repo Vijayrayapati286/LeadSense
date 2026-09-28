@@ -13,3 +13,8 @@ def column_exists(table_name: str, column_name: str) -> bool:
 def add_column_if_missing(table_name: str, column) -> None:
     if not column_exists(table_name, column.name):
         op.add_column(table_name, column)
+
+
+def drop_column_if_exists(table_name: str, column_name: str) -> None:
+    if column_exists(table_name, column_name):
+        op.drop_column(table_name, column_name)

@@ -57,6 +57,31 @@ class Settings(BaseSettings):
     ses_aws_secret_access_key: str = ""
     ses_region: str = ""
 
+    # Optional SES Configuration Set name (tags / event destinations). Leave
+    # blank to keep outbound send identical to today.
+    ses_configuration_set: str = Field("", validation_alias="SES_CONFIGURATION_SET")
+    # When true, Reply-To is set to the personalized SES From address so
+    # automatic OOO replies land on the SES-receivable sending domain.
+    # Default false preserves existing behavior (Reply-To = rep corporate email).
+    ses_use_sending_domain_reply_to: bool = Field(
+        False, validation_alias="SES_USE_SENDING_DOMAIN_REPLY_TO"
+    )
+    # When true, MIME From / SES Source uses the full Reply-To address
+    # (rep's real mailbox, e.g. vijay.rayapati@feuji.com) so Outlook/Exchange
+    # automatic replies land in that inbox. Default false keeps From on
+    # AWS_SES_SENDING_DOMAIN (e.g. @outreach.feuji.com) for reputation isolation.
+    # Requires that mailbox's domain to be SES-verified (domain identity).
+    ses_use_reply_to_as_from: bool = Field(
+        False, validation_alias="SES_USE_REPLY_TO_AS_FROM"
+    )
+    # S3 bucket used by the SES inbound receipt rule (raw MIME). May differ
+    # from S3_BUCKET_NAME (file uploads). Empty = inbound S3 fetch disabled.
+    ses_inbound_s3_bucket: str = Field("", validation_alias="SES_INBOUND_S3_BUCKET")
+    ses_inbound_s3_prefix: str = Field("inbound/", validation_alias="SES_INBOUND_S3_PREFIX")
+    # When true, out_of_office is treated as terminal (no further follow-ups).
+    # Default false: detect + status only (STEP 10).
+    ooo_stops_followups: bool = Field(False, validation_alias="OOO_STOPS_FOLLOWUPS")
+
     groq_api_key: str = ""
     use_mock_groq: bool = True
 

@@ -9,7 +9,7 @@ from email.header import Header
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formataddr, parseaddr
+from email.utils import formataddr, make_msgid, parseaddr
 
 from app.config import get_settings
 from app.utils.helpers import KNOWN_MERGE_FIELDS, add_known_field_case_aliases, render_email_body, render_template
@@ -65,27 +65,24 @@ class SESService:
 
     def _build_source(self, from_name: str | None, reply_to: str | None) -> str:
         """Build the SES Source (From) header. Display name is the sending
-        rep's real name (from their SSO user record); the address's local
-        part is personalized too — e.g. vijay.rayapati@mail.feuji.com for a
-        rep whose real address is vijay.rayapati@feuji.com — landed on the
-        dedicated sending domain (aws_ses_sending_domain, falling back to
-        aws_ses_sender_email's own domain when unset) rather than the org's
-        real mail domain, so bulk sends don't affect that domain's sender
-        reputation/DMARC alignment. This relies on that whole domain (not
-        just one address on it) being domain-verified in SES, since every
-        rep's local part needs to be authorized to send from it; falls back
-        to the single configured sender address when there's no sender
-        identity to personalize from.
+        rep's real name (from their SSO user record).
 
-        `reply_to` is only read here to derive that local part — it's
-        already the rep's real address wherever this is called from (see
-        send_email's reply_to param) and is passed to SES completely
-        unchanged as ReplyToAddresses below, so Reply-To behavior itself
-        doesn't change."""
-        sender_domain = self.settings.aws_ses_sending_domain or self.settings.aws_ses_sender_email.rsplit("@", 1)[-1]
-        address = self.settings.aws_ses_sender_email
-        if reply_to and "@" in reply_to:
-            address = f"{reply_to.split('@', 1)[0]}@{sender_domain}"
+        Default: personalized address on AWS_SES_SENDING_DOMAIN
+        (e.g. vijay.rayapati@outreach.feuji.com) so bulk sends don't hit the
+        corporate domain's reputation.
+
+        When SES_USE_REPLY_TO_AS_FROM=true and reply_to is set: From is the
+        rep's full corporate address (e.g. vijay.rayapati@feuji.com). Outlook
+        automatic replies typically go to From, so this makes OOO land in the
+        logged-in user's real inbox. That domain must be SES-verified.
+        """
+        if self.settings.ses_use_reply_to_as_from and reply_to and "@" in reply_to:
+            address = reply_to.strip()
+        else:
+            sender_domain = self.settings.aws_ses_sending_domain or self.settings.aws_ses_sender_email.rsplit("@", 1)[-1]
+            address = self.settings.aws_ses_sender_email
+            if reply_to and "@" in reply_to:
+                address = f"{reply_to.split('@', 1)[0]}@{sender_domain}"
         if from_name:
             return f'"{from_name}" <{address}>'
         return address
@@ -112,6 +109,15 @@ class SESService:
         rewritten = _DATA_URI_IMG_RE.sub(_replace, body_html)
         return rewritten, images
 
+    def _resolve_reply_to(self, reply_to: str | None, source: str) -> str | None:
+        """Optionally redirect Reply-To onto the SES From address so inbound
+        receiving on the sending domain can capture automatic OOO replies.
+        Default keeps the caller's reply_to (rep corporate mailbox) unchanged."""
+        if not self.settings.ses_use_sending_domain_reply_to:
+            return reply_to
+        _display, address = parseaddr(source)
+        return address or reply_to
+
     def _build_raw_message(
         self,
         source: str,
@@ -120,6 +126,7 @@ class SESService:
         body_html: str,
         body_text: str | None,
         reply_to: str | None,
+        mime_message_id: str | None = None,
     ) -> MIMEMultipart:
         rewritten_html, images = self._extract_inline_images(body_html)
 
@@ -130,6 +137,10 @@ class SESService:
         msg_root["To"] = to_email
         if reply_to:
             msg_root["Reply-To"] = reply_to
+        # Stable MIME Message-ID so inbound In-Reply-To / References can match
+        # this send. Domain part follows the From address when available.
+        domain = address.rsplit("@", 1)[-1] if address and "@" in address else "leadsense.local"
+        msg_root["Message-ID"] = mime_message_id or make_msgid(domain=domain)
 
         msg_alt = MIMEMultipart("alternative")
         msg_root.attach(msg_alt)
@@ -160,17 +171,31 @@ class SESService:
 
         try:
             source = self._build_source(from_name, reply_to)
-            raw_message = self._build_raw_message(source, delivery_to, subject, body_html, body_text, reply_to)
-
-            response = self._client.send_raw_email(
-                Source=source,
-                Destinations=[delivery_to],
-                RawMessage={"Data": raw_message.as_bytes()},
+            effective_reply_to = self._resolve_reply_to(reply_to, source)
+            raw_message = self._build_raw_message(
+                source, delivery_to, subject, body_html, body_text, effective_reply_to
             )
-            return {"status": "sent", "message_id": response["MessageId"], "error": None}
+            mime_message_id = raw_message["Message-ID"]
+
+            kwargs: dict = {
+                "Source": source,
+                "Destinations": [delivery_to],
+                "RawMessage": {"Data": raw_message.as_bytes()},
+            }
+            config_set = (self.settings.ses_configuration_set or "").strip()
+            if config_set:
+                kwargs["ConfigurationSetName"] = config_set
+
+            response = self._client.send_raw_email(**kwargs)
+            return {
+                "status": "sent",
+                "message_id": mime_message_id,
+                "ses_message_id": response["MessageId"],
+                "error": None,
+            }
         except Exception as exc:
             logger.error("SES send failed for %s: %s", to_email, exc)
-            return {"status": "failed", "message_id": None, "error": str(exc)}
+            return {"status": "failed", "message_id": None, "ses_message_id": None, "error": str(exc)}
 
     def send_bulk_email(
         self,
@@ -225,6 +250,7 @@ class SESService:
                 "recipient_name": recipient.get("name", ""),
                 "status": status,
                 "message_id": result.get("message_id"),
+                "ses_message_id": result.get("ses_message_id"),
                 "error": result.get("error"),
             })
 
@@ -234,9 +260,12 @@ class SESService:
         """Simulate email sending for development."""
         # Simulate ~90% success rate
         if random.random() < 0.9:
+            mock_id = f"mock-{uuid.uuid4().hex[:12]}"
+            mime_id = f"<{mock_id}@leadsense.local>"
             return {
                 "status": "sent",
-                "message_id": f"mock-{uuid.uuid4().hex[:12]}",
+                "message_id": mime_id,
+                "ses_message_id": mock_id,
                 "error": None,
                 "delivered_to": to_email,
                 "original_recipient": original_recipient or to_email,
@@ -244,6 +273,7 @@ class SESService:
         return {
             "status": "failed",
             "message_id": None,
+            "ses_message_id": None,
             "error": "Mock failure: simulated SES error",
             "delivered_to": to_email,
             "original_recipient": original_recipient or to_email,

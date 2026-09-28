@@ -495,11 +495,16 @@ class SuppressionEntryListResponse(BaseModel):
 
 class SimulateEventRequest(BaseModel):
     email: str
-    event_type: Literal["bounce", "complaint", "reply"]
+    event_type: Literal["bounce", "complaint", "reply", "out_of_office"]
     bounce_type: Literal["Permanent", "Transient"] = "Permanent"
     campaign_id: int | None = None
     smtp_code: str | None = None
     detail: str | None = None
+
+
+class SimulateInboundRequest(BaseModel):
+    """Base64-encoded raw MIME for local OOO/reply injection (DEBUG only)."""
+    raw_email_base64: str
 
 
 # ── Recipient Groups ───────────────────────────────────────────────────────────
@@ -581,7 +586,7 @@ class SavedSearchResponse(BaseModel):
 
 CampaignRecipientStatus = Literal[
     "not_contacted", "sent", "delivered", "opened", "clicked",
-    "replied", "bounced", "invalid_email", "suppressed",
+    "replied", "bounced", "invalid_email", "suppressed", "out_of_office",
 ]
 
 
@@ -597,13 +602,20 @@ class CampaignRecipientResponse(BaseModel):
     last_sent_at: datetime | None
     replied_at: datetime | None
     bounced_at: datetime | None
+    ooo_at: datetime | None = None
     recipient_name: str | None = None
     recipient_email: str | None = None
     recipient_company: str | None = None
+    recipient_designation: str | None = None
     is_suppressed: bool = False
     suppression_reason: str | None = None
     email_verification_status: str | None = None
     email_verification_result: str | None = None
+    # Derived UI labels — existing status strings are unchanged.
+    follow_up_state: str | None = None  # none | scheduled | sent | cancelled
+    follow_up_label: str | None = None
+    campaign_count: int = 0
+    campaign_names: list[str] = []
 
 
 class CampaignRecipientListResponse(BaseModel):
@@ -689,6 +701,110 @@ class CampaignSequenceStageResponse(BaseModel):
     cta: str | None
 
 
+# ── Manual reply / follow-up scheduling (additive; does not rename statuses) ───
+
+class MarkRepliedRequest(BaseModel):
+    recipient_ids: list[int] = Field(..., min_length=1)
+
+
+class MarkRepliedUndoItem(BaseModel):
+    recipient_id: int
+    previous_status: str
+    previous_next_send_at: datetime | None = None
+
+
+class MarkRepliedResponse(BaseModel):
+    updated: int
+    skipped: int = 0
+    undo_items: list[MarkRepliedUndoItem] = []
+
+
+class UndoMarkRepliedRequest(BaseModel):
+    items: list[MarkRepliedUndoItem] = Field(..., min_length=1)
+
+
+class ScheduleFollowUpRequest(BaseModel):
+    """Schedule follow-up at an absolute datetime for non-replied recipients.
+
+    Provide either recipient_ids (selected) or set all_non_replied=True.
+    Content comes from the campaign's next CampaignSequenceStage (must exist).
+    """
+
+    scheduled_at: datetime
+    recipient_ids: list[int] | None = None
+    all_non_replied: bool = False
+
+
+class ScheduleFollowUpResponse(BaseModel):
+    scheduled: int
+    skipped: int = 0
+    scheduled_at: datetime
+
+
+class CancelFollowUpRequest(BaseModel):
+    """Cancel pending follow-ups for selected recipients, or all scheduled on this campaign."""
+
+    recipient_ids: list[int] | None = None
+    all_scheduled: bool = False
+
+
+class CancelFollowUpResponse(BaseModel):
+    cancelled: int
+    skipped: int = 0
+
+
+class CampaignRecipientStatsResponse(BaseModel):
+    total: int = 0
+    sent: int = 0
+    replied: int = 0
+    no_reply: int = 0
+    follow_up_scheduled: int = 0
+    follow_up_sent: int = 0
+    follow_up_cancelled: int = 0
+    bounced: int = 0
+    not_contacted: int = 0
+
+
+# ── Update list (email-centric cards) ─────────────────────────────────────────
+
+class UpdateListCampaignMembership(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    campaign_code: str
+    status: str
+    last_sent_at: datetime | None = None
+    follow_up_label: str | None = None
+    current_stage: int = 0
+    follow_up_sent: bool = False
+
+
+class UpdateListEmailCard(BaseModel):
+    recipient_id: int
+    name: str | None = None
+    email: str
+    company: str | None = None
+    designation: str | None = None
+    campaign_count: int = 0
+    follow_up_sent_count: int = 0
+    marked_updated_count: int = 0
+    campaigns: list[UpdateListCampaignMembership] = []
+    # Aggregate: replied if all replied; sent if any sent-like; mixed otherwise
+    display_status: str = "sent"
+    unreplied_campaign_count: int = 0
+
+
+class UpdateListEmailResponse(BaseModel):
+    items: list[UpdateListEmailCard]
+    total: int
+
+
+class MarkEmailRepliedRequest(BaseModel):
+    """Mark this email as replied in all (or selected) campaigns it belongs to."""
+
+    email: str = Field(..., min_length=3)
+    campaign_ids: list[int] | None = None  # None = every campaign for this email
+
+
 # ── Email ─────────────────────────────────────────────────────────────────────
 
 class SendEmailRequest(BaseModel):
@@ -730,11 +846,30 @@ class EmailLogResponse(BaseModel):
     sender_email: str | None = None
 
 
+class VerifiedEmailGroupResponse(BaseModel):
+    """One unique verified prospect (by name) with every matching send nested under it."""
+
+    group_key: str
+    recipient_name: str | None = None
+    recipient_email: str | None = None
+    recipient_id: int | None = None
+    emails: list[str] = []
+    email_count: int = 0
+    send_count: int = 0
+    latest_sent_at: datetime | None = None
+    latest_status: str | None = None
+    latest_campaign_name: str | None = None
+    logs: list[EmailLogResponse] = []
+
+
 class EmailLogListResponse(BaseModel):
-    items: list[EmailLogResponse]
+    items: list[EmailLogResponse] = []
+    groups: list[VerifiedEmailGroupResponse] = []
     total: int
     page: int
     page_size: int
+    verified_total: int = 0
+    grouped: bool = False
 
 
 # ── Generic ───────────────────────────────────────────────────────────────────
