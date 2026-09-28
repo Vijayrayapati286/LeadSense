@@ -1,7 +1,7 @@
 """Drop duplicate first_name/last_name from icp_records (name is enough).
 
-Revision ID: 034
-Revises: 033
+Revision ID: 040
+Revises: 039
 Create Date: 2026-09-25 12:40:00.000000
 """
 import sys
@@ -11,19 +11,10 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from alembic import op
-from column_utils import add_column_if_missing, column_exists
+from column_utils import add_column_if_missing, drop_column_if_exists
 
-try:
-    from column_utils import drop_column_if_exists
-except ImportError:
-
-    def drop_column_if_exists(table_name: str, column_name: str) -> None:
-        if column_exists(table_name, column_name):
-            op.drop_column(table_name, column_name)
-
-revision: str = "034"
-down_revision: Union[str, None] = "033"
+revision: str = "040"
+down_revision: Union[str, None] = "039"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

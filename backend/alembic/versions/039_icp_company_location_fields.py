@@ -1,7 +1,7 @@
 """Add company_location and export alias columns on icp_records.
 
-Revision ID: 033
-Revises: 032
+Revision ID: 039
+Revises: 038
 Create Date: 2026-09-24 16:00:00.000000
 """
 import sys
@@ -14,8 +14,8 @@ from alembic import op
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from column_utils import add_column_if_missing
 
-revision: str = "033"
-down_revision: Union[str, None] = "032"
+revision: str = "039"
+down_revision: Union[str, None] = "038"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

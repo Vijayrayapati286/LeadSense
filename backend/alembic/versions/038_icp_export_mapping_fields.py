@@ -1,7 +1,7 @@
 """Add CRM export mapping columns to icp_records.
 
-Revision ID: 032
-Revises: 031
+Revision ID: 038
+Revises: 037
 Create Date: 2026-09-24 15:00:00.000000
 """
 import sys
@@ -14,8 +14,8 @@ from alembic import op
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from column_utils import add_column_if_missing
 
-revision: str = "032"
-down_revision: Union[str, None] = "031"
+revision: str = "038"
+down_revision: Union[str, None] = "037"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
