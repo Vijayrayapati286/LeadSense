@@ -15,6 +15,37 @@ class UserResponse(BaseModel):
     name: str
     email: str
     department: str
+    org_id: str | None = None
+    role: str = "USER"
+    status: str = "ACTIVE"
+    org_name: str | None = None
+    org_type: str | None = None
+    client_name: str | None = None
+    permissions: list[str] = []
+
+
+class UserCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    role: Literal["ADMIN", "USER"] = "USER"
+    department: str = Field(default="Sales", min_length=1, max_length=255)
+    status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
+
+
+class UserAdminUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    department: str | None = Field(None, min_length=1, max_length=255)
+    role: Literal["ADMIN", "USER"] | None = None
+    status: Literal["ACTIVE", "INACTIVE"] | None = None
+
+
+class UserStatusUpdateRequest(BaseModel):
+    status: Literal["ACTIVE", "INACTIVE"]
+
+
+class UserResetPasswordRequest(BaseModel):
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 class UserProfileUpdate(BaseModel):
@@ -86,6 +117,64 @@ class DashboardResponse(BaseModel):
     campaign_status: list[CampaignStatusStat]
     recent_activity: list[RecentActivity]
     recent_campaigns: list[RecentCampaign]
+
+
+class AdminDashboardSummary(BaseModel):
+    total_users: int
+    campaigns: int
+    emails_sent: int
+    delivered: int
+    bounced: int
+    replies: int
+
+
+class AdminUserActivity(BaseModel):
+    user_id: int
+    name: str
+    email: str
+    campaigns: int
+    emails_sent: int
+    status: str
+
+
+class AdminCampaignPerformance(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    sent: int
+    delivered: int
+    bounced: int
+    replied: int
+
+
+class AdminIcpStats(BaseModel):
+    accounts: int
+    contacts: int
+    verified_emails: int
+    invalid_emails: int
+
+
+class AdminLinkedInStats(BaseModel):
+    total_extracted: int
+    successfully_extracted: int
+    failed: int
+    added_to_icp: int
+
+
+class AdminEmailVerificationStats(BaseModel):
+    emails_verified: int
+    valid: int
+    invalid: int
+    risky: int
+
+
+class AdminDashboardResponse(BaseModel):
+    org_id: str
+    summary: AdminDashboardSummary
+    user_activity: list[AdminUserActivity]
+    campaign_performance: list[AdminCampaignPerformance]
+    icp: AdminIcpStats
+    linkedin: AdminLinkedInStats
+    email_verification: AdminEmailVerificationStats
 
 
 # ── Campaign ──────────────────────────────────────────────────────────────────
@@ -788,3 +877,156 @@ class EmailLogListResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
     success: bool = True
+
+
+# ── Organizations + PATs (SmartOps) ───────────────────────────────────────────
+
+class OrganizationCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    owner_name: str = Field(..., min_length=1, max_length=255)
+    owner_email: EmailStr
+    client_name: str | None = Field(default=None, max_length=255)
+    type: Literal["TENANT"] = "TENANT"
+    pat_name: str | None = Field(default="SmartOps", max_length=255)
+
+
+class OrganizationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    organization_id: str
+    name: str
+    type: str
+    status: str
+    client_name: str | None = None
+    owner_user_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class OrganizationTokenResponse(BaseModel):
+    token_id: str
+    organization_id: str
+    token_prefix: str
+    name: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class OrganizationTokenCreateRequest(BaseModel):
+    name: str | None = Field(None, max_length=255)
+    scopes: list[str] | None = None
+
+
+class OrganizationTokenCreateResponse(OrganizationTokenResponse):
+    """Includes raw PAT — returned only once at creation."""
+
+    token: str
+
+
+class OrganizationCreateResponse(OrganizationResponse):
+    """Org create always includes a one-time PAT for SmartOps handoff."""
+
+    token: OrganizationTokenCreateResponse
+    owner_email: str | None = None
+    owner_verify_url: str | None = None
+
+
+class IntegrationWhoamiResponse(BaseModel):
+    organization_id: str
+    organization_name: str
+    type: str
+    token_status: str
+    token_id: str | None = None
+    token_name: str | None = None
+
+
+# ── Leads (SmartOps sync) ─────────────────────────────────────────────────────
+
+class LeadCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    status: str = Field(default="open", max_length=50)
+    name: str | None = Field(default=None, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
+    company: str | None = Field(default=None, max_length=255)
+    source: str | None = Field(default=None, max_length=255)
+    due_date: date | None = None
+    notes: str | None = None
+    external_id: str | None = Field(default=None, max_length=128)
+
+
+class LeadUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    status: str | None = Field(default=None, max_length=50)
+    name: str | None = Field(default=None, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
+    company: str | None = Field(default=None, max_length=255)
+    source: str | None = Field(default=None, max_length=255)
+    due_date: date | None = None
+    notes: str | None = None
+    external_id: str | None = Field(default=None, max_length=128)
+
+
+class LeadResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    organization_id: str
+    title: str
+    status: str
+    name: str | None = None
+    email: str | None = None
+    company: str | None = None
+    source: str | None = None
+    due_date: date | None = None
+    notes: str | None = None
+    external_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class LeadListResponse(BaseModel):
+    items: list[LeadResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+# ── RBAC (roles / permissions / assignments) ──────────────────────────────────
+
+class RoleResponse(BaseModel):
+    id: str
+    name: str
+    role_type: str
+    scope: str
+    is_system: bool
+    is_invitable: bool
+    description: str | None = None
+    permissions: list[str] = Field(default_factory=list)
+
+
+class PermissionResponse(BaseModel):
+    id: str
+    name: str
+    category: str
+    description: str | None = None
+
+
+class UserRoleResponse(BaseModel):
+    id: str
+    user_id: int
+    user_name: str | None = None
+    user_email: str | None = None
+    role_id: str
+    role_name: str
+    role_type: str | None = None
+    organization_id: str
+    created_at: datetime | None = None
+
+
+class UserRoleAssignRequest(BaseModel):
+    user_id: int
+    role_id: str

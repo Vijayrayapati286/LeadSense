@@ -29,6 +29,7 @@ from app.linkedin.bulk_jobs import (
     list_job_items,
     list_jobs,
     list_recent_comparison_items,
+    list_recent_downloads,
 )
 from app.linkedin.bulk_models import BulkBackupRow, BulkExtractJobRow, BulkJobItemRow
 from app.linkedin.bulk_service import BulkExtractService
@@ -63,6 +64,8 @@ from app.linkedin.schemas import (
     LinkedInExtractResponse,
     ProfileExtractRequest,
     ProfileExtractResponse,
+    RecentDownloadItem,
+    RecentDownloadsResponse,
 )
 from app.linkedin.validator import validate_profile_url
 from app.middleware.auth import get_current_user
@@ -412,6 +415,50 @@ def list_bulk_jobs(
         page_size=payload["page_size"],
         items=[_bulk_job_status_response(j) for j in payload["items"]],
     )
+
+
+def _day_group(completed_at: str | None) -> str:
+    from datetime import datetime, timezone
+
+    if not completed_at:
+        return "Earlier"
+    try:
+        dt = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return "Earlier"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    day = dt.astimezone(timezone.utc).date()
+    if day == today:
+        return "Today"
+    if (today - day).days == 1:
+        return "Yesterday"
+    return "Earlier"
+
+
+@router.get("/recent-downloads", response_model=RecentDownloadsResponse)
+def get_recent_downloads(
+    limit: int = Query(30, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+):
+    """List recent downloadable bulk results. Never triggers Apify."""
+    user_id = getattr(current_user, "id", None)
+    rows = list_recent_downloads(user_id=user_id, limit=limit)
+    items = [
+        RecentDownloadItem(
+            job_id=r["job_id"],
+            filename=r["filename"],
+            record_count=r["record_count"],
+            total_urls=r["total_urls"],
+            completed_at=r["completed_at"],
+            download_ready=r["download_ready"],
+            day_group=_day_group(r["completed_at"]),
+        )
+        for r in rows
+    ]
+    return RecentDownloadsResponse(items=items)
 
 
 @router.get("/bulk-jobs/{job_id}/items", response_model=BulkJobItemsPageResponse)

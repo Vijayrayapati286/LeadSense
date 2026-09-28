@@ -97,12 +97,34 @@ export default function LinkedInProfileExtractorPage() {
   const [dragOver, setDragOver] = useState(false);
   const [reviewItems, setReviewItems] = useState([]);
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [recentDownloads, setRecentDownloads] = useState([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const [recentDownloadingId, setRecentDownloadingId] = useState(null);
+
+  const loadRecentDownloads = async () => {
+    setRecentLoading(true);
+    try {
+      const payload = await linkedinProfileService.listRecentDownloads({ limit: 30 });
+      setRecentDownloads(payload.items || []);
+    } catch {
+      // Best-effort; section stays empty on failure.
+    } finally {
+      setRecentLoading(false);
+    }
+  };
 
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (mode === 'bulk') {
+      loadRecentDownloads();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   // If the job finished (or has successes) but the board is still empty, retry load.
   useEffect(() => {
@@ -226,6 +248,24 @@ export default function LinkedInProfileExtractorPage() {
     }
   };
 
+  const handleRecentDownload = async (jobId) => {
+    if (!jobId) return;
+    setRecentDownloadingId(jobId);
+    try {
+      const { blob, filename } = await linkedinProfileService.downloadBulkJob(jobId);
+      downloadBlob(blob, filename || `bulk_${jobId}.xlsx`);
+      toast.success('Downloaded stored result (no re-extraction)');
+    } catch (err) {
+      const message =
+        (typeof err.response?.data?.detail === 'string' && err.response.data.detail) ||
+        err.message ||
+        'Download failed';
+      toast.error(message);
+    } finally {
+      setRecentDownloadingId(null);
+    }
+  };
+
   const handleAddBulkJobToIcp = async (jobId) => {
     if (!jobId) return;
     setIcpAdding(true);
@@ -273,6 +313,7 @@ export default function LinkedInProfileExtractorPage() {
           pollRef.current = null;
           setBulkProcessing(false);
           await ingestResults(jobId);
+          loadRecentDownloads();
           toast.success(
             `Extraction completed — ${status.success ?? status.completed} succeeded, ${status.failed} failed.`,
           );
@@ -281,6 +322,7 @@ export default function LinkedInProfileExtractorPage() {
           pollRef.current = null;
           setBulkProcessing(false);
           await ingestResults(jobId);
+          loadRecentDownloads();
           const message = status.error || 'Bulk extraction failed';
           setError(message);
           if (status.download_ready) {
@@ -519,6 +561,75 @@ export default function LinkedInProfileExtractorPage() {
               </p>
             </div>
           </div>
+
+          {recentDownloads.length > 0 || recentLoading ? (
+            <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Recent Downloads</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Re-download stored results — never re-runs Apify.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadRecentDownloads}
+                  disabled={recentLoading}
+                  className="text-xs font-medium text-primary-700 hover:underline disabled:opacity-50"
+                >
+                  {recentLoading ? 'Refreshing…' : 'Refresh'}
+                </button>
+              </div>
+              <div className="mt-3 space-y-3">
+                {['Today', 'Yesterday', 'Earlier'].map((group) => {
+                  const groupItems = recentDownloads.filter((d) => d.day_group === group);
+                  if (!groupItems.length) return null;
+                  return (
+                    <div key={group}>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+                        {group}
+                      </p>
+                      <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
+                        {groupItems.map((item) => (
+                          <li
+                            key={item.job_id}
+                            className="flex items-center justify-between gap-3 px-3 py-2.5"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-gray-900">
+                                {item.filename}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {item.record_count} record{item.record_count === 1 ? '' : 's'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRecentDownload(item.job_id)}
+                              disabled={
+                                !item.download_ready || recentDownloadingId === item.job_id
+                              }
+                              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                            >
+                              {recentDownloadingId === item.job_id ? (
+                                <LoadingSpinner size="sm" />
+                              ) : (
+                                <FiDownload size={14} />
+                              )}
+                              Download
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
+                {!recentLoading && recentDownloads.length === 0 ? (
+                  <p className="text-xs text-gray-500">No downloads yet.</p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           <input
             ref={fileInputRef}

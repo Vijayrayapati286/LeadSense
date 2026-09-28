@@ -23,8 +23,14 @@ from app.routers import (
     custom_fields,
     dashboard,
     email,
+    integrations,
+    invites,
+    leads,
     logs,
     mailers,
+    onboard,
+    organizations,
+    rbac,
     recipient_groups,
     recipients,
     salesnav,
@@ -110,6 +116,13 @@ app.include_router(webhooks.router, prefix=API_PREFIX)
 app.include_router(app_settings.router, prefix=API_PREFIX)
 app.include_router(custom_fields.router, prefix=API_PREFIX)
 app.include_router(users.router, prefix=API_PREFIX)
+app.include_router(invites.router, prefix=API_PREFIX)
+app.include_router(organizations.router, prefix=API_PREFIX)
+app.include_router(onboard.router, prefix=API_PREFIX)
+app.include_router(rbac.router, prefix=API_PREFIX)
+app.include_router(leads.router, prefix=API_PREFIX)
+app.include_router(leads.org_leads_router, prefix=API_PREFIX)
+app.include_router(integrations.router, prefix=API_PREFIX)
 app.include_router(salesnav.router, prefix=API_PREFIX)
 app.include_router(linkedin_router, prefix=API_PREFIX)
 app.include_router(profile_extractor_router, prefix=API_PREFIX)
@@ -143,5 +156,11 @@ def root():
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health():
     return {"status": "healthy", "commit": GIT_COMMIT}
+
+
+@app.get("/api/openapi.json", include_in_schema=False)
+def api_openapi():
+    return app.openapi()

@@ -279,7 +279,8 @@ class ExcelService:
         return self.import_parsed(db, parsed, field_ids_by_name)
 
     def import_parsed(
-        self, db: Session, parsed: list[tuple[dict, dict]], field_ids_by_name: dict[str, int]
+        self, db: Session, parsed: list[tuple[dict, dict]], field_ids_by_name: dict[str, int],
+        org_id: str | None = None,
     ) -> tuple[int, int, list[int]]:
         """Write already-parsed rows (see parse_excel) to the database. A new
         email is inserted; an email that already exists is upserted — its
@@ -299,7 +300,10 @@ class ExcelService:
         updated = 0
         touched_ids: list[int] = []
 
-        existing = {r.email: r.id for r in db.query(Recipient.email, Recipient.id).all()}
+        existing_q = db.query(Recipient.email, Recipient.id)
+        if org_id:
+            existing_q = existing_q.filter(Recipient.org_id == org_id)
+        existing = {r.email: r.id for r in existing_q.all()}
         suppressed_reasons: dict[str, str] = {}
         active_entries = (
             db.query(SuppressionEntry)
@@ -325,6 +329,8 @@ class ExcelService:
                     data["is_suppressed"] = True
                     data["suppression_reason"] = suppressed_reasons[data["email"]]
                 data["timezone"] = lookup_timezone(data.get("country"), data.get("state"))
+                if org_id:
+                    data["org_id"] = org_id
                 recipient = Recipient(**data)
                 db.add(recipient)
                 db.flush()
@@ -360,7 +366,7 @@ class ExcelService:
                     recipient_id=recipient_id, custom_field_id=custom_field_id, value=value
                 ))
 
-    def create_single_recipient(self, db: Session, data: dict) -> tuple[Recipient, bool]:
+    def create_single_recipient(self, db: Session, data: dict, org_id: str | None = None) -> tuple[Recipient, bool]:
         """Create-or-upsert a single recipient by email, for the "Add
         Manually" prospect form — same upsert behavior as import_recipients,
         just for a single call site instead of a whole sheet. A matching
@@ -369,7 +375,10 @@ class ExcelService:
         existing data); suppression status is left untouched either way.
         Returns (recipient, created)."""
         email = data["email"].strip().lower()
-        existing = db.query(Recipient).filter(Recipient.email == email).first()
+        existing_q = db.query(Recipient).filter(Recipient.email == email)
+        if org_id:
+            existing_q = existing_q.filter(Recipient.org_id == org_id)
+        existing = existing_q.first()
         if existing:
             for field, value in data.items():
                 if field == "email":
@@ -383,6 +392,8 @@ class ExcelService:
             return existing, False
 
         record = {**data, "email": email}
+        if org_id:
+            record["org_id"] = org_id
         active_entry = (
             db.query(SuppressionEntry)
             .filter(SuppressionEntry.email == email, SuppressionEntry.overridden_at.is_(None))

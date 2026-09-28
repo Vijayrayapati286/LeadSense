@@ -189,3 +189,18 @@ class BackupRestoreResponse(BaseModel):
     status: str
     total: int
     message: str = "Backup restored as a new job"
+
+
+class RecentDownloadItem(BaseModel):
+    job_id: str
+    filename: str
+    record_count: int = 0
+    total_urls: int = 0
+    completed_at: str | None = None
+    download_ready: bool = True
+    day_group: str = "Earlier"  # Today | Yesterday | Earlier
+
+
+class RecentDownloadsResponse(BaseModel):
+    items: list[RecentDownloadItem]
+

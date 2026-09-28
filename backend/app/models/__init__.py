@@ -1,3 +1,12 @@
+from app.models.rbac import (
+    PasswordResetToken,
+    Permission,
+    RefreshToken,
+    Role,
+    RolePermission,
+    UserEmailVerification,
+    UserRole,
+)
 from app.models.models import (
     AppSetting,
     Campaign,
@@ -7,8 +16,12 @@ from app.models.models import (
     CustomField,
     EmailLog,
     EmailVerification,
+    Invite,
+    Lead,
     InboundEmail,
     Mailer,
+    Organization,
+    OrganizationToken,
     Recipient,
     RecipientCustomValue,
     RecipientGroup,
@@ -22,7 +35,11 @@ from app.models.models import (
 )
 
 __all__ = [
+    "Organization",
+    "OrganizationToken",
     "User",
+    "Invite",
+    "Lead",
     "Campaign",
     "Template",
     "Mailer",
@@ -42,4 +59,11 @@ __all__ = [
     "AppSetting",
     "CustomField",
     "RecipientCustomValue",
+    "Role",
+    "Permission",
+    "RolePermission",
+    "UserRole",
+    "RefreshToken",
+    "PasswordResetToken",
+    "UserEmailVerification",
 ]

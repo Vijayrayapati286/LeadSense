@@ -32,11 +32,51 @@ export const authService = {
 
 export const dashboardService = {
   getStats: (params) => api.get('/dashboard/stats', { params }),
+  getAdminStats: () => api.get('/dashboard/admin'),
   exportReport: (params) => api.get('/dashboard/export-report', { params, responseType: 'blob' }),
 };
 
 export const userService = {
   getAll: () => api.get('/users'),
+  create: (data) => api.post('/users', data),
+  update: (id, data) => api.put(`/users/${id}`, data),
+  updateStatus: (id, status) => api.patch(`/users/${id}/status`, { status }),
+  resetPassword: (id, password) => api.post(`/users/${id}/reset-password`, { password }),
+  remove: (id) => api.delete(`/users/${id}`),
+};
+
+export const inviteService = {
+  list: (params) => api.get('/invites', { params }),
+  create: (data) => api.post('/invites', data),
+  cancel: (id) => api.post(`/invites/${id}/cancel`),
+  accept: (id, data) => api.post(`/invites/${id}/accept`, data),
+  resend: (id) => api.post(`/invites/${id}/resend`),
+  remove: (id) => api.delete(`/invites/${id}`),
+};
+
+export const onboardService = {
+  previewVerify: (token) => api.get(`/onboard/verify/${encodeURIComponent(token)}`),
+  completeVerify: (token, data) => api.post(`/onboard/verify/${encodeURIComponent(token)}`, data),
+  previewInvite: (token) => api.get(`/onboard/invite/${encodeURIComponent(token)}`),
+  completeInvite: (token, data) => api.post(`/onboard/invite/${encodeURIComponent(token)}`, data),
+};
+
+export const rbacService = {
+  listRoles: () => api.get('/rbac/roles'),
+  listPermissions: () => api.get('/rbac/permissions'),
+  listAssignments: () => api.get('/rbac/assignments'),
+  assignRole: (data) => api.post('/rbac/assignments', data),
+  removeAssignment: (id) => api.delete(`/rbac/assignments/${id}`),
+};
+
+export const organizationService = {
+  list: () => api.get('/organizations'),
+  getMe: () => api.get('/organizations/me'),
+  getById: (orgId) => api.get(`/organizations/${orgId}`),
+  create: (data) => api.post('/organizations', data),
+  listTokens: (orgId) => api.get(`/organizations/${orgId}/tokens`),
+  createToken: (orgId, data) => api.post(`/organizations/${orgId}/tokens`, data),
+  revokeToken: (orgId, tokenId) => api.post(`/organizations/${orgId}/tokens/${tokenId}/revoke`),
 };
 
 export const campaignService = {
@@ -171,6 +211,8 @@ export const linkedinProfileService = {
     api.post(`/linkedin/bulk-jobs/${jobId}/add-to-icp`, null, { timeout: 120_000 }).then((r) => r.data),
   listBulkJobs: (params = {}) =>
     api.get('/linkedin/bulk-jobs', { params }).then((r) => r.data),
+  listRecentDownloads: (params = {}) =>
+    api.get('/linkedin/recent-downloads', { params }).then((r) => r.data),
   listBulkJobItems: (jobId, params = {}) =>
     api.get(`/linkedin/bulk-jobs/${jobId}/items`, { params }).then((r) => r.data),
   getBulkConflicts: (jobId, params = {}) =>
