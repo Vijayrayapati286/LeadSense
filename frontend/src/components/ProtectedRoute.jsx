@@ -1,6 +1,6 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { hasPermission } from '../utils/permissions';
+import { hasPermission, isProviderOrg } from '../utils/permissions';
 import LoadingSpinner from './ui/LoadingSpinner';
 
 export default function ProtectedRoute() {
@@ -24,6 +24,14 @@ export default function ProtectedRoute() {
 export function RequirePermission({ permission }) {
   const { user } = useAuth();
   if (!hasPermission(user, permission)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <Outlet />;
+}
+
+export function TenantProductRoute() {
+  const { user } = useAuth();
+  if (isProviderOrg(user)) {
     return <Navigate to="/dashboard" replace />;
   }
   return <Outlet />;

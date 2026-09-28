@@ -138,7 +138,7 @@ export default function InvitesPage() {
         <div>
           <h1 className="text-[2rem] font-bold tracking-tight text-slate-950">Invites</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Invite members into your organization ({user?.org_name || user?.org_id})
+            Invite members into your organization{user?.org_name ? ` (${user.org_name})` : ''}
           </p>
         </div>
         <button
@@ -315,7 +315,7 @@ export default function InvitesPage() {
             </select>
           </label>
           <p className="text-xs text-slate-500">
-            They will be invited to <span className="font-medium">{user?.org_name || user?.org_id}</span> only.
+            They will be invited to <span className="font-medium">{user?.org_name || 'your organization'}</span> only.
           </p>
           <div className="flex justify-end gap-2 pt-2">
             <button

@@ -43,6 +43,7 @@ export default function RolesAccessPage() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForm, setAssignForm] = useState({ user_id: '', role_id: '' });
   const [removeRow, setRemoveRow] = useState(null);
+  const [expandedRoles, setExpandedRoles] = useState(() => new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -211,13 +212,31 @@ export default function RolesAccessPage() {
                     <td className="px-5 py-3.5 text-slate-600">{role.is_invitable ? 'Yes' : 'No'}</td>
                     <td className="px-5 py-3.5">
                       <div className="flex flex-wrap gap-1">
-                        {(role.permissions || []).slice(0, 8).map((name) => (
+                        {(expandedRoles.has(role.id)
+                          ? role.permissions || []
+                          : (role.permissions || []).slice(0, 8)
+                        ).map((name) => (
                           <code key={name} className="rounded bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">
                             {name}
                           </code>
                         ))}
                         {(role.permissions || []).length > 8 ? (
-                          <span className="text-xs text-slate-400">+{role.permissions.length - 8} more</span>
+                          <button
+                            type="button"
+                            className="text-xs font-medium text-primary-600 hover:text-primary-700"
+                            onClick={() => {
+                              setExpandedRoles((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(role.id)) next.delete(role.id);
+                                else next.add(role.id);
+                                return next;
+                              });
+                            }}
+                          >
+                            {expandedRoles.has(role.id)
+                              ? 'Show less'
+                              : `+${role.permissions.length - 8} more`}
+                          </button>
                         ) : null}
                       </div>
                     </td>
@@ -271,7 +290,7 @@ export default function RolesAccessPage() {
                   <th className="px-5 py-3 font-semibold">Member</th>
                   <th className="px-5 py-3 font-semibold">Role</th>
                   <th className="px-5 py-3 font-semibold">Type</th>
-                  <th className="px-5 py-3 font-semibold">Organization</th>
+                  <th className="px-5 py-3 font-semibold">Workspace</th>
                   <th className="px-5 py-3 font-semibold" />
                 </tr>
               </thead>
@@ -286,7 +305,7 @@ export default function RolesAccessPage() {
                     <td className="px-5 py-3.5">
                       <Pill tone={row.role_type === 'access' ? 'violet' : 'sky'}>{row.role_type || '—'}</Pill>
                     </td>
-                    <td className="px-5 py-3.5 font-mono text-xs text-slate-500">{row.organization_id}</td>
+                    <td className="px-5 py-3.5 text-slate-600">{row.organization_name || user?.org_name || '—'}</td>
                     <td className="px-5 py-3.5 text-right">
                       <button
                         type="button"

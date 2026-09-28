@@ -230,7 +230,7 @@ export default function BulkJobDetailPage() {
         <div className="relative z-10 mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
           <Link to="/linkedin-history" className="font-semibold text-primary-600 hover:text-primary-700">← All history</Link>
           <StatusBadge status={(job.needs_review || 0) > 0 && job.status === 'done' ? 'needs_review' : job.status} />
-          <span className="font-mono">{job.job_id}</span>
+          {job.original_file_name ? <span>{job.original_file_name}</span> : null}
           <span>Last updated {formatDateTime(job.updated_at || job.completed_at)}</span>
         </div>
       </WorkspaceHeader>

@@ -32,9 +32,9 @@ export default function CampaignCard({
           <p className="mt-0.5 truncate text-body-sm text-slate-500" title={subtitle}>
             {subtitle}
           </p>
-          <p className="mt-1 truncate font-mono text-caption text-slate-400">
-            {c.owner} · {c.campaign_id}
-          </p>
+          {c.owner ? (
+            <p className="mt-1 truncate text-caption text-slate-400">{c.owner}</p>
+          ) : null}
         </div>
         <div className="shrink-0">
           <StatusBadge status={c.status} />

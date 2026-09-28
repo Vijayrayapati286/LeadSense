@@ -11,7 +11,7 @@ import PageShell from '../components/ui/PageShell';
 import SurfaceCard from '../components/ui/SurfaceCard';
 import Modal from '../components/ui/Modal';
 
-function CopyField({ label, value, hint, mono = true }) {
+function CopyField({ label, value, hint, mono = true, hideValue = false }) {
   const toast = useToast();
   const copy = async () => {
     try {
@@ -33,7 +33,7 @@ function CopyField({ label, value, hint, mono = true }) {
             mono ? 'font-mono' : ''
           }`}
         >
-          {value || '—'}
+          {hideValue ? (value ? '••••••••••••' : '—') : (value || '—')}
         </code>
         <Button type="button" variant="secondary" size="sm" onClick={copy} disabled={!value} title={`Copy ${label}`}>
           <FiCopy size={14} />
@@ -175,7 +175,6 @@ export default function OrganizationsPage() {
                   <th className="px-5 py-3 font-semibold">Name</th>
                   <th className="px-5 py-3 font-semibold">Admin</th>
                   <th className="px-5 py-3 font-semibold">Type</th>
-                  <th className="px-5 py-3 font-semibold">Organization ID</th>
                   <th className="px-5 py-3 font-semibold">Status</th>
                 </tr>
               </thead>
@@ -188,33 +187,13 @@ export default function OrganizationsPage() {
                       <TypePill type={org.type} />
                     </td>
                     <td className="px-5 py-3.5">
-                      <div className="flex max-w-md items-center gap-2">
-                        <code className="truncate font-mono text-xs text-slate-600">{org.organization_id}</code>
-                        <button
-                          type="button"
-                          className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                          title="Copy Organization ID"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(org.organization_id);
-                              toast.success('Organization ID copied');
-                            } catch {
-                              toast.error('Could not copy');
-                            }
-                          }}
-                        >
-                          <FiCopy size={14} />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5">
                       <StatusPill status={org.status} />
                     </td>
                   </tr>
                 ))}
                 {!orgs.length ? (
                   <tr>
-                    <td colSpan={5} className="px-5 py-14 text-center text-slate-500">
+                    <td colSpan={4} className="px-5 py-14 text-center text-slate-500">
                       No organizations yet. Onboard one to get started.
                     </td>
                   </tr>
@@ -289,7 +268,7 @@ export default function OrganizationsPage() {
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               The PAT is not stored on this page and will not be shown again. Copy it before closing.
             </p>
-            <CopyField label="Organization ID (Tenant Id)" value={handoff.organization_id} />
+            <CopyField label="Organization ID (Tenant Id)" value={handoff.organization_id} hideValue />
             <CopyField label="PAT" value={handoff.token} />
             {handoff.owner_verify_url ? (
               <CopyField label="Admin verify link" value={handoff.owner_verify_url} mono={false} />

@@ -1180,7 +1180,7 @@ export default function CampaignDetailPage() {
             <StatusBadge status={campaign.status} />
           </span>
         }
-        subtitle={campaign.campaign_id}
+        subtitle={campaign.subject || campaign.target_audience || campaign.description || undefined}
         actions={
         <div className="flex items-center gap-2">
           {isManualMode ? (
@@ -2608,7 +2608,7 @@ export default function CampaignDetailPage() {
         isOpen={historyOpen}
         onClose={() => setHistoryOpen(false)}
         title="Campaign history"
-        subtitle={`${campaign.campaign_name} · ${campaign.campaign_id}`}
+        subtitle={campaign.campaign_name}
         width="lg"
       >
         <div className="space-y-5">
@@ -2650,7 +2650,7 @@ export default function CampaignDetailPage() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">
-                          {log.recipient_name || `Prospect #${log.recipient_id}`}
+                          {log.recipient_name || log.recipient_email || 'Prospect'}
                         </p>
                         <p className="text-xs text-gray-500 truncate">{log.recipient_email}</p>
                       </div>

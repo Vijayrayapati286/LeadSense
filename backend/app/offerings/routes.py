@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_optional_user
+from app.middleware.pat_auth import get_raw_bearer, try_pat_principal
+from app.middleware.pat_auth import security as bearer_security
 from app.models import User
 from app.offerings.ai_service import offering_ai_service
 from app.offerings.campaign_recipients import prepare_campaign_recipients
@@ -28,7 +32,6 @@ from app.offerings.schemas import (
     MatchStatusUpdate,
     OfferingCreate,
     OfferingEmailTemplateMeta,
-    OfferingListResponse,
     OfferingMatchListResponse,
     OfferingMatchResponse,
     OfferingResponse,
@@ -48,21 +51,57 @@ from app.offerings.service import (
     serialize_offering,
     update_offering,
 )
+from app.offerings.sync_service import (
+    get_by_public_id,
+    list_sync_offerings,
+    serialize_sync_offering,
+    upsert_from_smartops,
+)
 from app.offerings.email_template_parser import parse_email_template_file
 from app.storage.exceptions import FileValidationError
 
 router = APIRouter(prefix="/offerings", tags=["Offerings"])
 
 
-@router.get("", response_model=OfferingListResponse)
+def _unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _pat_org_or_none(
+    credentials: HTTPAuthorizationCredentials | None,
+    db: Session,
+) -> str | None:
+    principal = try_pat_principal(db, get_raw_bearer(credentials))
+    return principal.organization_id if principal else None
+
+
+def _require_pat_org_match(pat_org_id: str, body_org_id: str | None) -> None:
+    requested = (body_org_id or "").strip()
+    if requested and requested != pat_org_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+
+
+@router.get("")
 def list_offerings_route(
     search: str = Query(""),
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=100),
     page_size: int | None = Query(None, ge=1, le=100),
+    organization_id: str | None = Query(None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_optional_user),
 ):
+    pat_org = _pat_org_or_none(credentials, db)
+    if pat_org:
+        _require_pat_org_match(pat_org, organization_id)
+        return {"items": list_sync_offerings(db, pat_org)}
+    if not current_user:
+        raise _unauthorized()
     size = page_size or limit
     return list_offerings(
         db,
@@ -73,16 +112,44 @@ def list_offerings_route(
     )
 
 
-@router.post("", response_model=OfferingResponse, status_code=201)
+@router.post("")
 def create_offering_route(
     body: OfferingCreate,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_optional_user),
 ):
+    pat_org = _pat_org_or_none(credentials, db)
+    if pat_org:
+        _require_pat_org_match(pat_org, body.organization_id)
+        if not (body.smartops_offering_id or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="smartops_offering_id is required",
+            )
+        from app.models import Organization
+
+        org = db.query(Organization).filter(Organization.org_id == pat_org).first()
+        try:
+            row, created = upsert_from_smartops(
+                db,
+                organization_id=pat_org,
+                data=body.model_dump(exclude_unset=True),
+                owner_user_id=getattr(org, "owner_user_id", None) if org else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        db.commit()
+        db.refresh(row)
+        return _sync_response(row, created)
+
+    if not current_user:
+        raise _unauthorized()
     try:
         row = create_offering(
             db,
             user_id=getattr(current_user, "id", None),
+            organization_id=getattr(current_user, "org_id", None),
             data=body.model_dump(exclude_unset=True),
         )
     except ValueError as exc:
@@ -100,7 +167,14 @@ def create_offering_route(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail) from exc
     db.commit()
     db.refresh(row)
-    return serialize_offering(row)
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=serialize_offering(row))
+
+
+def _sync_response(row, created: bool):
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=serialize_sync_offering(row),
+    )
 
 
 @router.post("/generate-icp", response_model=GeneratedIcpPayload)
@@ -251,13 +325,39 @@ def get_offering_route(
     return serialize_offering(row)
 
 
-@router.put("/{offering_id}", response_model=OfferingResponse)
+@router.put("/{offering_id}")
 def update_offering_route(
-    offering_id: int,
+    offering_id: str,
     body: OfferingUpdate,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_optional_user),
 ):
+    pat_org = _pat_org_or_none(credentials, db)
+    if pat_org:
+        _require_pat_org_match(pat_org, body.organization_id)
+        row = get_by_public_id(db, pat_org, offering_id)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offering not found")
+        try:
+            row, _created = upsert_from_smartops(
+                db,
+                organization_id=pat_org,
+                data={
+                    **body.model_dump(exclude_unset=True),
+                    "smartops_offering_id": body.smartops_offering_id or row.smartops_offering_id,
+                    "name": body.name or row.name,
+                },
+                existing=row,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        db.commit()
+        db.refresh(row)
+        return serialize_sync_offering(row)
+
+    if not current_user:
+        raise _unauthorized()
     row = get_offering(db, offering_id, user_id=getattr(current_user, "id", None))
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offering not found")
