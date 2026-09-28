@@ -3,8 +3,22 @@
 from alembic import op
 from sqlalchemy import inspect
 
+__all__ = (
+    "table_exists",
+    "column_exists",
+    "add_column_if_missing",
+    "drop_column_if_exists",
+)
+
+
+def table_exists(table_name: str) -> bool:
+    bind = op.get_bind()
+    return table_name in inspect(bind).get_table_names()
+
 
 def column_exists(table_name: str, column_name: str) -> bool:
+    if not table_exists(table_name):
+        return False
     bind = op.get_bind()
     columns = {col["name"] for col in inspect(bind).get_columns(table_name)}
     return column_name in columns

@@ -11,7 +11,16 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from column_utils import add_column_if_missing, drop_column_if_exists
+from alembic import op
+from column_utils import add_column_if_missing, column_exists
+
+try:
+    from column_utils import drop_column_if_exists
+except ImportError:
+
+    def drop_column_if_exists(table_name: str, column_name: str) -> None:
+        if column_exists(table_name, column_name):
+            op.drop_column(table_name, column_name)
 
 revision: str = "034"
 down_revision: Union[str, None] = "033"
