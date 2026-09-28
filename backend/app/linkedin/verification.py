@@ -298,10 +298,10 @@ PERSON_CITY_ALIASES = {"city"}
 PERSON_STATE_ALIASES = {"state", "province"}
 PERSON_COUNTRY_ALIASES = {"country"}
 
-COMPANY_CITY_ALIASES = {"companycity"}
-COMPANY_STATE_ALIASES = {"companystate"}
-COMPANY_COUNTRY_ALIASES = {"companycountry"}
-COMPANY_ADDRESS_ALIASES = {"companyaddress", "address"}
+COMPANY_CITY_ALIASES = {"companycity", "accountcity"}
+COMPANY_STATE_ALIASES = {"companystate", "accountstate"}
+COMPANY_COUNTRY_ALIASES = {"companycountry", "accountcountry"}
+COMPANY_ADDRESS_ALIASES = {"companyaddress", "companylocation", "accountlocation", "address"}
 
 # Back-compat alias set used by older call sites / docs.
 LOCATION_ALIASES = PERSON_LOCATION_ALIASES | PERSON_CITY_ALIASES | {"geo", "address", "locality", "region"}

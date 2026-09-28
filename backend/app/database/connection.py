@@ -272,6 +272,22 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "embedding_model": "VARCHAR(100)",
                 "image": "TEXT",
                 "org_id": "VARCHAR(50)",
+                "department": "VARCHAR(255)",
+                "phone": "VARCHAR(100)",
+                "city": "VARCHAR(255)",
+                "state": "VARCHAR(255)",
+                "country": "VARCHAR(255)",
+                "country_code": "VARCHAR(16)",
+                "contact_state": "VARCHAR(255)",
+                "contact_country": "VARCHAR(255)",
+                "company_linkedin_url": "VARCHAR(500)",
+                "company_location": "VARCHAR(500)",
+                "company_city": "VARCHAR(255)",
+                "annual_revenue": "VARCHAR(100)",
+                "company_summary": "TEXT",
+                "account_linkedin_url": "VARCHAR(500)",
+                "account_city": "VARCHAR(255)",
+                "account_summary": "TEXT",
             }
             for name, ddl in icp_adds.items():
                 if name not in cols:
@@ -360,6 +376,36 @@ def _ensure_app_settings_schema() -> None:
                 logger.info("Added app_settings.%s", name)
 
 
+def _ensure_ooo_inbound_schema() -> None:
+    """Add OOO / inbound tracking columns and table. create_all does not ALTER."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    dialect = engine.dialect.name
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME"
+
+    with engine.begin() as conn:
+        if "email_logs" in tables:
+            cols = {c["name"] for c in inspector.get_columns("email_logs")}
+            for name, ddl in {
+                "message_id": "VARCHAR(255)",
+                "ses_message_id": "VARCHAR(255)",
+            }.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE email_logs ADD COLUMN {name} {ddl}"))
+                    logger.info("Added email_logs.%s", name)
+
+        if "campaign_recipients" in tables:
+            cols = {c["name"] for c in inspector.get_columns("campaign_recipients")}
+            if "ooo_at" not in cols:
+                conn.execute(text(f"ALTER TABLE campaign_recipients ADD COLUMN ooo_at {ts}"))
+                logger.info("Added campaign_recipients.ooo_at")
+
+    # inbound_emails is a new table — create_all handles it when the model is imported.
+    # Re-inspect after possible create_all in init_db; this helper may run before or after.
+
+
 def init_db() -> None:
     """Create all tables, seed dummy data if empty, and provision named users."""
     from app.models import Campaign, EmailLog, Recipient, Template, User
@@ -374,6 +420,7 @@ def init_db() -> None:
     _ensure_linkedin_bulk_schema()
     _ensure_offerings_recommendation_schema()
     _ensure_app_settings_schema()
+    _ensure_ooo_inbound_schema()
 
     db = SessionLocal()
     try:

@@ -4,13 +4,14 @@
 suppression/tracking logic has been tested against so far.
 
 `/ses-events` is the real, public, internet-facing listener AWS SNS calls in
-production. It is NOT gated behind debug — it's meant to be reachable from
-the internet once AWS is configured to point at it (see project notes on
-the SNS topic/subscription setup, which is AWS-console work outside this
-codebase). Both endpoints funnel into the same event_service handlers, so
-behavior is identical whether an event is simulated or real.
+production for bounce/complaint notifications.
+
+`/ses-inbound` receives SNS notifications for SES inbound receiving (S3 drop
+of raw MIME) and runs OOO / reply classification — separate from bounce SNS
+so existing bounce wiring is unchanged.
 """
 
+import base64
 import json
 import logging
 import re
@@ -23,8 +24,8 @@ from app.config import get_settings
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import User
-from app.schemas.schemas import MessageResponse, SimulateEventRequest
-from app.services import event_service
+from app.schemas.schemas import MessageResponse, SimulateEventRequest, SimulateInboundRequest
+from app.services import event_service, inbound_email_service
 from app.services.sns_verify import verify_sns_signature
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,7 @@ def simulate_event(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Dev-only: manually trigger a bounce/complaint/reply event to exercise
-    the suppression/tracking logic without real AWS SES/SNS wiring."""
+    """Dev-only: manually trigger a bounce/complaint/reply/OOO event."""
     if not settings.debug:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -56,8 +56,32 @@ def simulate_event(
         )
     elif data.event_type == "reply":
         event_service.handle_reply(db, data.email, campaign_id=data.campaign_id)
+    elif data.event_type == "out_of_office":
+        event_service.handle_out_of_office(db, data.email, campaign_id=data.campaign_id)
 
     return MessageResponse(message=f"Simulated {data.event_type} event for {data.email}")
+
+
+@router.post("/simulate-inbound", response_model=MessageResponse)
+def simulate_inbound(
+    data: SimulateInboundRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Dev-only: inject a raw MIME email (base64) through the inbound processor."""
+    if not settings.debug:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        raw = base64.b64decode(data.raw_email_base64, validate=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid base64: {exc}") from exc
+    result = inbound_email_service.process_raw_inbound(db, raw)
+    return MessageResponse(
+        message=(
+            f"Inbound {result.classification} duplicate={result.duplicate} "
+            f"matched={result.matched} campaign_id={result.campaign_id}"
+        )
+    )
 
 
 def _extract_campaign_id(ses_event: dict) -> int | None:
@@ -155,3 +179,75 @@ async def ses_events(request: Request, db: Session = Depends(get_db)):
 
     logger.info("Ignoring unrecognized SNS message type: %s", message_type)
     return {"status": "ignored"}
+
+
+@router.post("/ses-inbound")
+async def ses_inbound(request: Request, db: Session = Depends(get_db)):
+    """SNS listener for SES inbound receiving (receipt rule → S3 → SNS).
+
+    Signature-verified like /ses-events. Downloads raw MIME from S3 and runs
+    the OOO/reply classifier. Does not replace bounce handling.
+    """
+    raw_body = await request.body()
+    try:
+        message = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    if not verify_sns_signature(message):
+        raise HTTPException(status_code=403, detail="Invalid SNS signature")
+
+    message_type = message.get("Type")
+
+    if message_type in ("SubscriptionConfirmation", "UnsubscribeConfirmation"):
+        subscribe_url = message.get("SubscribeURL")
+        if subscribe_url:
+            try:
+                httpx.get(subscribe_url, timeout=5.0)
+                logger.info("Confirmed SNS inbound %s", message_type)
+            except Exception:
+                logger.exception("Failed to confirm SNS inbound %s", message_type)
+        return {"status": "ok"}
+
+    if message_type != "Notification":
+        return {"status": "ignored"}
+
+    try:
+        payload = json.loads(message.get("Message", "{}"))
+    except json.JSONDecodeError:
+        logger.warning("Inbound SNS Notification had a non-JSON Message body")
+        return {"status": "ignored"}
+
+    location = inbound_email_service.extract_s3_location_from_ses_inbound_sns(payload)
+    if not location:
+        # Some SES SNS actions embed content; try content as raw if present (rare).
+        content = payload.get("content")
+        if content:
+            result = inbound_email_service.process_raw_inbound(db, content.encode("utf-8"))
+            return {
+                "status": "ok",
+                "classification": result.classification,
+                "duplicate": result.duplicate,
+            }
+        logger.info("Inbound SNS payload had no S3 location — ignored")
+        return {"status": "ignored"}
+
+    bucket, key = location
+    configured = (settings.ses_inbound_s3_bucket or "").strip()
+    if configured and bucket != configured:
+        logger.warning("Rejecting inbound S3 bucket %s (expected %s)", bucket, configured)
+        raise HTTPException(status_code=403, detail="Unexpected inbound bucket")
+
+    try:
+        result = inbound_email_service.process_s3_notification(db, bucket, key)
+    except Exception:
+        logger.exception("Failed processing inbound s3://%s/%s", bucket, key)
+        raise HTTPException(status_code=500, detail="Inbound processing failed")
+
+    return {
+        "status": "ok",
+        "classification": result.classification,
+        "matched": result.matched,
+        "duplicate": result.duplicate,
+        "campaign_id": result.campaign_id,
+    }

@@ -58,6 +58,17 @@ def _gate_before_ses(db: Session, cr: CampaignRecipient, recipient: Recipient, o
 # Statuses that should never receive another automated follow-up.
 TERMINAL_STATUSES = {"replied", "suppressed", "bounced", "invalid_email"}
 
+
+def _terminal_statuses() -> set[str]:
+    """Include out_of_office only when OOO_STOPS_FOLLOWUPS is enabled."""
+    from app.config import get_settings
+
+    statuses = set(TERMINAL_STATUSES)
+    if get_settings().ooo_stops_followups:
+        statuses.add("out_of_office")
+    return statuses
+
+
 POLL_INTERVAL_SECONDS = 300
 QUEUED_SEND_POLL_INTERVAL_SECONDS = 5
 BUSINESS_HOURS_START = 9
@@ -118,7 +129,7 @@ def process_due_followups() -> None:
             .filter(
                 CampaignRecipient.next_send_at.isnot(None),
                 CampaignRecipient.next_send_at <= utc_now(),
-                CampaignRecipient.status.notin_(TERMINAL_STATUSES),
+                CampaignRecipient.status.notin_(_terminal_statuses()),
                 Recipient.is_suppressed == False,  # noqa: E712
             )
             .all()
@@ -137,7 +148,7 @@ def process_due_followups() -> None:
                 db.query(CampaignRecipient)
                 .filter(
                     CampaignRecipient.id == cr_id,
-                    CampaignRecipient.status.notin_(TERMINAL_STATUSES),
+                    CampaignRecipient.status.notin_(_terminal_statuses()),
                 )
                 .with_for_update(skip_locked=True)
                 .first()
@@ -186,6 +197,8 @@ def process_due_followups() -> None:
                     status=result["status"],
                     error_message=result.get("error"),
                     sender_user_id=owner.id if owner else None,
+                    message_id=result.get("message_id"),
+                    ses_message_id=result.get("ses_message_id"),
                 )
             )
 
@@ -317,6 +330,8 @@ def process_queued_initial_sends() -> None:
                     status=result["status"],
                     error_message=result.get("error"),
                     sender_user_id=owner.id if owner else None,
+                    message_id=result.get("message_id"),
+                    ses_message_id=result.get("ses_message_id"),
                 )
             )
 

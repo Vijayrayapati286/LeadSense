@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -13,13 +12,24 @@ class IcpRecordCreate(BaseModel):
     email: str | None = None
     company_name: str | None = None
     designation: str | None = None
+    department: str | None = None
     about: str | None = None
     linkedin_url: str | None = None
+    phone: str | None = None
     image: str | None = None
     industry: str | None = None
     company_size: str | None = None
     location: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    country_code: str | None = None
     company_website: str | None = None
+    company_linkedin_url: str | None = None
+    company_location: str | None = None
+    company_city: str | None = None
+    annual_revenue: str | None = None
+    company_summary: str | None = None
     icp_status: str | None = "verified"
     icp_score: int | None = None
     tags: list[str] | None = None
@@ -31,13 +41,24 @@ class IcpRecordUpdate(BaseModel):
     company_name: str | None = None
     company: str | None = None
     designation: str | None = None
+    department: str | None = None
     about: str | None = None
     linkedin_url: str | None = None
+    phone: str | None = None
     image: str | None = None
     industry: str | None = None
     company_size: str | None = None
     location: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    country_code: str | None = None
     company_website: str | None = None
+    company_linkedin_url: str | None = None
+    company_location: str | None = None
+    company_city: str | None = None
+    annual_revenue: str | None = None
+    company_summary: str | None = None
     icp_status: str | None = None
     icp_score: int | None = None
     tags: list[str] | None = None
@@ -51,13 +72,29 @@ class IcpRecordResponse(BaseModel):
     email: str | None = None
     company_name: str | None = None
     designation: str | None = None
+    department: str | None = None
     about: str | None = None
     linkedin_url: str | None = None
+    phone: str | None = None
     image: str | None = None
     industry: str | None = None
     company_size: str | None = None
     location: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+    contact_state: str | None = None
+    contact_country: str | None = None
     company_website: str | None = None
+    company_linkedin_url: str | None = None
+    company_location: str | None = None
+    company_city: str | None = None
+    annual_revenue: str | None = None
+    company_summary: str | None = None
+    account_linkedin_url: str | None = None
+    account_city: str | None = None
+    account_summary: str | None = None
     icp_status: str
     icp_score: int | None = None
     tags: list[Any] = Field(default_factory=list)
@@ -83,6 +120,9 @@ class IcpAccountSummary(BaseModel):
     company_size: str | None = None
     location: str | None = None
     company_website: str | None = None
+    company_location: str | None = None
+    company_city: str | None = None
+    account_city: str | None = None
     contact_count: int
     status: str = "active"
 

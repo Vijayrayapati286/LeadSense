@@ -321,6 +321,7 @@ class CampaignRecipient(Base):
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     bounced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ooo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Whoever queued this recipient's current send (via Send or the list
     # scheduler) — NOT the campaign's creator. Drives From/Reply-To at send
@@ -413,7 +414,37 @@ class EmailLog(Base):
     # send — copied from CampaignRecipient.sender_user_id at send time, so it
     # stays accurate even if that row's sender later changes for its next stage.
     sender_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    # MIME Message-ID we set on outbound mail (used to match In-Reply-To / References).
+    message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # AWS SES MessageId from send_raw_email (distinct from MIME Message-ID).
+    ses_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="email_logs")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="email_logs")
     sender_user: Mapped["User | None"] = relationship("User", foreign_keys=[sender_user_id])
+
+
+class InboundEmail(Base):
+    """Idempotent record of an inbound message processed for reply/OOO/bounce classification."""
+
+    __tablename__ = "inbound_emails"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # Unique key for de-dupe: inbound MIME Message-ID, else S3 key, else hash.
+    inbound_message_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    classification: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    from_email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    to_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    in_reply_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    references_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    s3_bucket: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    s3_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    campaign_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=True)
+    recipient_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("recipients.id"), nullable=True)
+    campaign_recipient_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("campaign_recipients.id"), nullable=True
+    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)

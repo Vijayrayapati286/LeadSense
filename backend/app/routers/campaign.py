@@ -11,21 +11,31 @@ from app.schemas.schemas import (
     CampaignListSummaryResponse,
     CampaignRecipientListResponse,
     CampaignRecipientResponse,
+    CampaignRecipientStatsResponse,
     CampaignCreate,
     CampaignResponse,
     CampaignSequenceStageCreate,
     CampaignSequenceStageResponse,
     CampaignSequenceStageUpdate,
     CampaignUpdate,
+    CancelFollowUpRequest,
+    CancelFollowUpResponse,
     ListScheduleRequest,
     ListScheduleResponse,
+    MarkEmailRepliedRequest,
+    MarkRepliedRequest,
+    MarkRepliedResponse,
     MessageResponse,
     RetagListRequest,
+    ScheduleFollowUpRequest,
+    ScheduleFollowUpResponse,
     TemplateCreate,
     TemplateResponse,
     TemplateUpdate,
+    UndoMarkRepliedRequest,
+    UpdateListEmailResponse,
 )
-from app.services.campaign_service import CampaignService
+from app.services.campaign_service import CampaignService, derive_follow_up_state
 from app.services.millionverifier_service import (
     MillionVerifierService,
     resolve_verification_status,
@@ -74,6 +84,43 @@ def list_campaigns(
 ):
     campaigns = campaign_service.get_all(db, skip=skip, limit=limit)
     return [CampaignResponse.model_validate(c) for c in campaigns]
+
+
+@router.get("/campaigns/for-update", response_model=list[CampaignResponse])
+def list_campaigns_for_update(
+    q: str = "",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update list picker: search by campaign name/ID or recipient email/name."""
+    campaigns = campaign_service.search_for_update(db, q=q)
+    return [CampaignResponse.model_validate(c) for c in campaigns]
+
+
+@router.get("/campaigns/update-emails", response_model=UpdateListEmailResponse)
+def list_emails_for_update(
+    q: str = "",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Email-centric Update list: each card shows every campaign that email belongs to."""
+    items = campaign_service.list_emails_for_update(db, q=q)
+    return UpdateListEmailResponse(items=items, total=len(items))
+
+
+@router.post("/campaigns/update-emails/mark-replied", response_model=MarkRepliedResponse)
+def mark_email_replied_across_campaigns(
+    data: MarkEmailRepliedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.mark_email_replied(
+            db, data.email, campaign_ids=data.campaign_ids
+        )
+        return MarkRepliedResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.get("/campaign/{campaign_id}", response_model=CampaignResponse)
@@ -241,6 +288,24 @@ def get_campaign_recipients(
         .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
         .all()
     )
+    recipient_ids = [cr.recipient_id for cr in rows]
+    campaign_meta: dict[int, tuple[int, list[str]]] = {}
+    if recipient_ids:
+        link_rows = (
+            db.query(CampaignRecipient.recipient_id, Campaign.campaign_name)
+            .join(Campaign, Campaign.id == CampaignRecipient.campaign_id)
+            .filter(CampaignRecipient.recipient_id.in_(recipient_ids))
+            .order_by(Campaign.created_at.desc())
+            .all()
+        )
+        names_by_recipient: dict[int, list[str]] = {}
+        for rid, name in link_rows:
+            names_by_recipient.setdefault(rid, []).append(name or "Untitled")
+        campaign_meta = {
+            rid: (len(names), names)
+            for rid, names in names_by_recipient.items()
+        }
+
     items = []
     emails = [cr.recipient.email for cr in rows]
     reasons = [cr.recipient.suppression_reason for cr in rows]
@@ -250,13 +315,106 @@ def get_campaign_recipients(
         response.recipient_name = cr.recipient.name
         response.recipient_email = cr.recipient.email
         response.recipient_company = cr.recipient.company
+        response.recipient_designation = cr.recipient.designation
         response.is_suppressed = cr.recipient.is_suppressed
         response.suppression_reason = cr.recipient.suppression_reason
         response.email_verification_status = v_status
         response.email_verification_result = v_result
+        state, label = derive_follow_up_state(cr)
+        response.follow_up_state = state
+        response.follow_up_label = label
+        count, names = campaign_meta.get(cr.recipient_id, (1, []))
+        response.campaign_count = count
+        response.campaign_names = names
         items.append(response)
 
     return CampaignRecipientListResponse(items=items, total=len(items))
+
+
+@router.get("/campaign/{campaign_id}/recipients/stats", response_model=CampaignRecipientStatsResponse)
+def get_campaign_recipient_stats(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = campaign_service.get_by_id(db, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return CampaignRecipientStatsResponse(**campaign_service.recipient_stats(db, campaign_id))
+
+
+@router.post("/campaign/{campaign_id}/recipients/mark-replied", response_model=MarkRepliedResponse)
+def mark_campaign_recipients_replied(
+    campaign_id: int,
+    data: MarkRepliedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.mark_recipients_replied(db, campaign_id, data.recipient_ids)
+        return MarkRepliedResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/campaign/{campaign_id}/recipients/undo-mark-replied", response_model=MarkRepliedResponse)
+def undo_mark_campaign_recipients_replied(
+    campaign_id: int,
+    data: UndoMarkRepliedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.undo_mark_recipients_replied(
+            db, campaign_id, [item.model_dump() for item in data.items]
+        )
+        return MarkRepliedResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/campaign/{campaign_id}/recipients/schedule-followup", response_model=ScheduleFollowUpResponse)
+def schedule_campaign_followup(
+    campaign_id: int,
+    data: ScheduleFollowUpRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.schedule_followups(
+            db,
+            campaign_id,
+            data.scheduled_at,
+            recipient_ids=data.recipient_ids,
+            all_non_replied=data.all_non_replied,
+            sender_user_id=current_user.id,
+        )
+        return ScheduleFollowUpResponse(**result)
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail)
+
+
+@router.post("/campaign/{campaign_id}/recipients/cancel-followup", response_model=CancelFollowUpResponse)
+def cancel_campaign_followup(
+    campaign_id: int,
+    data: CancelFollowUpRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.cancel_followups(
+            db,
+            campaign_id,
+            recipient_ids=data.recipient_ids,
+            all_scheduled=data.all_scheduled,
+        )
+        return CancelFollowUpResponse(**result)
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail)
 
 
 @router.get("/campaign/{campaign_id}/lists", response_model=list[CampaignListSummaryResponse])
@@ -266,7 +424,6 @@ def list_campaign_lists(
     current_user: User = Depends(get_current_user),
 ):
     return campaign_service.list_campaign_lists(db, campaign_id)
-
 
 @router.get("/campaign/{campaign_id}/lists/{group_id}/recipients", response_model=list[CampaignListMemberResponse])
 def get_campaign_list_members(

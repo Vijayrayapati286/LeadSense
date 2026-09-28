@@ -1,15 +1,14 @@
-"""Shared handlers for delivery events (bounce, complaint, reply).
+"""Shared handlers for delivery events (bounce, complaint, reply, OOO).
 
-These are called today only by the dev-only `/webhooks/simulate-event` endpoint
-(see backend/app/routers/webhooks.py). When real AWS SES/SNS wiring is added
-later, the SNS notification parser should call these same functions so the
-suppression/tracking behavior is identical in both paths.
+Called by `/webhooks/simulate-event`, `/webhooks/ses-events` (bounce/complaint),
+and `/webhooks/ses-inbound` (reply/OOO classification).
 """
 
 import logging
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import CampaignRecipient, Recipient
 from app.services.app_settings_service import AppSettingsService
 from app.services.suppression_service import SuppressionService
@@ -18,6 +17,10 @@ from app.utils.helpers import utc_now
 logger = logging.getLogger(__name__)
 suppression_service = SuppressionService()
 app_settings_service = AppSettingsService()
+
+
+# Statuses that cancel any pending follow-up when applied.
+_CANCEL_FOLLOWUP_STATUSES = frozenset({"replied", "bounced", "suppressed", "invalid_email"})
 
 
 def _mark_campaign_recipients(
@@ -31,9 +34,14 @@ def _mark_campaign_recipients(
     if campaign_id is not None:
         query = query.filter(CampaignRecipient.campaign_id == campaign_id)
 
+    now = utc_now()
     for cr in query.all():
         cr.status = status
-        setattr(cr, timestamp_field, utc_now())
+        setattr(cr, timestamp_field, now)
+        # Cancel pending follow-ups so UI and next_send_at stay consistent.
+        # Scheduler also re-checks status before send; clearing is belt-and-suspenders.
+        if status in _CANCEL_FOLLOWUP_STATUSES:
+            cr.next_send_at = None
     db.commit()
 
 
@@ -119,3 +127,35 @@ def handle_reply(db: Session, email: str, campaign_id: int | None = None) -> Non
     """A reply stops automated follow-ups for this recipient in this campaign,
     but does NOT blacklist the address — it's a good lead, not a bad one."""
     _mark_campaign_recipients(db, email, campaign_id, "replied", "replied_at")
+
+
+def handle_out_of_office(db: Session, email: str, campaign_id: int | None = None) -> None:
+    """Mark recipient out_of_office. Does not suppress.
+
+    Follow-ups stop only when OOO_STOPS_FOLLOWUPS=true; otherwise status is
+    tracked and the scheduler continues unless the product enables that flag.
+    """
+    query = (
+        db.query(CampaignRecipient)
+        .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
+        .filter(Recipient.email == email)
+    )
+    if campaign_id is not None:
+        query = query.filter(CampaignRecipient.campaign_id == campaign_id)
+
+    rows = query.all()
+    if not rows:
+        logger.info("OOO for unknown campaign recipient %s (campaign_id=%s)", email, campaign_id)
+        return
+
+    now = utc_now()
+    stop_followups = get_settings().ooo_stops_followups
+    for cr in rows:
+        # Do not overwrite a human reply with OOO.
+        if cr.status == "replied":
+            continue
+        cr.status = "out_of_office"
+        cr.ooo_at = now
+        if stop_followups:
+            cr.next_send_at = None
+    db.commit()

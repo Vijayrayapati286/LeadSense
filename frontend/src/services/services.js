@@ -54,6 +54,19 @@ export const campaignService = {
   getListMembers: (id, groupId) => api.get(`/campaign/${id}/lists/${groupId}/recipients`),
   retagList: (id, groupId, templateId) => api.put(`/campaign/${id}/lists/${groupId}/template`, { template_id: templateId }),
   scheduleList: (id, groupId, scheduledAt) => api.post(`/campaign/${id}/lists/${groupId}/schedule`, { scheduled_at: scheduledAt }),
+  getRecipients: (id) => api.get(`/campaign/${id}/recipients`),
+  getRecipientStats: (id) => api.get(`/campaign/${id}/recipients/stats`),
+  markReplied: (id, recipientIds) => api.post(`/campaign/${id}/recipients/mark-replied`, { recipient_ids: recipientIds }),
+  undoMarkReplied: (id, items) => api.post(`/campaign/${id}/recipients/undo-mark-replied`, { items }),
+  scheduleFollowUp: (id, data) => api.post(`/campaign/${id}/recipients/schedule-followup`, data),
+  cancelFollowUp: (id, data) => api.post(`/campaign/${id}/recipients/cancel-followup`, data),
+  searchForUpdate: (q = '') => api.get('/campaigns/for-update', { params: { q } }),
+  listEmailsForUpdate: (q = '') => api.get('/campaigns/update-emails', { params: { q } }),
+  markEmailReplied: (email, campaignIds = null) =>
+    api.post('/campaigns/update-emails/mark-replied', {
+      email,
+      campaign_ids: campaignIds,
+    }),
 };
 
 export const sequenceService = {

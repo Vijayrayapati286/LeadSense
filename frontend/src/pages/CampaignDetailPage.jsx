@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import {
@@ -21,6 +21,10 @@ import {
   FiLayers,
   FiCalendar,
   FiRefreshCw,
+  FiCheckCircle,
+  FiEdit3,
+  FiRotateCcw,
+  FiXCircle,
 } from 'react-icons/fi';
 import {
   campaignService,
@@ -39,6 +43,7 @@ import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from
 import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
+import StatBlock from '../components/ui/StatBlock';
 import EmailVerificationBadge from '../components/ui/EmailVerificationBadge';
 import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
@@ -96,12 +101,19 @@ export default function CampaignDetailPage() {
   const toast = useToast();
 
   const preselectedContactIds = location.state?.preselectedContactIds;
+  const allowedTabs = new Set(['overview', 'template', 'sequence', 'manual', 'candidates']);
+  const stateTab = location.state?.activeTab;
+  const initialTab = allowedTabs.has(stateTab)
+    ? stateTab
+    : (preselectedContactIds ? 'candidates' : 'overview');
 
   const [campaign, setCampaign] = useState(null);
   const [templates, setTemplates] = useState([]);
   const primaryTemplate = templates[0] ?? null;
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState(preselectedContactIds ? 'candidates' : 'overview');
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const returnToUpdateList = location.state?.returnToUpdateList || null;
+  const updateListSelectedIds = location.state?.selectedRecipientIds || [];
 
   const {
     search, setSearch, sortBy, setSortBy, sortOrder, setSortOrder,
@@ -122,6 +134,13 @@ export default function CampaignDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const tab = location.state?.activeTab;
+    if (tab && ['overview', 'template', 'sequence', 'manual', 'candidates'].includes(tab)) {
+      setActiveTab(tab);
+    }
+  }, [location.state?.activeTab]);
+
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRecipientId, setPreviewRecipientId] = useState(null);
   const [scheduleAt, setScheduleAt] = useState('');
@@ -137,6 +156,21 @@ export default function CampaignDetailPage() {
   const [stageForm, setStageForm] = useState(EMPTY_STAGE_FORM);
   const [addingStage, setAddingStage] = useState(false);
   const [deletingStageId, setDeletingStageId] = useState(null);
+
+  // Manual Update tab — mark replied / schedule follow-up for campaign recipients
+  const [trackingRows, setTrackingRows] = useState([]);
+  const [trackingLoading, setTrackingLoading] = useState(false);
+  const [trackingSelected, setTrackingSelected] = useState([]);
+  const [trackingSearch, setTrackingSearch] = useState('');
+  const [markingReplied, setMarkingReplied] = useState(false);
+  const [undoMarkItems, setUndoMarkItems] = useState(null);
+  const [undoingMark, setUndoingMark] = useState(false);
+  const [followUpModalOpen, setFollowUpModalOpen] = useState(false);
+  const [followUpAt, setFollowUpAt] = useState('');
+  const [followUpScope, setFollowUpScope] = useState('selected'); // selected | all
+  const [schedulingFollowUp, setSchedulingFollowUp] = useState(false);
+  const [cancellingFollowUp, setCancellingFollowUp] = useState(false);
+  const [trackingStats, setTrackingStats] = useState(null);
 
   const loadCampaign = useCallback(async () => {
     try {
@@ -204,9 +238,180 @@ export default function CampaignDetailPage() {
     }
   }, [id, toast]);
 
+  const loadTracking = useCallback(async () => {
+    setTrackingLoading(true);
+    try {
+      const [recipientsRes, statsRes] = await Promise.all([
+        campaignService.getRecipients(id),
+        campaignService.getRecipientStats(id).catch(() => ({ data: null })),
+      ]);
+      setTrackingRows(recipientsRes.data?.items || []);
+      setTrackingStats(statsRes.data || null);
+    } catch {
+      toast.error('Failed to load campaign recipients');
+    } finally {
+      setTrackingLoading(false);
+    }
+  }, [id, toast]);
+
   useEffect(() => {
     if (activeTab === 'sequence') loadStages();
-  }, [activeTab, loadStages]);
+    if (activeTab === 'manual') {
+      loadTracking();
+      loadStages();
+    }
+  }, [activeTab, loadStages, loadTracking]);
+
+  const toggleTrackingSelect = (recipientId) => {
+    setTrackingSelected((prev) =>
+      prev.includes(recipientId) ? prev.filter((x) => x !== recipientId) : [...prev, recipientId]
+    );
+  };
+
+  const isTrackingEligible = (r) =>
+    r.status !== 'replied' &&
+    r.status !== 'bounced' &&
+    r.status !== 'invalid_email' &&
+    !r.is_suppressed;
+
+  const isFollowUpSchedulable = (r) =>
+    isTrackingEligible(r) &&
+    ['sent', 'delivered', 'opened', 'clicked', 'out_of_office'].includes(r.status);
+
+  // Manual Update list: only successfully contacted recipients (hide invalid_email, etc.)
+  const isManualUpdateVisible = (r) =>
+    ['sent', 'delivered', 'opened', 'clicked', 'replied', 'out_of_office'].includes(r.status);
+
+  const filteredTrackingRows = useMemo(() => {
+    const visible = trackingRows.filter(isManualUpdateVisible);
+    const term = trackingSearch.trim().toLowerCase();
+    if (!term) return visible;
+    return visible.filter((r) => {
+      const name = (r.recipient_name || '').toLowerCase();
+      const email = (r.recipient_email || '').toLowerCase();
+      const company = (r.recipient_company || '').toLowerCase();
+      return name.includes(term) || email.includes(term) || company.includes(term);
+    });
+  }, [trackingRows, trackingSearch]);
+
+  const remainingFollowUpCount = useMemo(
+    () => trackingRows.filter(isFollowUpSchedulable).length,
+    [trackingRows]
+  );
+
+  const selectedScheduledCount = useMemo(
+    () =>
+      trackingRows.filter(
+        (r) => trackingSelected.includes(r.recipient_id) && r.follow_up_state === 'scheduled'
+      ).length,
+    [trackingRows, trackingSelected]
+  );
+
+  const handleMarkReplied = async () => {
+    if (trackingSelected.length === 0) {
+      toast.error('Select at least one recipient to update as replied');
+      return;
+    }
+    setMarkingReplied(true);
+    try {
+      const { data } = await campaignService.markReplied(id, trackingSelected);
+      toast.success(`Updated ${data.updated} as replied`);
+      setUndoMarkItems(data.undo_items?.length ? data.undo_items : null);
+      setTrackingSelected([]);
+      await loadTracking();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to mark as replied');
+    } finally {
+      setMarkingReplied(false);
+    }
+  };
+
+  const handleUndoMarkReplied = async () => {
+    if (!undoMarkItems?.length) return;
+    setUndoingMark(true);
+    try {
+      const { data } = await campaignService.undoMarkReplied(id, undoMarkItems);
+      toast.success(`Undid update for ${data.updated} recipient(s)`);
+      setUndoMarkItems(null);
+      await loadTracking();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to undo');
+    } finally {
+      setUndoingMark(false);
+    }
+  };
+
+  const openFollowUpModal = (scope = 'selected') => {
+    if (stages.length === 0) {
+      toast.error('Add a follow-up stage on the Follow-up Sequence tab first');
+      return;
+    }
+    if (scope === 'selected' && trackingSelected.length === 0) {
+      toast.error('Select recipients for follow-up, or use “Schedule remaining”');
+      return;
+    }
+    if (scope === 'all' && remainingFollowUpCount === 0) {
+      toast.error('No remaining recipients eligible for follow-up');
+      return;
+    }
+    setFollowUpScope(scope);
+    setFollowUpAt(defaultScheduleValue());
+    setFollowUpModalOpen(true);
+  };
+
+  const handleScheduleFollowUp = async () => {
+    if (!followUpAt) {
+      toast.error('Choose a follow-up date and time');
+      return;
+    }
+    setSchedulingFollowUp(true);
+    try {
+      const payload =
+        followUpScope === 'all'
+          ? { scheduled_at: new Date(followUpAt).toISOString(), all_non_replied: true }
+          : {
+              scheduled_at: new Date(followUpAt).toISOString(),
+              recipient_ids: trackingSelected,
+              all_non_replied: false,
+            };
+      const { data } = await campaignService.scheduleFollowUp(id, payload);
+      toast.success(
+        `Scheduled follow-up for ${data.scheduled} recipient(s) on ${new Date(followUpAt).toLocaleString()}` +
+          (data.skipped ? ` (${data.skipped} skipped)` : '')
+      );
+      setFollowUpModalOpen(false);
+      setTrackingSelected([]);
+      loadTracking();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to schedule follow-up');
+    } finally {
+      setSchedulingFollowUp(false);
+    }
+  };
+
+  const handleCancelFollowUp = async () => {
+    if (selectedScheduledCount === 0) {
+      toast.error('Select recipients that have a scheduled follow-up');
+      return;
+    }
+    setCancellingFollowUp(true);
+    try {
+      const { data } = await campaignService.cancelFollowUp(id, {
+        recipient_ids: trackingSelected,
+        all_scheduled: false,
+      });
+      toast.success(
+        `Cancelled follow-up for ${data.cancelled} recipient(s)` +
+          (data.skipped ? ` (${data.skipped} skipped)` : '')
+      );
+      setTrackingSelected([]);
+      await loadTracking();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to cancel follow-up');
+    } finally {
+      setCancellingFollowUp(false);
+    }
+  };
 
   const handleAddStage = async () => {
     if (!stageForm.subject || !stageForm.body) {
@@ -219,7 +424,17 @@ export default function CampaignDetailPage() {
       await sequenceService.create(id, { ...stageForm, stage_order: nextOrder });
       toast.success('Follow-up stage added');
       setStageForm(EMPTY_STAGE_FORM);
-      loadStages();
+      await loadStages();
+      if (returnToUpdateList) {
+        toast.success('Returning to Update list to schedule…');
+        navigate(returnToUpdateList, {
+          state: {
+            openSchedule: true,
+            selectedRecipientIds: updateListSelectedIds,
+          },
+          replace: false,
+        });
+      }
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to add stage');
     } finally {
@@ -953,10 +1168,12 @@ export default function CampaignDetailPage() {
     return null;
   }
 
+  const isManualMode = activeTab === 'manual';
+
   return (
     <PageShell maxWidth="max-w-[1440px]">
       <PageHeader
-        eyebrow="Campaign"
+        eyebrow={isManualMode ? 'Manual update' : 'Campaign'}
         title={
           <span className="inline-flex flex-wrap items-center gap-2">
             {campaign.campaign_name}
@@ -966,43 +1183,67 @@ export default function CampaignDetailPage() {
         subtitle={campaign.campaign_id}
         actions={
         <div className="flex items-center gap-2">
-          <button onClick={() => navigate('/campaigns')} className="btn-secondary flex items-center gap-2">
-            <FiArrowLeft size={16} /> Back
-          </button>
-          <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="btn-secondary flex items-center gap-2">
-            <FiEdit2 size={16} /> Edit Campaign
-          </button>
-          <button type="button" onClick={() => setHistoryOpen(true)} className="btn-secondary flex items-center gap-2">
-            <FiClock size={16} /> History
-          </button>
-          <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
-            <FiSend size={16} /> Send Campaign
-            {activeSelectedIds.length > 0 && (
-              <span className="bg-white/20 rounded-full px-1.5 text-xs">{activeSelectedIds.length}</span>
-            )}
-          </button>
+          {isManualMode ? (
+            <>
+              <button
+                type="button"
+                onClick={() => navigate('/campaigns/update-list')}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <FiArrowLeft size={16} /> Update list
+              </button>
+              <button
+                type="button"
+                onClick={loadTracking}
+                disabled={trackingLoading}
+                className="btn-secondary flex items-center gap-2"
+              >
+                {trackingLoading ? <LoadingSpinner size="sm" /> : <FiRefreshCw size={16} />} Refresh
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => navigate('/campaigns')} className="btn-secondary flex items-center gap-2">
+                <FiArrowLeft size={16} /> Back
+              </button>
+              <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="btn-secondary flex items-center gap-2">
+                <FiEdit2 size={16} /> Edit Campaign
+              </button>
+              <button type="button" onClick={() => setHistoryOpen(true)} className="btn-secondary flex items-center gap-2">
+                <FiClock size={16} /> History
+              </button>
+              <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
+                <FiSend size={16} /> Send Campaign
+                {activeSelectedIds.length > 0 && (
+                  <span className="bg-white/20 rounded-full px-1.5 text-xs">{activeSelectedIds.length}</span>
+                )}
+              </button>
+            </>
+          )}
         </div>
         }
       />
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="flex gap-6">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === tab.id
-                  ? 'border-primary-600 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </div>
+      {/* Tabs — hidden on Manual Update (focused workspace) */}
+      {!isManualMode && (
+        <div className="border-b border-gray-200">
+          <nav className="flex gap-6">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === tab.id
+                    ? 'border-primary-600 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      )}
 
       <div className={`grid grid-cols-1 gap-6 ${activeTab === 'overview' ? 'lg:grid-cols-3' : ''}`}>
         <div className={activeTab === 'overview' ? 'lg:col-span-2 space-y-6' : 'space-y-6'}>
@@ -1120,14 +1361,36 @@ export default function CampaignDetailPage() {
 
           {activeTab === 'sequence' && (
             <div className="card">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <FiClock size={18} /> Follow-up Sequence
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">
-                Stage 0 is the email on the Template tab, sent immediately. Add follow-up stages below —
-                each fires automatically after the configured delay, as long as the prospect hasn't
-                replied, bounced, or been suppressed.
-              </p>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div>
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <FiClock size={18} /> Follow-up Sequence
+                  </h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Stage 0 is the email on the Template tab, sent immediately. Add follow-up stages below —
+                    each fires automatically after the configured delay, as long as the prospect hasn't
+                    replied, bounced, out of office, or been suppressed.
+                  </p>
+                </div>
+              </div>
+
+              {returnToUpdateList && (
+                <div className="mt-4 rounded-xl border border-primary-200 bg-primary-50/60 px-4 py-3 text-sm text-primary-900">
+                  Add a follow-up stage below (subject + body), then you&apos;ll return to Update list to
+                  pick the send date for your selected recipients.
+                  <button
+                    type="button"
+                    className="ml-2 font-medium text-primary-700 underline"
+                    onClick={() =>
+                      navigate(returnToUpdateList, {
+                        state: { selectedRecipientIds: updateListSelectedIds },
+                      })
+                    }
+                  >
+                    Back without adding
+                  </button>
+                </div>
+              )}
 
               {stageLoading ? (
                 <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
@@ -1202,6 +1465,171 @@ export default function CampaignDetailPage() {
                   {addingStage ? <LoadingSpinner size="sm" /> : <FiPlus size={16} />} Add Stage
                 </button>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'manual' && (
+            <div className="card">
+              <div>
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <FiEdit3 size={18} /> Manual Update
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Search, mark replied, or schedule follow-ups. You can undo a mark-replied right after updating.
+                </p>
+              </div>
+
+              {trackingStats && (
+                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <StatBlock label="Contacted" value={trackingStats.sent} />
+                  <StatBlock label="Replied" value={trackingStats.replied} />
+                  <StatBlock label="Follow-up scheduled" value={trackingStats.follow_up_scheduled} />
+                  <StatBlock label="No reply" value={trackingStats.no_reply} />
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <SearchInput
+                  value={trackingSearch}
+                  onChange={setTrackingSearch}
+                  placeholder="Search by name or email..."
+                  className="w-full sm:w-80"
+                />
+                <button
+                  type="button"
+                  onClick={handleMarkReplied}
+                  disabled={markingReplied || trackingSelected.length === 0}
+                  className="btn-primary text-sm flex items-center gap-2"
+                >
+                  {markingReplied ? <LoadingSpinner size="sm" /> : <FiCheckCircle size={14} />}
+                  Update
+                  {trackingSelected.length > 0 && (
+                    <span className="bg-white/20 rounded-full px-1.5 text-xs">{trackingSelected.length}</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openFollowUpModal('selected')}
+                  disabled={trackingSelected.length === 0}
+                  className="btn-secondary text-sm flex items-center gap-2"
+                >
+                  <FiCalendar size={14} /> Schedule
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openFollowUpModal('all')}
+                  disabled={remainingFollowUpCount === 0}
+                  className="btn-secondary text-sm flex items-center gap-2"
+                >
+                  <FiUsers size={14} /> Schedule remaining
+                  {remainingFollowUpCount > 0 && (
+                    <span className="rounded-full bg-primary-50 text-primary-700 px-1.5 text-xs font-semibold">
+                      {remainingFollowUpCount}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelFollowUp}
+                  disabled={cancellingFollowUp || selectedScheduledCount === 0}
+                  className="btn-secondary text-sm flex items-center gap-2"
+                >
+                  {cancellingFollowUp ? <LoadingSpinner size="sm" /> : <FiXCircle size={14} />}
+                  Cancel follow-up
+                  {selectedScheduledCount > 0 && (
+                    <span className="rounded-full bg-slate-100 px-1.5 text-xs font-semibold text-slate-600">
+                      {selectedScheduledCount}
+                    </span>
+                  )}
+                </button>
+                {undoMarkItems?.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleUndoMarkReplied}
+                    disabled={undoingMark}
+                    className="btn-secondary text-sm flex items-center gap-2 border-amber-200 text-amber-800 hover:bg-amber-50"
+                  >
+                    {undoingMark ? <LoadingSpinner size="sm" /> : <FiRotateCcw size={14} />}
+                    Undo update ({undoMarkItems.length})
+                  </button>
+                )}
+              </div>
+
+              {trackingSelected.length > 0 && (
+                <p className="text-sm text-primary-600 font-medium mt-3">
+                  {trackingSelected.length} selected
+                </p>
+              )}
+
+              {trackingLoading ? (
+                <div className="flex justify-center py-8"><LoadingSpinner size="md" /></div>
+              ) : trackingRows.filter(isManualUpdateVisible).length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
+                  No successfully sent recipients yet — only valid sent emails appear here.
+                </div>
+              ) : filteredTrackingRows.length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
+                  No recipients match “{trackingSearch}”.
+                </div>
+              ) : (
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {filteredTrackingRows.map((r) => {
+                    const eligible = isTrackingEligible(r);
+                    const selected = trackingSelected.includes(r.recipient_id);
+                    return (
+                      <label
+                        key={r.id}
+                        className={`relative flex h-full min-h-[180px] cursor-pointer flex-col gap-4 rounded-2xl border border-t-4 p-5 shadow-card transition ${
+                          !eligible
+                            ? 'cursor-not-allowed border-gray-200 border-t-gray-200 bg-gray-50 opacity-70'
+                            : selected
+                              ? 'border-primary-300 border-t-primary-400 bg-primary-50/30 ring-2 ring-primary-100'
+                              : 'border-slate-200 border-t-primary-400 bg-white hover:-translate-y-0.5 hover:shadow-card-hover'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleTrackingSelect(r.recipient_id)}
+                            disabled={!eligible}
+                            className="mt-1 rounded border-gray-300 disabled:opacity-40"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className={`truncate font-semibold ${eligible ? 'text-slate-950' : 'text-gray-400'}`}>
+                                  {r.recipient_name || '—'}
+                                </p>
+                                <p className="truncate text-body-sm text-slate-500">{r.recipient_email}</p>
+                                {(r.recipient_company || r.recipient_designation) && (
+                                  <p className="mt-1 truncate text-caption text-slate-400">
+                                    {[r.recipient_designation, r.recipient_company].filter(Boolean).join(' · ')}
+                                  </p>
+                                )}
+                              </div>
+                              <StatusBadge status={r.status} />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-auto grid grid-cols-2 gap-3">
+                          <div className="rounded-xl bg-slate-50 py-3 text-center">
+                            <div className="text-sm font-bold text-slate-950">{r.follow_up_label || 'No follow-up'}</div>
+                            <div className="mt-0.5 text-micro font-semibold uppercase tracking-wider text-slate-400">Follow-up</div>
+                          </div>
+                          <div className="rounded-xl bg-slate-50 py-3 text-center">
+                            <div className="text-sm font-bold text-slate-950">
+                              {r.last_sent_at ? formatDateTime(r.last_sent_at) : '—'}
+                            </div>
+                            <div className="mt-0.5 text-micro font-semibold uppercase tracking-wider text-slate-400">Last sent</div>
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -2127,6 +2555,54 @@ export default function CampaignDetailPage() {
         message={`Delete "${deletingList?.name}"? Prospects stay in the system — this only removes the list.`}
         confirmText="Delete"
       />
+
+      <Modal
+        isOpen={followUpModalOpen}
+        onClose={() => setFollowUpModalOpen(false)}
+        title="Schedule Follow-up"
+        size="md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            {followUpScope === 'all'
+              ? `Schedule follow-up for all ${remainingFollowUpCount} remaining recipient(s) who have not replied.`
+              : `${trackingSelected.length} selected recipient(s) will be scheduled.`}
+            {' '}Uses the next follow-up stage template. Before send, the scheduler re-checks status and skips anyone who replied or bounced.
+          </p>
+          {stages.length > 0 && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+              Next stage content: <span className="font-medium">{stages[0]?.subject}</span>
+              {stages.length > 1 && (
+                <span className="text-gray-500"> (+{stages.length - 1} more stage{stages.length > 2 ? 's' : ''})</span>
+              )}
+            </div>
+          )}
+          <div>
+            <label className="label">Follow-up date &amp; time</label>
+            <input
+              type="datetime-local"
+              className="input-field"
+              min={defaultScheduleValue()}
+              value={followUpAt}
+              onChange={(e) => setFollowUpAt(e.target.value)}
+            />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={() => setFollowUpModalOpen(false)} className="btn-secondary" disabled={schedulingFollowUp}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleScheduleFollowUp}
+              disabled={schedulingFollowUp || !followUpAt}
+              className="btn-primary flex items-center gap-2"
+            >
+              {schedulingFollowUp ? <LoadingSpinner size="sm" /> : <FiCalendar size={16} />}
+              Schedule {followUpScope === 'all' ? 'remaining' : 'selected'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <SlideOver
         isOpen={historyOpen}

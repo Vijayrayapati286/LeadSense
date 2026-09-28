@@ -39,13 +39,88 @@ COMPANY_SIZE_ALIASES = {
     "companysize",
     "company_size",
     "employees",
+    "employeecount",
+    "employee_count",
     "headcount",
     "size",
     "revenue_range",
+    "revenuerange",
 }
 WEBSITE_ALIASES = {"website", "companywebsite", "company_website", "companyurl", "web"}
 TAGS_ALIASES = {"tags", "tag", "labels"}
-EMAIL_ALIASES = {"email", "emailaddress", "email_address", "workemail", "work_email", "contactemail", "contact_email", "e_mail"}
+EMAIL_ALIASES = {
+    "email",
+    "emailaddress",
+    "email_address",
+    "workemail",
+    "work_email",
+    "contactemail",
+    "contact_email",
+    "e_mail",
+}
+FIRST_NAME_ALIASES = {"firstname", "first", "givenname"}
+LAST_NAME_ALIASES = {"lastname", "last", "surname", "familyname"}
+DEPARTMENT_ALIASES = {"department", "dept", "division"}
+PHONE_ALIASES = {"phone", "phoneno", "phonenumber", "mobile", "cellphone", "tel"}
+CITY_ALIASES = {"city"}
+STATE_ALIASES = {"state", "province", "contactstate"}
+COUNTRY_ALIASES = {"country", "contactcountry"}
+COUNTRY_CODE_ALIASES = {"countrycode", "countryiso", "iso"}
+COMPANY_LINKEDIN_ALIASES = {
+    "companylinkedin",
+    "companylinkedinurl",
+    "accountlinkedin",
+    "accountlinkedinurl",
+}
+COMPANY_CITY_ALIASES = {"companycity", "accountcity"}
+COMPANY_LOCATION_ALIASES = {
+    "companylocation",
+    "companyaddress",
+    "accountlocation",
+    "address",
+}
+ANNUAL_REVENUE_ALIASES = {"annualrevenue", "revenue", "companyrevenue"}
+COMPANY_SUMMARY_ALIASES = {"companysummary", "accountsummary", "companyabout"}
+CONTACT_SUMMARY_ALIASES = {"contactsummary", "summary", "bio"}
+
+COUNTRY_CODES = {
+    "united states": "US",
+    "united states of america": "US",
+    "usa": "US",
+    "us": "US",
+    "united kingdom": "GB",
+    "uk": "GB",
+    "england": "GB",
+    "india": "IN",
+    "canada": "CA",
+    "australia": "AU",
+    "germany": "DE",
+    "france": "FR",
+    "singapore": "SG",
+    "united arab emirates": "AE",
+    "uae": "AE",
+    "netherlands": "NL",
+    "ireland": "IE",
+}
+
+EXPORT_MAPPING_FIELDS = (
+    "department",
+    "phone",
+    "city",
+    "state",
+    "country",
+    "country_code",
+    "contact_state",
+    "contact_country",
+    "company_linkedin_url",
+    "company_location",
+    "company_city",
+    "annual_revenue",
+    "company_summary",
+    "account_linkedin_url",
+    "account_city",
+    "account_summary",
+)
 
 
 def resolve_org_id(
@@ -101,6 +176,149 @@ def _clean(value: Any) -> str | None:
     if not text or text.lower() in {"none", "nan", "null", "n/a", "-"}:
         return None
     return text
+
+
+def _split_name(full_name: str | None) -> tuple[str | None, str | None]:
+    parts = [p for p in str(full_name or "").strip().split() if p]
+    if not parts:
+        return None, None
+    if len(parts) == 1:
+        return parts[0], None
+    return parts[0], " ".join(parts[1:])
+
+
+def _parse_location(location: str | None) -> dict[str, str | None]:
+    parts = [p.strip() for p in str(location or "").split(",") if p and p.strip()]
+    if not parts:
+        return {"city": None, "state": None, "country": None, "country_code": None}
+    if len(parts) == 1:
+        only = parts[0]
+        code = COUNTRY_CODES.get(only.lower())
+        if code:
+            return {"city": None, "state": None, "country": only, "country_code": code}
+        return {"city": only, "state": None, "country": None, "country_code": None}
+    if len(parts) == 2:
+        country = parts[1]
+        return {
+            "city": parts[0],
+            "state": None,
+            "country": country,
+            "country_code": COUNTRY_CODES.get(country.lower()),
+        }
+    country = parts[-1]
+    state = parts[-2]
+    city = ", ".join(parts[:-2])
+    return {
+        "city": city,
+        "state": state,
+        "country": country,
+        "country_code": COUNTRY_CODES.get(country.lower()),
+    }
+
+
+def _compose_name(first_name: str | None, last_name: str | None, fallback: str | None = None) -> str | None:
+    joined = " ".join(p for p in (_clean(first_name), _clean(last_name)) if p)
+    return joined or _clean(fallback)
+
+
+def _enrich_export_mapping_fields(
+    payload: dict[str, Any],
+    source_row: dict[str, Any] | None = None,
+    *,
+    bulk_item: BulkJobItemRow | None = None,
+) -> dict[str, Any]:
+    """Fill CRM export columns from sheet / LinkedIn payload without inventing values."""
+    source_row = source_row if isinstance(source_row, dict) else {}
+    originals = original_fields(source_row) if source_row else {}
+
+    # Sheet may send First/Last without a full name — compose name only (not stored separately).
+    sheet_first = _prefer(
+        payload.get("first_name"),
+        _pick_from_row(source_row, FIRST_NAME_ALIASES),
+    )
+    sheet_last = _prefer(
+        payload.get("last_name"),
+        _pick_from_row(source_row, LAST_NAME_ALIASES),
+    )
+    name = _prefer(payload.get("name"), _compose_name(sheet_first, sheet_last))
+
+    city = _prefer(payload.get("city"), _pick_from_row(source_row, CITY_ALIASES))
+    state = _prefer(payload.get("state"), _pick_from_row(source_row, STATE_ALIASES))
+    country = _prefer(payload.get("country"), _pick_from_row(source_row, COUNTRY_ALIASES))
+    country_code = _prefer(
+        payload.get("country_code"),
+        _pick_from_row(source_row, COUNTRY_CODE_ALIASES),
+    )
+
+    location = _prefer(payload.get("location"))
+    parsed = _parse_location(location)
+    city = city or parsed["city"]
+    state = state or parsed["state"]
+    country = country or parsed["country"]
+    country_code = country_code or parsed["country_code"]
+    if country and not country_code:
+        country_code = COUNTRY_CODES.get(country.lower())
+
+    # If sheet had city/state/country but no composed location, rebuild it.
+    if not location and any((city, state, country)):
+        location = ", ".join(p for p in (city, state, country) if p)
+
+    about = _prefer(payload.get("about"), _pick_from_row(source_row, CONTACT_SUMMARY_ALIASES))
+    department = _prefer(payload.get("department"), _pick_from_row(source_row, DEPARTMENT_ALIASES))
+    phone = _prefer(payload.get("phone"), _pick_from_row(source_row, PHONE_ALIASES))
+
+    company_location = _prefer(
+        payload.get("company_location"),
+        getattr(bulk_item, "resolved_company_location", None) if bulk_item else None,
+        originals.get("company_location"),
+        _pick_from_row(source_row, COMPANY_LOCATION_ALIASES),
+    )
+    company_city = _prefer(
+        payload.get("company_city"),
+        _pick_from_row(source_row, COMPANY_CITY_ALIASES),
+        _parse_location(company_location)["city"],
+        company_location,
+    )
+    company_linkedin_url = _prefer(
+        payload.get("company_linkedin_url"),
+        _pick_from_row(source_row, COMPANY_LINKEDIN_ALIASES),
+    )
+    annual_revenue = _prefer(
+        payload.get("annual_revenue"),
+        _pick_from_row(source_row, ANNUAL_REVENUE_ALIASES),
+    )
+    company_summary = _prefer(
+        payload.get("company_summary"),
+        _pick_from_row(source_row, COMPANY_SUMMARY_ALIASES),
+    )
+
+    payload.update(
+        {
+            "name": name,
+            "department": department,
+            "phone": phone,
+            "about": about,
+            "location": location,
+            "city": city,
+            "state": state,
+            "country": country,
+            "country_code": country_code,
+            "contact_state": state,
+            "contact_country": country,
+            "company_location": company_location,
+            "company_city": company_city,
+            "company_linkedin_url": company_linkedin_url,
+            "annual_revenue": annual_revenue,
+            "company_summary": company_summary,
+            "account_city": company_city,
+            "account_linkedin_url": company_linkedin_url,
+            "account_summary": company_summary,
+        }
+    )
+    # Do not persist transient sheet-only keys.
+    payload.pop("first_name", None)
+    payload.pop("last_name", None)
+    return payload
 
 
 def _normalize_linkedin(url: str | None) -> str | None:
@@ -194,9 +412,7 @@ def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] |
         tags = [t.strip() for t in tags_raw.replace(";", ",").split(",") if t.strip()]
 
     now = datetime.now(timezone.utc)
-    icp_status = resolve_icp_status(name=name)
-    complete = icp_status != ICP_STATUS_INCOMPLETE
-    return {
+    payload = {
         "name": name,
         "email": email,
         "company_name": company,
@@ -207,16 +423,21 @@ def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] |
         "company_size": _clean(company_size),
         "location": location,
         "company_website": _clean(company_website),
-        "icp_status": icp_status,
         "icp_score": None,
         "tags": tags,
-        "verification_status": VERIFY_VERIFIED if complete else VERIFY_NOT_VERIFIED,
-        "verified_at": now if complete else None,
         "source": SOURCE_LINKEDIN_BULK,
         "source_record_id": item.id,
         "source_job_id": item.job_id,
-        "dedupe_key": _dedupe_key(name, company),
     }
+    payload = _enrich_export_mapping_fields(payload, source_row, bulk_item=item)
+    name = payload.get("name")
+    icp_status = resolve_icp_status(name=name)
+    complete = icp_status != ICP_STATUS_INCOMPLETE
+    payload["icp_status"] = icp_status
+    payload["verification_status"] = VERIFY_VERIFIED if complete else VERIFY_NOT_VERIFIED
+    payload["verified_at"] = now if complete else None
+    payload["dedupe_key"] = _dedupe_key(name, company)
+    return payload
 
 
 def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
@@ -262,7 +483,7 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
         # Extracted name is enough for a usable contact; keep bulk verify state separate.
         verified_at = None
 
-    return {
+    payload = {
         "name": name,
         "email": _clean(email),
         "company_name": company,
@@ -282,8 +503,10 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
         "source": SOURCE_LINKEDIN_BULK,
         "source_record_id": item.id,
         "source_job_id": item.job_id,
-        "dedupe_key": _dedupe_key(name, company),
     }
+    payload = _enrich_export_mapping_fields(payload, source_row, bulk_item=item)
+    payload["dedupe_key"] = _dedupe_key(payload.get("name"), company)
+    return payload
 
 
 def item_eligible_for_icp(item: BulkJobItemRow) -> bool:
@@ -548,13 +771,29 @@ def serialize_icp(row: IcpRecordRow) -> dict[str, Any]:
         "email": row.email,
         "company_name": row.company_name,
         "designation": row.designation,
+        "department": getattr(row, "department", None),
         "about": row.about,
         "linkedin_url": row.linkedin_url,
+        "phone": getattr(row, "phone", None),
         "image": getattr(row, "image", None),
         "industry": row.industry,
         "company_size": row.company_size,
         "location": row.location,
+        "city": getattr(row, "city", None),
+        "state": getattr(row, "state", None),
+        "country": getattr(row, "country", None),
+        "country_code": getattr(row, "country_code", None),
+        "contact_state": getattr(row, "contact_state", None),
+        "contact_country": getattr(row, "contact_country", None),
         "company_website": row.company_website,
+        "company_linkedin_url": getattr(row, "company_linkedin_url", None),
+        "company_location": getattr(row, "company_location", None),
+        "company_city": getattr(row, "company_city", None),
+        "annual_revenue": getattr(row, "annual_revenue", None),
+        "company_summary": getattr(row, "company_summary", None),
+        "account_linkedin_url": getattr(row, "account_linkedin_url", None),
+        "account_city": getattr(row, "account_city", None),
+        "account_summary": getattr(row, "account_summary", None),
         "icp_status": status,
         "icp_score": row.icp_score,
         "tags": row.tags or [],
@@ -600,6 +839,86 @@ def purge_empty_icp_records(
             user_id,
         )
     return deleted
+
+
+def backfill_icp_export_mapping_fields(
+    db: Session,
+    *,
+    user_id: int | None = None,
+    org_id: str | None = None,
+    limit: int | None = None,
+) -> int:
+    """Fill null CRM export columns from name/location and linked bulk source rows."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+    q = db.query(IcpRecordRow)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
+    q = q.order_by(IcpRecordRow.id.asc())
+    if limit is not None:
+        q = q.limit(max(int(limit), 1))
+
+    updated = 0
+    bulk_cache: dict[int, BulkJobItemRow | None] = {}
+    for row in q.all():
+        bulk_item = None
+        source_row = None
+        if row.source_record_id is not None:
+            if row.source_record_id not in bulk_cache:
+                bulk_cache[row.source_record_id] = (
+                    db.query(BulkJobItemRow)
+                    .filter(BulkJobItemRow.id == row.source_record_id)
+                    .first()
+                )
+            bulk_item = bulk_cache[row.source_record_id]
+            if bulk_item and isinstance(bulk_item.source_row_json, dict):
+                source_row = bulk_item.source_row_json
+
+        before = {key: getattr(row, key, None) for key in EXPORT_MAPPING_FIELDS}
+        enriched = _enrich_export_mapping_fields(
+            {
+                "name": row.name,
+                "location": row.location,
+                "city": row.city,
+                "state": row.state,
+                "country": row.country,
+                "country_code": row.country_code,
+                "about": row.about,
+                "department": row.department,
+                "phone": row.phone,
+                "company_location": row.company_location,
+                "company_city": row.company_city,
+                "company_linkedin_url": row.company_linkedin_url,
+                "annual_revenue": row.annual_revenue,
+                "company_summary": row.company_summary,
+            },
+            source_row,
+            bulk_item=bulk_item,
+        )
+
+        changed = False
+        for key in EXPORT_MAPPING_FIELDS:
+            new_val = enriched.get(key)
+            if _is_blank(before.get(key)) and not _is_blank(new_val):
+                setattr(row, key, new_val)
+                changed = True
+        if enriched.get("name") and _is_blank(row.name):
+            row.name = enriched["name"]
+            changed = True
+        if enriched.get("location") and _is_blank(row.location):
+            row.location = enriched["location"]
+            changed = True
+        if changed:
+            row.updated_at = datetime.now(timezone.utc)
+            updated += 1
+
+    if updated:
+        db.flush()
+        logger.info(
+            "ICP export-mapping backfill updated %s row(s) org_id=%s user_id=%s",
+            updated,
+            org_id,
+            user_id,
+        )
+    return updated
 
 
 def backfill_icp_from_extracted_items(
@@ -785,41 +1104,54 @@ def create_icp_record(
     data: dict[str, Any],
     org_id: str | None = None,
 ) -> IcpRecordRow:
-    name = _clean(data.get("name"))
     company = _clean(data.get("company_name") or data.get("company"))
     linkedin_url = _normalize_linkedin(data.get("linkedin_url"))
-    icp_status = resolve_icp_status(name=name, preferred=data.get("icp_status"))
     org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
-    payload = {
-        "name": name,
-        "email": _clean(data.get("email")),
-        "company_name": company,
-        "designation": _clean(data.get("designation")),
-        "about": _clean(data.get("about")),
-        "linkedin_url": linkedin_url,
-        "image": _clean(data.get("image")),
-        "industry": _clean(data.get("industry")),
-        "company_size": _clean(data.get("company_size")),
-        "location": _clean(data.get("location")),
-        "company_website": _clean(data.get("company_website")),
-        "icp_status": icp_status,
-        "icp_score": data.get("icp_score"),
-        "tags": data.get("tags") if isinstance(data.get("tags"), list) else None,
-        "verification_status": (
-            (_clean(data.get("verification_status")) or VERIFY_VERIFIED).upper()
-            if icp_status != ICP_STATUS_INCOMPLETE
-            else VERIFY_NOT_VERIFIED
-        ),
-        "verified_at": (
-            None
-            if icp_status == ICP_STATUS_INCOMPLETE
-            else (data.get("verified_at") or datetime.now(timezone.utc))
-        ),
-        "source": SOURCE_MANUAL,
-        "source_record_id": None,
-        "source_job_id": None,
-        "dedupe_key": _dedupe_key(name, company),
-    }
+    payload = _enrich_export_mapping_fields(
+        {
+            "name": _clean(data.get("name")),
+            "email": _clean(data.get("email")),
+            "company_name": company,
+            "designation": _clean(data.get("designation")),
+            "department": _clean(data.get("department")),
+            "about": _clean(data.get("about")),
+            "linkedin_url": linkedin_url,
+            "phone": _clean(data.get("phone")),
+            "image": _clean(data.get("image")),
+            "industry": _clean(data.get("industry")),
+            "company_size": _clean(data.get("company_size")),
+            "location": _clean(data.get("location")),
+            "city": _clean(data.get("city")),
+            "state": _clean(data.get("state")),
+            "country": _clean(data.get("country")),
+            "country_code": _clean(data.get("country_code")),
+            "company_website": _clean(data.get("company_website")),
+            "company_linkedin_url": _clean(data.get("company_linkedin_url")),
+            "company_location": _clean(data.get("company_location")),
+            "company_city": _clean(data.get("company_city")),
+            "annual_revenue": _clean(data.get("annual_revenue")),
+            "company_summary": _clean(data.get("company_summary")),
+            "icp_score": data.get("icp_score"),
+            "tags": data.get("tags") if isinstance(data.get("tags"), list) else None,
+            "source": SOURCE_MANUAL,
+            "source_record_id": None,
+            "source_job_id": None,
+        }
+    )
+    name = payload.get("name")
+    icp_status = resolve_icp_status(name=name, preferred=data.get("icp_status"))
+    payload["icp_status"] = icp_status
+    payload["verification_status"] = (
+        (_clean(data.get("verification_status")) or VERIFY_VERIFIED).upper()
+        if icp_status != ICP_STATUS_INCOMPLETE
+        else VERIFY_NOT_VERIFIED
+    )
+    payload["verified_at"] = (
+        None
+        if icp_status == ICP_STATUS_INCOMPLETE
+        else (data.get("verified_at") or datetime.now(timezone.utc))
+    )
+    payload["dedupe_key"] = _dedupe_key(name, company)
 
     existing = _find_existing(
         db,
@@ -851,12 +1183,23 @@ def update_icp_record(
         "email",
         "company_name",
         "designation",
+        "department",
         "about",
+        "phone",
         "image",
         "industry",
         "company_size",
         "location",
+        "city",
+        "state",
+        "country",
+        "country_code",
         "company_website",
+        "company_linkedin_url",
+        "company_location",
+        "company_city",
+        "annual_revenue",
+        "company_summary",
         "icp_status",
         "icp_score",
     )
@@ -869,6 +1212,32 @@ def update_icp_record(
         row.tags = data["tags"]
     if "company" in data and "company_name" not in data:
         row.company_name = _clean(data["company"])
+
+    enriched = _enrich_export_mapping_fields(
+        {
+            "name": row.name,
+            "location": row.location,
+            "city": row.city,
+            "state": row.state,
+            "country": row.country,
+            "country_code": row.country_code,
+            "about": row.about,
+            "department": row.department,
+            "phone": row.phone,
+            "company_location": row.company_location,
+            "company_city": row.company_city,
+            "company_linkedin_url": row.company_linkedin_url,
+            "annual_revenue": row.annual_revenue,
+            "company_summary": row.company_summary,
+        }
+    )
+    for key in EXPORT_MAPPING_FIELDS:
+        setattr(row, key, enriched.get(key))
+    if enriched.get("name"):
+        row.name = enriched["name"]
+    if enriched.get("location"):
+        row.location = enriched["location"]
+
     row.dedupe_key = _dedupe_key(row.name, row.company_name)
     row.icp_status = resolve_icp_status(name=row.name, preferred=row.icp_status)
     if row.icp_status == ICP_STATUS_INCOMPLETE:
@@ -1049,6 +1418,9 @@ def list_accounts_summary(
             func.max(IcpRecordRow.company_size).label("company_size"),
             func.max(IcpRecordRow.location).label("location"),
             func.max(IcpRecordRow.company_website).label("company_website"),
+            func.max(IcpRecordRow.company_location).label("company_location"),
+            func.max(IcpRecordRow.company_city).label("company_city"),
+            func.max(IcpRecordRow.account_city).label("account_city"),
         )
         .group_by(IcpRecordRow.company_name)
         .order_by(IcpRecordRow.company_name.asc())
@@ -1068,6 +1440,9 @@ def list_accounts_summary(
             "company_size": row.company_size,
             "location": row.location,
             "company_website": row.company_website,
+            "company_location": row.company_location,
+            "company_city": row.company_city or row.account_city,
+            "account_city": row.account_city or row.company_city,
             "contact_count": int(row.contact_count or 0),
             "status": "active",
         }

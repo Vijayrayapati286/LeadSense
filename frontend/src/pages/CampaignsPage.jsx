@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FiActivity, FiClock, FiLayers, FiPauseCircle, FiPlus } from 'react-icons/fi';
+import { FiActivity, FiClock, FiEdit3, FiLayers, FiPauseCircle, FiPlus } from 'react-icons/fi';
 import { campaignService } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -67,6 +67,8 @@ export default function CampaignsPage() {
       all: campaigns.length,
       active: campaigns.filter((c) => c.status?.toLowerCase() === 'active').length,
       inactive: campaigns.filter((c) => c.status?.toLowerCase() !== 'active').length,
+      // Campaigns with at least one send — same set you open from Update list
+      updateList: campaigns.filter((c) => Number(c.emails_sent) > 0).length,
     }),
     [campaigns]
   );
@@ -112,10 +114,18 @@ export default function CampaignsPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="Total campaigns" value={counts.all} hint="In your workspace" icon={FiLayers} />
         <MetricCard label="Active" value={counts.active} hint="Currently running" tone="green" icon={FiActivity} />
         <MetricCard label="Inactive" value={counts.inactive} hint="Paused or completed" tone="amber" icon={FiPauseCircle} />
+        <MetricCard
+          label="Update list"
+          value={counts.updateList}
+          hint="Campaigns ready to update"
+          tone="blue"
+          icon={FiEdit3}
+          to="/campaigns/update-list"
+        />
       </div>
 
       <SurfaceCard variant="filter">
