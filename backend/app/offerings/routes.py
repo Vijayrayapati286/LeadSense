@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
-from app.middleware.auth import get_current_user, get_optional_user
-from app.middleware.pat_auth import get_raw_bearer, try_pat_principal
-from app.middleware.pat_auth import security as bearer_security
+from app.middleware.auth import get_current_user
+from app.middleware.pat_auth import OfferingAuth, get_offering_auth
 from app.models import User
 from app.offerings.ai_service import offering_ai_service
 from app.offerings.campaign_recipients import prepare_campaign_recipients
@@ -71,14 +69,6 @@ def _unauthorized() -> HTTPException:
     )
 
 
-def _pat_org_or_none(
-    credentials: HTTPAuthorizationCredentials | None,
-    db: Session,
-) -> str | None:
-    principal = try_pat_principal(db, get_raw_bearer(credentials))
-    return principal.organization_id if principal else None
-
-
 def _require_pat_org_match(pat_org_id: str, body_org_id: str | None) -> None:
     requested = (body_org_id or "").strip()
     if requested and requested != pat_org_id:
@@ -92,20 +82,19 @@ def list_offerings_route(
     limit: int = Query(25, ge=1, le=100),
     page_size: int | None = Query(None, ge=1, le=100),
     organization_id: str | None = Query(None),
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_optional_user),
+    auth: OfferingAuth = Depends(get_offering_auth),
 ):
-    pat_org = _pat_org_or_none(credentials, db)
-    if pat_org:
+    if auth.pat:
+        pat_org = auth.pat.organization_id
         _require_pat_org_match(pat_org, organization_id)
         return {"items": list_sync_offerings(db, pat_org)}
-    if not current_user:
+    if not auth.user:
         raise _unauthorized()
     size = page_size or limit
     return list_offerings(
         db,
-        user_id=getattr(current_user, "id", None),
+        user_id=getattr(auth.user, "id", None),
         search=search or None,
         page=page,
         page_size=size,
@@ -115,12 +104,11 @@ def list_offerings_route(
 @router.post("")
 def create_offering_route(
     body: OfferingCreate,
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_optional_user),
+    auth: OfferingAuth = Depends(get_offering_auth),
 ):
-    pat_org = _pat_org_or_none(credentials, db)
-    if pat_org:
+    if auth.pat:
+        pat_org = auth.pat.organization_id
         _require_pat_org_match(pat_org, body.organization_id)
         if not (body.smartops_offering_id or "").strip():
             raise HTTPException(
@@ -143,13 +131,13 @@ def create_offering_route(
         db.refresh(row)
         return _sync_response(row, created)
 
-    if not current_user:
+    if not auth.user:
         raise _unauthorized()
     try:
         row = create_offering(
             db,
-            user_id=getattr(current_user, "id", None),
-            organization_id=getattr(current_user, "org_id", None),
+            user_id=getattr(auth.user, "id", None),
+            organization_id=getattr(auth.user, "org_id", None),
             data=body.model_dump(exclude_unset=True),
         )
     except ValueError as exc:
@@ -329,12 +317,11 @@ def get_offering_route(
 def update_offering_route(
     offering_id: str,
     body: OfferingUpdate,
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_optional_user),
+    auth: OfferingAuth = Depends(get_offering_auth),
 ):
-    pat_org = _pat_org_or_none(credentials, db)
-    if pat_org:
+    if auth.pat:
+        pat_org = auth.pat.organization_id
         _require_pat_org_match(pat_org, body.organization_id)
         row = get_by_public_id(db, pat_org, offering_id)
         if not row:
@@ -356,9 +343,9 @@ def update_offering_route(
         db.refresh(row)
         return serialize_sync_offering(row)
 
-    if not current_user:
+    if not auth.user:
         raise _unauthorized()
-    row = get_offering(db, offering_id, user_id=getattr(current_user, "id", None))
+    row = get_offering(db, offering_id, user_id=getattr(auth.user, "id", None))
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offering not found")
     try:

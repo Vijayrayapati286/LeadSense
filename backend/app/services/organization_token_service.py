@@ -7,6 +7,7 @@ import json
 import secrets
 from datetime import datetime, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import Organization, OrganizationToken
@@ -183,7 +184,7 @@ def resolve_active_pat(db: Session, raw_token: str) -> tuple[OrganizationToken, 
         db.query(OrganizationToken)
         .filter(
             OrganizationToken.token_hash == digest,
-            OrganizationToken.status == TOKEN_STATUS_ACTIVE,
+            func.lower(OrganizationToken.status) == TOKEN_STATUS_ACTIVE.lower(),
         )
         .first()
     )

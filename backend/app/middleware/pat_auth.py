@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -14,7 +15,8 @@ from app.schemas.schemas import IntegrationWhoamiResponse
 from app.services import organization_token_service as pat_service
 from app.services.auth_service import AuthService
 
-security = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
+
 _auth_service = AuthService()
 
 _AUTH_HEADERS = {"WWW-Authenticate": "Bearer"}
@@ -37,6 +39,48 @@ def get_raw_bearer(credentials: HTTPAuthorizationCredentials | None) -> str | No
         return None
     raw = credentials.credentials.strip()
     return raw or None
+
+
+def bearer_from_request(request: Request) -> str | None:
+    """Read Bearer from the raw header so PAT is not forced through JWT auth."""
+    header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    scheme, _, remainder = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    token = remainder.strip()
+    return token or None
+
+
+@dataclass
+class OfferingAuth:
+    """PAT (SmartOps) or JWT (LeadSense UI) for offering list/create/update."""
+
+    pat: PatPrincipal | None = None
+    user: User | None = None
+
+
+def get_offering_auth(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> OfferingAuth:
+    """PAT first, then user JWT. Never decode a PAT as a login token."""
+    raw = bearer_from_request(request)
+    if not raw:
+        raise _unauthorized("Not authenticated")
+
+    principal = try_pat_principal(db, raw)
+    if principal:
+        logger.info("offerings_auth method=pat org=%s", principal.organization_id)
+        return OfferingAuth(pat=principal, user=None)
+
+    user = _auth_service.get_current_user(db, raw)
+    if user:
+        logger.info("offerings_auth method=jwt user=%s", getattr(user, "id", None))
+        return OfferingAuth(pat=None, user=user)
+
+    if raw.startswith("pat_"):
+        raise _unauthorized("Invalid or revoked PAT")
+    raise _unauthorized("Invalid or expired token")
 
 
 def try_pat_principal(db: Session, raw_token: str | None) -> PatPrincipal | None:
@@ -90,6 +134,8 @@ def require_org_scope(
 
     user = _auth_service.get_current_user(db, raw)
     if not user:
+        if str(raw).startswith("pat_"):
+            raise _unauthorized("Invalid or revoked PAT")
         raise _unauthorized("Invalid or expired token")
     org_id = getattr(user, "org_id", None)
     if not org_id:
@@ -103,13 +149,15 @@ def require_org_scope(
 
 
 async def get_pat_principal(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> PatPrincipal:
-    raw = get_raw_bearer(credentials)
+    raw = bearer_from_request(request)
     if not raw:
         raise _unauthorized("Not authenticated")
     principal = try_pat_principal(db, raw)
     if not principal:
+        if raw.startswith("pat_"):
+            raise _unauthorized("Invalid or revoked PAT")
         raise _unauthorized("Invalid or revoked token")
     return principal

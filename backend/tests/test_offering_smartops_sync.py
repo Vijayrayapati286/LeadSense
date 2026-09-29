@@ -164,3 +164,23 @@ def test_smartops_rejects_other_org(client):
         json=_payload(org_id, organization_id="org_does_not_match"),
     )
     assert resp.status_code == 404
+
+
+def test_pat_is_not_treated_as_jwt(client):
+    """SmartOps PAT must create an offering — never 401 Invalid or expired token."""
+    test_client, org_id, pat = client
+    resp = test_client.post("/api/offerings", headers=_auth(pat), json=_payload(org_id))
+    assert resp.status_code == 201, resp.text
+    assert resp.json().get("detail") != "Invalid or expired token"
+    assert resp.json()["organization_id"] == org_id
+
+
+def test_invalid_pat_is_not_reported_as_jwt(client):
+    test_client, org_id, _pat = client
+    resp = test_client.post(
+        "/api/offerings",
+        headers=_auth("pat_this_token_does_not_exist_xxxxxx"),
+        json=_payload(org_id),
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid or revoked PAT"
