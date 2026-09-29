@@ -13,6 +13,7 @@ from app.models import (
     EmailLog,
     Recipient,
     RecipientGroup,
+    RecipientGroupMember,
     Template,
 )
 from app.schemas.schemas import (
@@ -26,6 +27,10 @@ from app.utils.helpers import sanitize_html, sanitize_manual_body, utc_now
 
 
 app_settings_service = AppSettingsService()
+
+# Prospects recorded from mail sent outside LeadSense have no upload list.
+# They are tagged here so the campaign Prospects tab can show them.
+OUTSIDE_MAIL_LIST_NAME = "Outside mail"
 
 # Statuses that must never receive another automated follow-up.
 _TERMINAL_STATUSES = frozenset({"replied", "suppressed", "bounced", "invalid_email", "risky"})
@@ -432,6 +437,92 @@ class CampaignService:
             CampaignRecipientList.group_id == group_id,
         )
 
+    def _attach_unlisted_outside_mail(
+        self,
+        db: Session,
+        campaign_id: int,
+        recipient_ids: list[int],
+        org_id: str | None,
+    ) -> int:
+        """Tag campaign contacts that are not in any list yet under Outside mail.
+
+        Skips anyone already in a list for this campaign, so an upload list
+        is left as their only list. Does not commit.
+        """
+        unique_ids: list[int] = []
+        seen: set[int] = set()
+        for recipient_id in recipient_ids:
+            if recipient_id in seen:
+                continue
+            seen.add(recipient_id)
+            unique_ids.append(recipient_id)
+        if not unique_ids:
+            return 0
+
+        listed = {
+            recipient_id
+            for (recipient_id,) in db.query(CampaignRecipientList.recipient_id)
+            .filter(
+                CampaignRecipientList.campaign_id == campaign_id,
+                CampaignRecipientList.recipient_id.in_(unique_ids),
+            )
+            .all()
+        }
+        missing = [recipient_id for recipient_id in unique_ids if recipient_id not in listed]
+        if not missing:
+            return 0
+
+        group_query = db.query(RecipientGroup).filter(RecipientGroup.name == OUTSIDE_MAIL_LIST_NAME)
+        if org_id:
+            group_query = group_query.filter(RecipientGroup.org_id == org_id)
+        group = group_query.first()
+        if not group:
+            group = RecipientGroup(name=OUTSIDE_MAIL_LIST_NAME, org_id=org_id)
+            db.add(group)
+            db.flush()
+
+        existing_members = {
+            member.recipient_id
+            for member in db.query(RecipientGroupMember)
+            .filter(
+                RecipientGroupMember.group_id == group.id,
+                RecipientGroupMember.recipient_id.in_(missing),
+            )
+            .all()
+        }
+        for recipient_id in missing:
+            db.add(
+                CampaignRecipientList(
+                    campaign_id=campaign_id,
+                    recipient_id=recipient_id,
+                    group_id=group.id,
+                )
+            )
+            if recipient_id not in existing_members:
+                db.add(RecipientGroupMember(group_id=group.id, recipient_id=recipient_id))
+        return len(missing)
+
+    def _backfill_outside_mail_list(self, db: Session, campaign_id: int) -> None:
+        """Put already-recorded outside-mail contacts onto the Outside mail list.
+
+        Mail recorded before list tagging existed has a manual EmailLog and a
+        CampaignRecipient, but no CampaignRecipientList row, so Prospects
+        never showed it.
+        """
+        manual_ids = [
+            recipient_id
+            for (recipient_id,) in db.query(EmailLog.recipient_id)
+            .filter(EmailLog.campaign_id == campaign_id, EmailLog.source == "manual")
+            .distinct()
+            .all()
+        ]
+        if not manual_ids:
+            return
+        campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+        org_id = campaign.org_id if campaign else None
+        if self._attach_unlisted_outside_mail(db, campaign_id, manual_ids, org_id):
+            db.commit()
+
     def list_campaign_lists(self, db: Session, campaign_id: int) -> list[dict]:
         """Every list (RecipientGroup) this campaign's prospects were tagged
         under, with a total, sent count, and representative template — the
@@ -440,6 +531,7 @@ class CampaignService:
         campaign, so a recipient can show under more than one list here),
         while send state (status/template) is read off the recipient's one
         CampaignRecipient row for this campaign."""
+        self._backfill_outside_mail_list(db, campaign_id)
         rows = (
             db.query(
                 CampaignRecipientList.group_id,
@@ -548,6 +640,38 @@ class CampaignService:
             cr.template_id = template_id
         db.commit()
         return len(rows)
+
+    def _ensure_followup_stage(self, db: Session, campaign: Campaign) -> None:
+        """Give a campaign a first follow-up stage when Save and send is used.
+
+        The scheduler sends whatever stage matches the contact's progress.
+        Outside mail treats the recorded email as stage 0, so stage 1 has to
+        exist or the follow-up is skipped. Copy the primary template instead
+        of asking the user to build a stage first. Does not commit.
+        """
+        if self.list_sequence_stages(db, campaign.id):
+            return
+        template = (
+            db.query(Template)
+            .filter(Template.campaign_id == campaign.id)
+            .order_by(Template.id)
+            .first()
+        )
+        subject = ((template.subject if template else None) or campaign.subject or "Following up").strip()
+        body = ((template.body if template else None) or "Following up on my earlier note.").strip()
+        db.add(
+            CampaignSequenceStage(
+                campaign_id=campaign.id,
+                stage_order=1,
+                delay_value=1,
+                delay_unit="days",
+                subject=subject or "Following up",
+                body=body or "Following up on my earlier note.",
+                closing=template.closing if template else None,
+                cta=template.cta if template else None,
+            )
+        )
+        db.flush()
 
     def list_sequence_stages(self, db: Session, campaign_id: int) -> list[CampaignSequenceStage]:
         return (
@@ -894,9 +1018,12 @@ class CampaignService:
         """Record mail already sent outside LeadSense.
 
         Writes an EmailLog and, when provided, a follow-up reminder on this
-        campaign's CampaignRecipient rows only. next_send_at is left alone
-        unless send_follow_up is set, in which case the campaign's next
-        sequence stage is queued for these contacts.
+        campaign's CampaignRecipient rows only. Contacts that are not already
+        in a list for this campaign are tagged under "Outside mail" so they
+        show on the Prospects tab. next_send_at is left alone unless
+        send_follow_up is set, in which case these contacts are queued for
+        the campaign's next sequence stage. If the campaign has no stage yet,
+        one is created from its primary template so the send can go out.
         """
         if data.send_follow_up and data.mode != "existing":
             raise ValueError("Save and send follow-up is only available for an existing campaign")
@@ -927,10 +1054,7 @@ class CampaignService:
                     raise ValueError("Choose a follow-up date")
                 if follow_up_at <= utc_now():
                     raise ValueError("Follow-up date must be in the future")
-                if not self.list_sequence_stages(db, campaign.id):
-                    raise ValueError(
-                        "Add a follow-up stage on this campaign before LeadSense can send one"
-                    )
+                self._ensure_followup_stage(db, campaign)
         elif data.mode == "new":
             name = (data.campaign_name or "").strip()
             if not name:
@@ -1027,6 +1151,8 @@ class CampaignService:
                 )
             )
             recorded += 1
+
+        self._attach_unlisted_outside_mail(db, campaign.id, recipient_ids, org_id)
 
         campaign.emails_sent = (campaign.emails_sent or 0) + recorded
         db.commit()
