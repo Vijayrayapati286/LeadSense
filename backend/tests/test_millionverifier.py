@@ -449,3 +449,130 @@ def test_apply_rejection_suppresses_recipient():
         assert cr.next_send_at is None
     finally:
         db.close()
+
+
+def _seed_campaign_with_emails(db, suffix: str):
+    user = User(name="Rep", email=f"rep-risky-{suffix}@example.com")
+    db.add(user)
+    db.flush()
+    campaign = Campaign(
+        campaign_name="Risky choice",
+        campaign_id=f"risky-choice-{suffix}",
+        owner="Rep",
+        user_id=user.id,
+        status="draft",
+    )
+    db.add(campaign)
+    db.flush()
+    good = Recipient(name="Good Lead", email=f"good-{suffix}@example.com", company="Acme")
+    risky = Recipient(name="Risky Lead", email=f"risky-{suffix}@example.com", company="Acme")
+    db.add_all([good, risky])
+    db.flush()
+    now = utc_now()
+    db.add(EmailVerification(
+        email=good.email,
+        result="ok",
+        quality="good",
+        source="millionverifier",
+        verified_at=now,
+        expires_at=now + timedelta(days=30),
+    ))
+    db.add(EmailVerification(
+        email=risky.email,
+        result="catch_all",
+        quality="risky",
+        source="millionverifier",
+        verified_at=now,
+        expires_at=now + timedelta(days=30),
+    ))
+    db.commit()
+    return user, campaign, good, risky
+
+
+def test_send_asks_before_queueing_risky_and_honors_the_choice():
+    from app.routers.email import send_emails
+    from app.schemas.schemas import SendEmailRequest
+
+    db = SessionLocal()
+    try:
+        user, campaign, good, risky = _seed_campaign_with_emails(db, "prompt")
+        payload = dict(
+            campaign_id=campaign.id,
+            subject="Hello",
+            body="Hi",
+            recipient_ids=[good.id, risky.id],
+        )
+
+        preview = send_emails(SendEmailRequest(**payload, preview_risky=True), db, user)
+        assert preview.queued == 0
+        assert preview.requires_risky_confirmation is True
+        assert preview.risky_count == 1
+        assert preview.good_count == 1
+        assert risky.email in preview.risky_emails
+        assert db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign.id).count() == 0
+
+        blocked = send_emails(SendEmailRequest(**payload), db, user)
+        assert blocked.requires_risky_confirmation is True
+        assert blocked.queued == 0
+
+        good_only = send_emails(SendEmailRequest(**payload, risky_choice="send_good_only"), db, user)
+        assert good_only.queued == 1
+        assert good_only.skipped_risky == 1
+        queued_ids = {
+            row.recipient_id
+            for row in db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign.id).all()
+        }
+        assert queued_ids == {good.id}
+
+        included = send_emails(SendEmailRequest(**payload, risky_choice="include_risky"), db, user)
+        assert included.queued == 2
+        assert included.skipped_risky == 0
+        risky_row = (
+            db.query(CampaignRecipient)
+            .filter(CampaignRecipient.campaign_id == campaign.id, CampaignRecipient.recipient_id == risky.id)
+            .one()
+        )
+        good_row = (
+            db.query(CampaignRecipient)
+            .filter(CampaignRecipient.campaign_id == campaign.id, CampaignRecipient.recipient_id == good.id)
+            .one()
+        )
+        assert risky_row.allow_risky_send is True
+        assert risky_row.status == "queued"
+        assert good_row.allow_risky_send is False
+    finally:
+        db.close()
+
+
+def test_gate_sends_risky_only_when_the_sender_confirmed():
+    from app.services.scheduler_service import _gate_before_ses
+
+    db = SessionLocal()
+    try:
+        user, campaign, _good, risky = _seed_campaign_with_emails(db, "gate")
+        blocked = CampaignRecipient(
+            campaign_id=campaign.id,
+            recipient_id=risky.id,
+            status="queued",
+            allow_risky_send=False,
+        )
+        db.add(blocked)
+        db.commit()
+
+        assert _gate_before_ses(db, blocked, risky, user) is False
+        db.refresh(risky)
+        db.refresh(blocked)
+        assert risky.is_suppressed is True
+        assert blocked.status == "risky"
+
+        risky.is_suppressed = False
+        risky.suppression_reason = None
+        blocked.allow_risky_send = True
+        blocked.status = "queued"
+        db.commit()
+
+        assert _gate_before_ses(db, blocked, risky, user) is True
+        db.refresh(risky)
+        assert risky.is_suppressed is False
+    finally:
+        db.close()

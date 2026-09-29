@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import SessionLocal
 from app.models import Campaign, CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template, User
 from app.services.app_settings_service import AppSettingsService
-from app.services.millionverifier_service import millionverifier_service
+from app.services.millionverifier_service import is_display_risky, millionverifier_service
 from app.services.ses_service import SESService
 from app.utils.helpers import build_recipient_context, render_email_body, render_template, utc_now
 
@@ -30,6 +30,18 @@ def _gate_before_ses(db: Session, cr: CampaignRecipient, recipient: Recipient, o
     """Return True if SES send may proceed. On definitive reject, mutates rows."""
     gate = millionverifier_service.verify_email(db, recipient.email)
     if gate.allowed:
+        return True
+    # Sender confirmed this campaign row may include a risky address.
+    # Bad results (invalid, disposable) are still rejected and suppressed.
+    if (
+        gate.definitive_reject
+        and cr.allow_risky_send
+        and is_display_risky(gate.quality, gate.result)
+    ):
+        logger.info(
+            "Allowing risky send to %s — sender confirmed include risky",
+            recipient.email,
+        )
         return True
     if gate.definitive_reject:
         millionverifier_service.apply_rejection(

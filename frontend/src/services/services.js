@@ -103,6 +103,7 @@ export const campaignService = {
   getRecipients: (id) => api.get(`/campaign/${id}/recipients`),
   getRecipientStats: (id) => api.get(`/campaign/${id}/recipients/stats`),
   markReplied: (id, recipientIds) => api.post(`/campaign/${id}/recipients/mark-replied`, { recipient_ids: recipientIds }),
+  unmarkReplied: (id, recipientIds) => api.post(`/campaign/${id}/recipients/unmark-replied`, { recipient_ids: recipientIds }),
   undoMarkReplied: (id, items) => api.post(`/campaign/${id}/recipients/undo-mark-replied`, { items }),
   scheduleFollowUp: (id, data) => api.post(`/campaign/${id}/recipients/schedule-followup`, data),
   cancelFollowUp: (id, data) => api.post(`/campaign/${id}/recipients/cancel-followup`, data),

@@ -6,6 +6,7 @@ import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import StatusBadge from '../components/ui/StatusBadge';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import Button from '../components/ui/Button';
 import PageHeader from '../components/ui/PageHeader';
 import PageShell from '../components/ui/PageShell';
 import { MetricCard } from '../components/ui/GrowthWorkspace';
@@ -139,6 +140,11 @@ export default function EmailLogsPage() {
         eyebrow="Lead generation"
         title="Email logs"
         subtitle="Track all sent, failed, and pending emails."
+        actions={
+          <Button variant="secondary" icon={FiCheckCircle} onClick={toggleVerifiedOnly}>
+            {verifiedOnly ? 'All emails' : `Verified emails${verifiedTotal ? ` (${verifiedTotal})` : ''}`}
+          </Button>
+        }
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

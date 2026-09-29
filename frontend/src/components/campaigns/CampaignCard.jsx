@@ -54,7 +54,7 @@ export default function CampaignCard({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <StatBlock label="Emails Sent" value={c.emails_sent} />
+        <StatBlock label="Contacts" value={c.contact_count ?? c.emails_sent} />
         <StatBlock label="Created" value={formatDate(c.created_at)} />
       </div>
 

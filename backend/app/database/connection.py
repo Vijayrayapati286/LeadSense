@@ -415,6 +415,15 @@ def _ensure_manual_mail_schema() -> None:
             if "manual_follow_up_action" not in cols:
                 conn.execute(text("ALTER TABLE campaign_recipients ADD COLUMN manual_follow_up_action TEXT"))
                 logger.info("Added campaign_recipients.manual_follow_up_action")
+            if "allow_risky_send" not in cols:
+                risky_default = "FALSE" if dialect != "sqlite" else "0"
+                conn.execute(
+                    text(
+                        "ALTER TABLE campaign_recipients "
+                        f"ADD COLUMN allow_risky_send BOOLEAN NOT NULL DEFAULT {risky_default}"
+                    )
+                )
+                logger.info("Added campaign_recipients.allow_risky_send")
 
 
 def _ensure_ooo_inbound_schema() -> None:

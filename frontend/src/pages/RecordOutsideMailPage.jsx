@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { FiArrowLeft, FiCheck, FiMail, FiSend, FiX } from 'react-icons/fi';
-import { campaignService, recipientService, sequenceService } from '../services/services';
+import { FiArrowLeft, FiMail, FiSend, FiX } from 'react-icons/fi';
+import { campaignService, sequenceService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
-import { debounce, generateCampaignId } from '../utils/helpers';
+import { generateCampaignId } from '../utils/helpers';
 import Button from '../components/ui/Button';
-import LoadingSpinner from '../components/ui/LoadingSpinner';
 import PageHeader from '../components/ui/PageHeader';
 import PageShell from '../components/ui/PageShell';
 import SearchInput from '../components/ui/SearchInput';
@@ -43,11 +42,8 @@ export default function RecordOutsideMailPage() {
   const [campaignName, setCampaignName] = useState('');
   const [description, setDescription] = useState('');
 
-  const [contactQuery, setContactQuery] = useState('');
-  const [contactHits, setContactHits] = useState([]);
-  const [searchingContacts, setSearchingContacts] = useState(false);
+  const [contactEmail, setContactEmail] = useState('');
   const [selected, setSelected] = useState([]);
-  const [newName, setNewName] = useState('');
 
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -84,31 +80,6 @@ export default function RecordOutsideMailPage() {
       .catch(() => setFollowUpStages([]));
   }, [campaign]);
 
-  const searchContacts = useMemo(
-    () =>
-      debounce(async (term) => {
-        if (!term.trim()) {
-          setContactHits([]);
-          setSearchingContacts(false);
-          return;
-        }
-        setSearchingContacts(true);
-        try {
-          const { data } = await recipientService.getAll({ search: term, page: 1, page_size: 20 });
-          setContactHits(data.items || []);
-        } catch {
-          setContactHits([]);
-        } finally {
-          setSearchingContacts(false);
-        }
-      }, 250),
-    []
-  );
-
-  useEffect(() => {
-    searchContacts(contactQuery);
-  }, [contactQuery, searchContacts]);
-
   const campaignMatches = useMemo(() => {
     const term = campaignQuery.trim().toLowerCase();
     if (!term) return campaigns;
@@ -120,33 +91,21 @@ export default function RecordOutsideMailPage() {
   }, [campaigns, campaignQuery]);
 
   const selectedEmails = new Set(selected.map((c) => c.email.toLowerCase()));
-  const typedEmail = contactQuery.trim();
-  const canAddTyped =
-    looksLikeEmail(typedEmail) &&
-    !selectedEmails.has(typedEmail.toLowerCase()) &&
-    !contactHits.some((c) => c.email.toLowerCase() === typedEmail.toLowerCase());
+  const typedEmail = contactEmail.trim();
+  const canAddTyped = looksLikeEmail(typedEmail) && !selectedEmails.has(typedEmail.toLowerCase());
 
-  const addExisting = (contact) => {
-    if (selectedEmails.has(contact.email.toLowerCase())) return;
-    setSelected((prev) => [
-      ...prev,
-      {
-        id: contact.id,
-        name: contact.name,
-        email: contact.email,
-        company: contact.company,
-        isNew: false,
-      },
-    ]);
+  const addEmail = () => {
+    if (!canAddTyped) return;
+    const email = typedEmail.toLowerCase();
+    const name = email.split('@')[0];
+    setSelected((prev) => [...prev, { name, email, isNew: true }]);
+    setContactEmail('');
   };
 
-  const addNew = () => {
-    const email = typedEmail.toLowerCase();
-    const name = newName.trim() || email.split('@')[0];
-    setSelected((prev) => [...prev, { name, email, isNew: true }]);
-    setNewName('');
-    setContactQuery('');
-    setContactHits([]);
+  const onContactKeyDown = (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    addEmail();
   };
 
   const removeSelected = (email) => {
@@ -183,7 +142,7 @@ export default function RecordOutsideMailPage() {
       return;
     }
     if (selected.length === 0) {
-      toast.error('Select at least one contact');
+      toast.error('Enter at least one email');
       return;
     }
     if (!subject.trim() || !body.trim()) {
@@ -339,59 +298,20 @@ export default function RecordOutsideMailPage() {
 
       <SurfaceCard className="space-y-4">
         <div>
-          <label className="label">Contacts</label>
-          <SearchInput
-            value={contactQuery}
-            onChange={setContactQuery}
-            placeholder="Search name, email, or company..."
-          />
-          {searchingContacts && (
-            <div className="mt-2 flex justify-center">
-              <LoadingSpinner size="sm" />
-            </div>
-          )}
-          {contactHits.length > 0 && (
-            <ul className="mt-2 max-h-48 overflow-auto rounded-xl border border-slate-200">
-              {contactHits.map((c) => {
-                const added = selectedEmails.has(c.email.toLowerCase());
-                return (
-                  <li key={c.id}>
-                    <button
-                      type="button"
-                      disabled={added}
-                      className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
-                      onClick={() => addExisting(c)}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium text-slate-800">{c.name}</span>
-                        <span className="block truncate text-xs text-slate-400">
-                          {c.email}
-                          {c.company ? ` · ${c.company}` : ''}
-                        </span>
-                      </span>
-                      {added ? <FiCheck className="text-primary-600" /> : null}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {canAddTyped && (
-            <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-dashed border-slate-300 p-3">
-              <div className="min-w-[180px] flex-1">
-                <label className="label">New contact name</label>
-                <input
-                  className="input-field"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder={typedEmail.split('@')[0]}
-                />
-              </div>
-              <Button type="button" variant="secondary" onClick={addNew}>
-                Add {typedEmail}
-              </Button>
-            </div>
-          )}
+          <label className="label">Email</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="email"
+              className="input-field"
+              value={contactEmail}
+              onChange={(e) => setContactEmail(e.target.value)}
+              onKeyDown={onContactKeyDown}
+              placeholder="name@company.com"
+            />
+            <Button type="button" variant="secondary" onClick={addEmail} disabled={!canAddTyped}>
+              Add
+            </Button>
+          </div>
         </div>
 
         {selected.length > 0 && (

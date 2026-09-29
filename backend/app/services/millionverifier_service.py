@@ -604,6 +604,36 @@ class MillionVerifierService:
         )
 
 
+def is_display_risky(quality: str | None, result: str | None) -> bool:
+    """True when the stored verification should be shown and treated as risky."""
+    return classify_cached_verification(quality, result) == DISPLAY_RISKY
+
+
+def partition_recipients_by_risk(
+    db: Session, recipients: list[Recipient]
+) -> tuple[list[Recipient], list[Recipient]]:
+    """Split recipients into (not risky, risky) using the verification cache.
+
+    Unchecked and good addresses stay in the first list. Bad addresses stay
+    there too — the send gate still blocks them later.
+    """
+    lookup = verification_lookup(db, [recipient.email for recipient in recipients])
+    safe: list[Recipient] = []
+    risky: list[Recipient] = []
+    for recipient in recipients:
+        email = (recipient.email or "").strip().lower()
+        status, _raw = resolve_verification_status(
+            email=email,
+            suppression_reason=recipient.suppression_reason,
+            cache_row=lookup.get(email),
+        )
+        if status == DISPLAY_RISKY:
+            risky.append(recipient)
+        else:
+            safe.append(recipient)
+    return safe, risky
+
+
 def rejection_status(quality: str | None, result: str | None) -> str:
     """Campaign/log status for a blocked address. Risky stays risky; bad is invalid."""
     if classify_cached_verification(quality, result) == DISPLAY_RISKY:

@@ -33,6 +33,25 @@ _TERMINAL_STATUSES = frozenset({"replied", "suppressed", "bounced", "invalid_ema
 _SENT_STATUSES = frozenset({"sent", "delivered", "opened", "clicked", "out_of_office"})
 
 
+def _follow_up_due_at(stage: CampaignSequenceStage, last_sent_at: datetime | None) -> datetime:
+    """When this stage should send. Overdue delays send on the next scheduler pass."""
+    unit = stage.delay_unit
+    value = stage.delay_value
+    if unit == "minutes":
+        delta = timedelta(minutes=value)
+    elif unit == "hours":
+        delta = timedelta(hours=value)
+    else:
+        delta = timedelta(days=value)
+    now = utc_now()
+    if last_sent_at is not None:
+        sent = last_sent_at if last_sent_at.tzinfo else last_sent_at.replace(tzinfo=timezone.utc)
+        due = sent + delta
+        if due > now:
+            return due
+    return now
+
+
 def derive_follow_up_state(cr: CampaignRecipient) -> tuple[str, str]:
     """Return (state, human_label) for UI without renaming stored status."""
     if cr.status in {"replied", "bounced", "suppressed", "invalid_email", "risky"}:
@@ -557,9 +576,31 @@ class CampaignService:
 
         stage = CampaignSequenceStage(campaign_id=campaign_id, **data.model_dump())
         db.add(stage)
+        db.flush()
+        # People already sent the previous stage never got a next_send_at when
+        # this stage did not exist yet. Queue them now so the follow-up appears.
+        self._queue_followups_for_new_stage(db, stage)
         db.commit()
         db.refresh(stage)
         return stage
+
+    def _queue_followups_for_new_stage(self, db: Session, stage: CampaignSequenceStage) -> int:
+        """Set next_send_at for sent recipients who are waiting on this stage."""
+        rows = (
+            db.query(CampaignRecipient)
+            .filter(
+                CampaignRecipient.campaign_id == stage.campaign_id,
+                CampaignRecipient.status.in_(_SENT_STATUSES),
+                CampaignRecipient.next_send_at.is_(None),
+                CampaignRecipient.current_stage == stage.stage_order - 1,
+            )
+            .all()
+        )
+        queued = 0
+        for cr in rows:
+            cr.next_send_at = _follow_up_due_at(stage, cr.last_sent_at)
+            queued += 1
+        return queued
 
     def update_sequence_stage(self, db: Session, stage_id: int, update_data: dict) -> CampaignSequenceStage:
         stage = db.query(CampaignSequenceStage).filter(CampaignSequenceStage.id == stage_id).first()
@@ -615,6 +656,39 @@ class CampaignService:
         db.commit()
         skipped = len(recipient_ids) - updated
         return {"updated": updated, "skipped": max(0, skipped), "undo_items": undo_items}
+
+    def unmark_recipients_replied(
+        self, db: Session, campaign_id: int, recipient_ids: list[int]
+    ) -> dict:
+        """Clear a manual replied mark so the contact can be followed up again."""
+        if not self.get_by_id(db, campaign_id):
+            raise ValueError("Campaign not found")
+        if not recipient_ids:
+            return {"updated": 0, "skipped": 0, "undo_items": []}
+
+        stages = self.list_sequence_stages(db, campaign_id)
+        stage_orders = {stage.stage_order: stage for stage in stages}
+        rows = (
+            db.query(CampaignRecipient)
+            .filter(
+                CampaignRecipient.campaign_id == campaign_id,
+                CampaignRecipient.recipient_id.in_(recipient_ids),
+            )
+            .all()
+        )
+        updated = 0
+        for cr in rows:
+            if cr.status != "replied":
+                continue
+            cr.status = "sent" if cr.last_sent_at else "not_contacted"
+            cr.replied_at = None
+            next_stage = stage_orders.get((cr.current_stage or 0) + 1)
+            if cr.status == "sent" and next_stage is not None and cr.next_send_at is None:
+                cr.next_send_at = _follow_up_due_at(next_stage, cr.last_sent_at)
+            updated += 1
+        db.commit()
+        skipped = len(recipient_ids) - updated
+        return {"updated": updated, "skipped": max(0, skipped), "undo_items": []}
 
     def undo_mark_recipients_replied(
         self, db: Session, campaign_id: int, items: list[dict]

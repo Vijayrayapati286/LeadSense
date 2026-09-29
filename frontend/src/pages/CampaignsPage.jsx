@@ -194,8 +194,8 @@ export default function CampaignsPage() {
                       <p className="mt-0.5 font-medium text-slate-800">{formatDate(c.created_at)}</p>
                     </div>
                     <div>
-                      <p className="text-micro font-semibold uppercase tracking-wider text-slate-400">Emails sent</p>
-                      <p className="mt-0.5 font-medium text-slate-800">{c.emails_sent}</p>
+                      <p className="text-micro font-semibold uppercase tracking-wider text-slate-400">Contacts</p>
+                      <p className="mt-0.5 font-medium text-slate-800">{c.contact_count ?? c.emails_sent}</p>
                     </div>
                   </div>
                 </Link>

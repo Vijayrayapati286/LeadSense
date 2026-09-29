@@ -304,8 +304,9 @@ class Recipient(Base):
 class EmailVerification(Base):
     """Cached MillionVerifier (or mock) result for an email address.
 
-    Checked immediately before SES send so invalid/risky addresses never
-    leave LeadSense. Rows expire after MILLIONVERIFIER_CACHE_DAYS."""
+    Checked immediately before SES send. Bad addresses never leave LeadSense.
+    Risky addresses are skipped unless the sender confirms that send.
+    Rows expire after MILLIONVERIFIER_CACHE_DAYS."""
 
     __tablename__ = "email_verifications"
 
@@ -475,6 +476,10 @@ class CampaignRecipient(Base):
     # Reminder only. The scheduler reads next_send_at, never these columns.
     manual_follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     manual_follow_up_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when the sender confirms "send all, including risky" for this queue.
+    # The pre-SES gate still blocks bad addresses. Follow-ups on this row keep
+    # the choice so a later stage does not blacklist someone the user opted in.
+    allow_risky_send: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="campaign_recipients")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="campaign_links")

@@ -21,6 +21,7 @@ from app.models import Campaign, CampaignRecipient, CustomField, EmailLog, Recip
 from app.schemas.schemas import IncompleteRecipientInfo, SendEmailRequest, SendEmailResponse
 from app.services.app_settings_service import AppSettingsService
 from app.services.campaign_service import CampaignService
+from app.services.millionverifier_service import partition_recipients_by_risk
 from app.services.ses_service import SESService
 from app.utils.helpers import extract_placeholders, is_known_merge_field, utc_now
 
@@ -154,6 +155,24 @@ def send_emails(
             detail=f"All {skipped_suppressed} selected recipient(s) are suppressed/blacklisted",
         )
 
+    safe_recipients, risky_recipients = partition_recipients_by_risk(db, recipients)
+    risky_emails = [recipient.email for recipient in risky_recipients[:8]]
+
+    if data.preview_risky or (risky_recipients and data.risky_choice is None):
+        return SendEmailResponse(
+            queued=0,
+            skipped_suppressed=skipped_suppressed,
+            requires_risky_confirmation=bool(risky_recipients),
+            risky_count=len(risky_recipients),
+            good_count=len(safe_recipients),
+            risky_emails=risky_emails,
+        )
+
+    include_risky = data.risky_choice == "include_risky"
+    skipped_risky = 0 if include_risky else len(risky_recipients)
+    recipients = recipients if include_risky else safe_recipients
+    risky_ids = {recipient.id for recipient in risky_recipients} if include_risky else set()
+
     recipients, incomplete = _filter_incomplete_recipients(db, data.campaign_id, recipients)
     skipped_incomplete_data = len(incomplete)
 
@@ -162,7 +181,11 @@ def send_emails(
             queued=0,
             skipped_suppressed=skipped_suppressed,
             skipped_incomplete_data=skipped_incomplete_data,
+            skipped_risky=skipped_risky,
             incomplete=incomplete,
+            risky_count=len(risky_recipients),
+            good_count=len(safe_recipients),
+            risky_emails=risky_emails,
         )
 
     interval_seconds = app_settings_service.get(db).send_interval_seconds
@@ -191,6 +214,7 @@ def send_emails(
         cr.status = "queued"
         cr.next_send_at = base_time + timedelta(seconds=index * interval_seconds)
         cr.sender_user_id = current_user.id
+        cr.allow_risky_send = recipient.id in risky_ids
         queued += 1
 
     campaign.status = "active"
@@ -202,5 +226,9 @@ def send_emails(
         queued=queued,
         skipped_suppressed=skipped_suppressed,
         skipped_incomplete_data=skipped_incomplete_data,
+        skipped_risky=skipped_risky,
         incomplete=incomplete,
+        risky_count=len(risky_recipients),
+        good_count=len(safe_recipients),
+        risky_emails=risky_emails,
     )

@@ -218,6 +218,7 @@ class CampaignResponse(BaseModel):
     status: str
     origin: str = "leadsense"
     emails_sent: int
+    contact_count: int = 0
     created_at: datetime
     scheduled_at: datetime | None = None
     use_recipient_timezone: bool = False
@@ -644,6 +645,7 @@ class CampaignRecipientResponse(BaseModel):
     recipient_email: str | None = None
     recipient_company: str | None = None
     recipient_designation: str | None = None
+    recipient_industry: str | None = None
     is_suppressed: bool = False
     suppression_reason: str | None = None
     email_verification_status: str | None = None
@@ -852,6 +854,12 @@ class SendEmailRequest(BaseModel):
     body: str
     type: str = "placeholder"
     recipient_ids: list[int] | None = None
+    # When true, count risky vs other recipients and do not queue.
+    preview_risky: bool = False
+    # Required to queue once any selected address is already classified risky.
+    # send_good_only leaves those addresses out. include_risky queues them
+    # and lets this campaign's sends go through the risky verification gate.
+    risky_choice: Literal["send_good_only", "include_risky"] | None = None
 
 
 class IncompleteRecipientInfo(BaseModel):
@@ -863,8 +871,13 @@ class SendEmailResponse(BaseModel):
     queued: int
     skipped_suppressed: int = 0
     skipped_incomplete_data: int = 0
+    skipped_risky: int = 0
     incomplete: list[IncompleteRecipientInfo] = []
     immediate_sent: int = 0
+    requires_risky_confirmation: bool = False
+    risky_count: int = 0
+    good_count: int = 0
+    risky_emails: list[str] = []
 
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
