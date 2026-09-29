@@ -375,7 +375,7 @@ export default function UpdateListPage() {
     return (
       <PageShell maxWidth="max-w-[1500px]">
         <PageHeader
-          eyebrow="Update list"
+          eyebrow="Schedule email"
           title={selectedCampaign?.campaign_name || 'Campaign emails'}
           subtitle={
             selectedCampaign
@@ -750,7 +750,7 @@ export default function UpdateListPage() {
     <PageShell maxWidth="max-w-[1500px]">
       <PageHeader
         eyebrow="Lead generation"
-        title="Update list"
+        title="Schedule email"
         subtitle="Search by campaign or recipient email — open a campaign to mark replies"
         actions={
           <Button variant="secondary" icon={FiArrowLeft} to="/campaigns">

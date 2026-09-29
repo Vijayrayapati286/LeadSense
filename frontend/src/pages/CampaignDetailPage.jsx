@@ -428,7 +428,7 @@ export default function CampaignDetailPage() {
       setStageForm(EMPTY_STAGE_FORM);
       await loadStages();
       if (returnToUpdateList) {
-        toast.success('Returning to Update list to schedule…');
+        toast.success('Returning to Schedule email…');
         navigate(returnToUpdateList, {
           state: {
             openSchedule: true,
@@ -1192,7 +1192,7 @@ export default function CampaignDetailPage() {
                 onClick={() => navigate('/campaigns/update-list')}
                 className="btn-secondary flex items-center gap-2"
               >
-                <FiArrowLeft size={16} /> Update list
+                <FiArrowLeft size={16} /> Schedule email
               </button>
               <button
                 type="button"
@@ -1220,7 +1220,7 @@ export default function CampaignDetailPage() {
                   onClick={() => navigate(`/campaigns/record-external?campaign=${id}`)}
                   className="btn-primary flex items-center gap-2"
                 >
-                  <FiMail size={16} /> Schedule email
+                  <FiMail size={16} /> Mail from outside
                 </button>
               ) : (
                 <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
@@ -1393,7 +1393,7 @@ export default function CampaignDetailPage() {
 
               {returnToUpdateList && (
                 <div className="mt-4 rounded-xl border border-primary-200 bg-primary-50/60 px-4 py-3 text-sm text-primary-900">
-                  Add a follow-up stage below (subject + body), then you&apos;ll return to Update list to
+                  Add a follow-up stage below (subject + body), then you&apos;ll return to Schedule email to
                   pick the send date for your selected recipients.
                   <button
                     type="button"

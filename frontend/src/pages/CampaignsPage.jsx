@@ -107,10 +107,10 @@ export default function CampaignsPage() {
               History
             </Button>
             <Button variant="secondary" icon={FiEdit3} to="/campaigns/update-list">
-              Update list
+              Schedule email
             </Button>
             <Button variant="secondary" icon={FiMail} to="/campaigns/record-external">
-              Schedule email
+              Mail from outside
             </Button>
             <Button variant="primary" icon={FiPlus} to="/campaigns/create">
               Create Campaign
@@ -124,7 +124,7 @@ export default function CampaignsPage() {
         <MetricCard label="Active" value={counts.active} hint="Currently running" tone="green" icon={FiActivity} />
         <MetricCard label="Inactive" value={counts.inactive} hint="Paused or completed" tone="amber" icon={FiPauseCircle} />
         <MetricCard
-          label="Schedule email"
+          label="Mail from outside"
           value={counts.scheduleEmail}
           hint="Mail recorded outside LeadSense"
           tone="blue"

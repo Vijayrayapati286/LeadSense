@@ -245,7 +245,7 @@ export default function RecordOutsideMailPage() {
     <PageShell maxWidth="max-w-3xl">
       <PageHeader
         eyebrow="Lead generation"
-        title="Schedule email"
+        title="Mail from outside"
         subtitle="Record an email you already sent from Outlook or another mailbox. LeadSense will not send it."
         actions={
           <Button variant="secondary" icon={FiArrowLeft} onClick={() => navigate('/campaigns')}>
