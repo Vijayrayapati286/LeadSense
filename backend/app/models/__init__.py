@@ -32,6 +32,7 @@ from app.models.models import (
     Tag,
     Template,
     User,
+    UserNotification,
 )
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "Role",
     "Permission",
     "RolePermission",
+    "UserNotification",
     "UserRole",
     "RefreshToken",
     "PasswordResetToken",

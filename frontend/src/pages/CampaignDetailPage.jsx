@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import {
   FiArrowLeft,
@@ -40,6 +40,7 @@ import {
 import { useToast } from '../hooks/useToast';
 import { useContactSearch } from '../hooks/useContactSearch';
 import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
+import { deliveryStatusDisplay } from '../utils/verificationStatus';
 import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -98,21 +99,28 @@ export default function CampaignDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const toast = useToast();
 
   const preselectedContactIds = location.state?.preselectedContactIds;
   const allowedTabs = new Set(['overview', 'template', 'sequence', 'manual', 'candidates']);
+  const queryTab = searchParams.get('tab');
   const stateTab = location.state?.activeTab;
-  const initialTab = allowedTabs.has(stateTab)
-    ? stateTab
-    : (preselectedContactIds ? 'candidates' : 'overview');
+  const fromSchedule = searchParams.get('from') === 'schedule';
+  const initialTab = allowedTabs.has(queryTab)
+    ? queryTab
+    : allowedTabs.has(stateTab)
+      ? stateTab
+      : (preselectedContactIds ? 'candidates' : 'overview');
 
   const [campaign, setCampaign] = useState(null);
   const [templates, setTemplates] = useState([]);
   const primaryTemplate = templates[0] ?? null;
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(initialTab);
-  const returnToUpdateList = location.state?.returnToUpdateList || null;
+  const returnToUpdateList = fromSchedule
+    ? `/campaigns/update-list?campaign=${id}`
+    : (location.state?.returnToUpdateList || null);
   const updateListSelectedIds = location.state?.selectedRecipientIds || [];
 
   const {
@@ -135,17 +143,18 @@ export default function CampaignDetailPage() {
   }, []);
 
   useEffect(() => {
-    const tab = location.state?.activeTab;
+    const tab = searchParams.get('tab') || location.state?.activeTab;
     if (tab && ['overview', 'template', 'sequence', 'manual', 'candidates'].includes(tab)) {
       setActiveTab(tab);
     }
-  }, [location.state?.activeTab]);
+  }, [searchParams, location.state?.activeTab]);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRecipientId, setPreviewRecipientId] = useState(null);
   const [scheduleAt, setScheduleAt] = useState('');
   const [useRecipientTz, setUseRecipientTz] = useState(false);
   const [sending, setSending] = useState(false);
+  const [riskyPrompt, setRiskyPrompt] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLogs, setHistoryLogs] = useState([]);
   const [historyTotal, setHistoryTotal] = useState(0);
@@ -272,18 +281,15 @@ export default function CampaignDetailPage() {
     r.status !== 'replied' &&
     r.status !== 'bounced' &&
     r.status !== 'invalid_email' &&
+    r.status !== 'risky' &&
     !r.is_suppressed;
 
   const isFollowUpSchedulable = (r) =>
     isTrackingEligible(r) &&
     ['sent', 'delivered', 'opened', 'clicked', 'out_of_office'].includes(r.status);
 
-  // Manual Update list: only successfully contacted recipients (hide invalid_email, etc.)
-  const isManualUpdateVisible = (r) =>
-    ['sent', 'delivered', 'opened', 'clicked', 'replied', 'out_of_office'].includes(r.status);
-
   const filteredTrackingRows = useMemo(() => {
-    const visible = trackingRows.filter(isManualUpdateVisible);
+    const visible = trackingRows;
     const term = trackingSearch.trim().toLowerCase();
     if (!term) return visible;
     return visible.filter((r) => {
@@ -426,7 +432,7 @@ export default function CampaignDetailPage() {
       setStageForm(EMPTY_STAGE_FORM);
       await loadStages();
       if (returnToUpdateList) {
-        toast.success('Returning to Update list to schedule…');
+        toast.success('Returning to Schedule email…');
         navigate(returnToUpdateList, {
           state: {
             openSchedule: true,
@@ -1091,9 +1097,73 @@ export default function CampaignDetailPage() {
     setPreviewOpen(true);
   };
 
-  const handleSend = async () => {
+  const sendPayload = () => ({
+    campaign_id: campaign.id,
+    subject: effectiveTemplate.subject,
+    body: effectiveTemplate.body + (effectiveTemplate.closing ? `\n\n${effectiveTemplate.closing}` : ''),
+    type: effectiveTemplate.type,
+    recipient_ids: activeSelectedIds,
+  });
+
+  const finishSend = (data) => {
+    if (data.immediate_sent > 0) {
+      toast.success('Test email sent (mock mode, no real prospects selected)');
+    } else if (data.queued > 0) {
+      let message = scheduleAt
+        ? `Scheduled ${data.queued} email(s) for ${new Date(scheduleAt).toLocaleString()}, staggered from there to protect deliverability.`
+        : `Queued ${data.queued} email(s) — sending in the background, spaced out to protect deliverability. Each prospect uses their tagged template.`;
+      if (data.skipped_suppressed > 0) {
+        message += ` (${data.skipped_suppressed} skipped — blacklisted)`;
+      }
+      if (data.skipped_risky > 0) {
+        message += ` (${data.skipped_risky} risky email(s) left out)`;
+      }
+      toast.success(message);
+    } else if (data.skipped_risky > 0 && !data.skipped_incomplete_data) {
+      toast.error('Nothing was sent. The selected emails are risky, and you chose to send only the good ones.');
+    }
+    if (data.skipped_incomplete_data > 0) {
+      const byField = {};
+      (data.incomplete || []).forEach(({ email, missing_fields }) => {
+        missing_fields.forEach((field) => {
+          (byField[field] = byField[field] || []).push(email);
+        });
+      });
+      const detail = Object.entries(byField)
+        .map(([field, emails]) => {
+          const shown = emails.slice(0, 3).join(', ');
+          const more = emails.length > 3 ? ` +${emails.length - 3} more` : '';
+          return `{{${field}}} missing for ${shown}${more}`;
+        })
+        .join('; ');
+      toast.error(
+        `${data.skipped_incomplete_data} prospect(s) skipped — ${detail}. Re-upload the list with that column filled in, then resend to them.`
+      );
+    }
+    setRiskyPrompt(null);
+    setPreviewOpen(false);
+    setScheduleAt('');
+    if (isListMode) {
+      clearListSelection();
+      loadListMembers(openListId);
+      loadLists();
+    } else {
+      clearSelection();
+    }
+    loadCampaign();
+    setActiveTab('candidates');
+  };
+
+  const handleSend = async (riskyChoice = null) => {
     setSending(true);
     try {
+      if (!riskyChoice) {
+        const { data: preview } = await emailService.send({ ...sendPayload(), preview_risky: true });
+        if (preview.risky_count > 0) {
+          setRiskyPrompt(preview);
+          return;
+        }
+      }
       if (scheduleAt || useRecipientTz !== !!campaign.use_recipient_timezone) {
         await campaignService.update(campaign.id, {
           ...(scheduleAt ? { scheduled_at: new Date(scheduleAt).toISOString() } : {}),
@@ -1101,54 +1171,14 @@ export default function CampaignDetailPage() {
         });
       }
       const { data } = await emailService.send({
-        campaign_id: campaign.id,
-        subject: effectiveTemplate.subject,
-        body: effectiveTemplate.body + (effectiveTemplate.closing ? `\n\n${effectiveTemplate.closing}` : ''),
-        type: effectiveTemplate.type,
-        recipient_ids: activeSelectedIds,
+        ...sendPayload(),
+        ...(riskyChoice ? { risky_choice: riskyChoice } : {}),
       });
-      if (data.immediate_sent > 0) {
-        toast.success('Test email sent (mock mode, no real prospects selected)');
-      } else {
-        if (data.queued > 0) {
-          let message = scheduleAt
-            ? `Scheduled ${data.queued} email(s) for ${new Date(scheduleAt).toLocaleString()}, staggered from there to protect deliverability.`
-            : `Queued ${data.queued} email(s) — sending in the background, spaced out to protect deliverability. Each prospect uses their tagged template.`;
-          if (data.skipped_suppressed > 0) {
-            message += ` (${data.skipped_suppressed} skipped — blacklisted)`;
-          }
-          toast.success(message);
-        }
-        if (data.skipped_incomplete_data > 0) {
-          const byField = {};
-          (data.incomplete || []).forEach(({ email, missing_fields }) => {
-            missing_fields.forEach((field) => {
-              (byField[field] = byField[field] || []).push(email);
-            });
-          });
-          const detail = Object.entries(byField)
-            .map(([field, emails]) => {
-              const shown = emails.slice(0, 3).join(', ');
-              const more = emails.length > 3 ? ` +${emails.length - 3} more` : '';
-              return `{{${field}}} missing for ${shown}${more}`;
-            })
-            .join('; ');
-          toast.error(
-            `${data.skipped_incomplete_data} prospect(s) skipped — ${detail}. Re-upload the list with that column filled in, then resend to them.`
-          );
-        }
+      if (data.requires_risky_confirmation) {
+        setRiskyPrompt(data);
+        return;
       }
-      setPreviewOpen(false);
-      setScheduleAt('');
-      if (isListMode) {
-        clearListSelection();
-        loadListMembers(openListId);
-        loadLists();
-      } else {
-        clearSelection();
-      }
-      loadCampaign();
-      setActiveTab('candidates');
+      finishSend(data);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to send emails');
     } finally {
@@ -1190,7 +1220,7 @@ export default function CampaignDetailPage() {
                 onClick={() => navigate('/campaigns/update-list')}
                 className="btn-secondary flex items-center gap-2"
               >
-                <FiArrowLeft size={16} /> Update list
+                <FiArrowLeft size={16} /> Schedule email
               </button>
               <button
                 type="button"
@@ -1203,8 +1233,11 @@ export default function CampaignDetailPage() {
             </>
           ) : (
             <>
-              <button onClick={() => navigate('/campaigns')} className="btn-secondary flex items-center gap-2">
-                <FiArrowLeft size={16} /> Back
+              <button
+                onClick={() => navigate(returnToUpdateList || '/campaigns')}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <FiArrowLeft size={16} /> {returnToUpdateList ? 'Schedule email' : 'Back'}
               </button>
               <button onClick={() => navigate(`/campaigns/${id}/edit`)} className="btn-secondary flex items-center gap-2">
                 <FiEdit2 size={16} /> Edit Campaign
@@ -1212,12 +1245,22 @@ export default function CampaignDetailPage() {
               <button type="button" onClick={() => setHistoryOpen(true)} className="btn-secondary flex items-center gap-2">
                 <FiClock size={16} /> History
               </button>
-              <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
-                <FiSend size={16} /> Send Campaign
-                {activeSelectedIds.length > 0 && (
-                  <span className="bg-white/20 rounded-full px-1.5 text-xs">{activeSelectedIds.length}</span>
-                )}
-              </button>
+              {campaign.origin === 'external' ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/campaigns/record-external?campaign=${id}`)}
+                  className="btn-primary flex items-center gap-2"
+                >
+                  <FiMail size={16} /> Mail from outside
+                </button>
+              ) : (
+                <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
+                  <FiSend size={16} /> Send Campaign
+                  {activeSelectedIds.length > 0 && (
+                    <span className="bg-white/20 rounded-full px-1.5 text-xs">{activeSelectedIds.length}</span>
+                  )}
+                </button>
+              )}
             </>
           )}
         </div>
@@ -1231,7 +1274,13 @@ export default function CampaignDetailPage() {
             {TABS.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => {
+                  if (tab.id === 'sequence') {
+                    navigate(`/campaigns/update-list?campaign=${id}`);
+                    return;
+                  }
+                  setActiveTab(tab.id);
+                }}
                 className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
                   activeTab === tab.id
                     ? 'border-primary-600 text-primary-600'
@@ -1283,6 +1332,11 @@ export default function CampaignDetailPage() {
                   </p>
                 </div>
               </div>
+              {campaign.origin === 'external' && (
+                <p className="mt-4 text-sm text-primary-700">
+                  Tracked outside LeadSense. Sends from this campaign stay manual.
+                </p>
+              )}
               {campaign.description && (
                 <div className="mt-4">
                   <p className="text-gray-500">Description</p>
@@ -1376,7 +1430,7 @@ export default function CampaignDetailPage() {
 
               {returnToUpdateList && (
                 <div className="mt-4 rounded-xl border border-primary-200 bg-primary-50/60 px-4 py-3 text-sm text-primary-900">
-                  Add a follow-up stage below (subject + body), then you&apos;ll return to Update list to
+                  Add a follow-up stage below (subject + body), then you&apos;ll return to Schedule email to
                   pick the send date for your selected recipients.
                   <button
                     type="button"
@@ -1563,9 +1617,9 @@ export default function CampaignDetailPage() {
 
               {trackingLoading ? (
                 <div className="flex justify-center py-8"><LoadingSpinner size="md" /></div>
-              ) : trackingRows.filter(isManualUpdateVisible).length === 0 ? (
+              ) : trackingRows.length === 0 ? (
                 <div className="mt-4 rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
-                  No successfully sent recipients yet — only valid sent emails appear here.
+                  No contacts on this campaign yet.
                 </div>
               ) : filteredTrackingRows.length === 0 ? (
                 <div className="mt-4 rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
@@ -1608,7 +1662,11 @@ export default function CampaignDetailPage() {
                                   </p>
                                 )}
                               </div>
-                              <StatusBadge status={r.status} />
+                              <StatusBadge
+                                {...deliveryStatusDisplay(r.status, {
+                                  verificationStatus: r.email_verification_status,
+                                })}
+                              />
                             </div>
                           </div>
                         </div>
@@ -1616,6 +1674,12 @@ export default function CampaignDetailPage() {
                         <div className="mt-auto grid grid-cols-2 gap-3">
                           <div className="rounded-xl bg-slate-50 py-3 text-center">
                             <div className="text-sm font-bold text-slate-950">{r.follow_up_label || 'No follow-up'}</div>
+                            {r.manual_follow_up_at && (
+                              <div className="mt-1 truncate px-2 text-xs text-slate-500">
+                                Outside: {formatDate(r.manual_follow_up_at)}
+                                {r.manual_follow_up_action ? ` · ${r.manual_follow_up_action}` : ''}
+                              </div>
+                            )}
                             <div className="mt-0.5 text-micro font-semibold uppercase tracking-wider text-slate-400">Follow-up</div>
                           </div>
                           <div className="rounded-xl bg-slate-50 py-3 text-center">
@@ -2104,7 +2168,15 @@ export default function CampaignDetailPage() {
         )}
       </div>
 
-      <Modal isOpen={previewOpen} onClose={() => setPreviewOpen(false)} title="Preview & Send" size="lg">
+      <Modal
+        isOpen={previewOpen}
+        onClose={() => {
+          if (riskyPrompt) return;
+          setPreviewOpen(false);
+        }}
+        title="Preview & Send"
+        size="lg"
+      >
         {effectiveTemplate && previewContext && (
           <div className="space-y-4">
             {isListMode && (
@@ -2197,7 +2269,7 @@ export default function CampaignDetailPage() {
               >
                 Cancel
               </button>
-              <button className="btn-primary flex items-center gap-2" onClick={handleSend} disabled={sending}>
+              <button className="btn-primary flex items-center gap-2" onClick={() => handleSend()} disabled={sending}>
                 {sending ? (
                   <LoadingSpinner size="sm" />
                 ) : (
@@ -2205,6 +2277,64 @@ export default function CampaignDetailPage() {
                     <FiSend size={16} /> {scheduleAt ? 'Schedule Send' : 'Send Campaign'}
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={!!riskyPrompt}
+        onClose={() => { if (!sending) setRiskyPrompt(null); }}
+        title="Risky emails in this send"
+        size="md"
+        level="top"
+      >
+        {riskyPrompt && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              {riskyPrompt.risky_count} selected email{riskyPrompt.risky_count === 1 ? '' : 's'} {riskyPrompt.risky_count === 1 ? 'is' : 'are'} risky.
+              {riskyPrompt.good_count > 0
+                ? ` ${riskyPrompt.good_count} other selected email${riskyPrompt.good_count === 1 ? '' : 's'} can be sent without them.`
+                : ' None of the other selected emails can be sent in their place.'}
+            </p>
+            {riskyPrompt.risky_emails?.length > 0 && (
+              <ul className="max-h-40 overflow-y-auto rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                {riskyPrompt.risky_emails.map((email) => (
+                  <li key={email} className="truncate py-0.5">{email}</li>
+                ))}
+                {riskyPrompt.risky_count > riskyPrompt.risky_emails.length && (
+                  <li className="py-0.5 text-amber-800">
+                    +{riskyPrompt.risky_count - riskyPrompt.risky_emails.length} more
+                  </li>
+                )}
+              </ul>
+            )}
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setRiskyPrompt(null)}
+                disabled={sending}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => handleSend('send_good_only')}
+                disabled={sending || riskyPrompt.good_count === 0}
+                title={riskyPrompt.good_count === 0 ? 'Every selected email is risky' : undefined}
+              >
+                {sending ? 'Sending…' : 'Send good emails only'}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => handleSend('include_risky')}
+                disabled={sending}
+              >
+                {sending ? 'Sending…' : 'Send all, including risky'}
               </button>
             </div>
           </div>
@@ -2654,7 +2784,7 @@ export default function CampaignDetailPage() {
                         </p>
                         <p className="text-xs text-gray-500 truncate">{log.recipient_email}</p>
                       </div>
-                      <StatusBadge status={log.status} />
+                      <StatusBadge {...deliveryStatusDisplay(log.status, { errorMessage: log.error_message })} />
                     </div>
                     <p className="text-xs text-gray-500 mt-1">{formatDateTime(log.sent_at)}</p>
                     {log.error_message ? (

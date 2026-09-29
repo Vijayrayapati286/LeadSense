@@ -407,9 +407,9 @@ export default function AdminDashboardPage() {
               </div>
               <dl className="mt-5 space-y-3.5 text-sm">
                 <div className="flex justify-between gap-4"><dt className="text-slate-500">Emails Verified</dt><dd className="font-semibold text-slate-900">{formatCount(mv.emails_verified)}</dd></div>
-                <div className="flex justify-between gap-4"><dt className="text-slate-500">Valid</dt><dd className="font-semibold text-slate-900">{formatCount(mv.valid)}</dd></div>
-                <div className="flex justify-between gap-4"><dt className="text-slate-500">Invalid</dt><dd className="font-semibold text-slate-900">{formatCount(mv.invalid)}</dd></div>
+                <div className="flex justify-between gap-4"><dt className="text-slate-500">Good</dt><dd className="font-semibold text-slate-900">{formatCount(mv.valid)}</dd></div>
                 <div className="flex justify-between gap-4"><dt className="text-slate-500">Risky</dt><dd className="font-semibold text-slate-900">{formatCount(mv.risky)}</dd></div>
+                <div className="flex justify-between gap-4"><dt className="text-slate-500">Bad</dt><dd className="font-semibold text-slate-900">{formatCount(mv.invalid)}</dd></div>
               </dl>
             </div>
             <RingChart percent={verifyPct} />

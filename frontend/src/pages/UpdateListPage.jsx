@@ -11,8 +11,9 @@ import {
   FiSend,
   FiX,
   FiArrowRight,
+  FiPlus,
 } from 'react-icons/fi';
-import { campaignService, sequenceService } from '../services/services';
+import { campaignService, recipientService, sequenceService } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import StatusBadge from '../components/ui/StatusBadge';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
@@ -24,15 +25,6 @@ import CampaignCard from '../components/campaigns/CampaignCard';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import { debounce, formatDateTime } from '../utils/helpers';
-
-const VISIBLE_STATUSES = new Set([
-  'sent',
-  'delivered',
-  'opened',
-  'clicked',
-  'replied',
-  'out_of_office',
-]);
 
 const EMPTY_STAGE_FORM = {
   delay_value: 3,
@@ -81,6 +73,18 @@ export default function UpdateListPage() {
   const [schedulingFollowUp, setSchedulingFollowUp] = useState(false);
   const [pendingOpenSchedule, setPendingOpenSchedule] = useState(false);
   const [stageForm, setStageForm] = useState(EMPTY_STAGE_FORM);
+  const [updateTarget, setUpdateTarget] = useState(null);
+  const [updateForm, setUpdateForm] = useState({
+    name: '',
+    email: '',
+    company: '',
+    designation: '',
+    industry: '',
+    replied: false,
+  });
+  const [savingUpdate, setSavingUpdate] = useState(false);
+  const [stageModalOpen, setStageModalOpen] = useState(false);
+  const [addingStage, setAddingStage] = useState(false);
 
   const loadCampaigns = useCallback(async () => {
     setCampaignLoading(true);
@@ -159,7 +163,6 @@ export default function UpdateListPage() {
         setStages(stagesRes.data || []);
         const items = recipientsRes.data?.items || [];
         const rows = items
-          .filter((r) => VISIBLE_STATUSES.has(r.status))
           .map((r) => ({
             key: `${r.recipient_id}`,
             recipient_id: r.recipient_id,
@@ -167,6 +170,7 @@ export default function UpdateListPage() {
             email: r.recipient_email,
             company: r.recipient_company,
             designation: r.recipient_designation,
+            industry: r.recipient_industry,
             status: r.status,
             follow_up_state: r.follow_up_state,
             follow_up_label: r.follow_up_label,
@@ -217,7 +221,8 @@ export default function UpdateListPage() {
     if (!pendingOpenSchedule || emailsLoading) return;
     if (stages.length === 0) {
       setPendingOpenSchedule(false);
-      toast.error('Still no follow-up stage — add one on Follow-up Sequence');
+      setStageForm(EMPTY_STAGE_FORM);
+      setStageModalOpen(true);
       return;
     }
     if (selectedRecipientIds.length === 0) {
@@ -240,10 +245,55 @@ export default function UpdateListPage() {
     });
   }, [emailRows, emailSearch]);
 
+  const openUpdate = (row) => {
+    setUpdateTarget(row);
+    setUpdateForm({
+      name: row.name || '',
+      email: row.email || '',
+      company: row.company || '',
+      designation: row.designation || '',
+      industry: row.industry || '',
+      replied: row.status === 'replied',
+    });
+  };
+
+  const saveUpdate = async () => {
+    if (!updateTarget) return;
+    const name = updateForm.name.trim();
+    const email = updateForm.email.trim();
+    if (!name || !email) {
+      toast.error('Name and email are required');
+      return;
+    }
+    setSavingUpdate(true);
+    try {
+      await recipientService.update(updateTarget.recipient_id, {
+        name,
+        email,
+        company: updateForm.company.trim() || null,
+        designation: updateForm.designation.trim() || null,
+        industry: updateForm.industry.trim() || null,
+      });
+      if (updateForm.replied && updateTarget.status !== 'replied') {
+        await campaignService.markReplied(selectedId, [updateTarget.recipient_id]);
+      } else if (!updateForm.replied && updateTarget.status === 'replied') {
+        await campaignService.unmarkReplied(selectedId, [updateTarget.recipient_id]);
+      }
+      toast.success('Contact updated');
+      setUpdateTarget(null);
+      await loadEmails(selectedId);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to update contact');
+    } finally {
+      setSavingUpdate(false);
+    }
+  };
+
   const isEligible = (r) =>
     r.status !== 'replied' &&
     r.status !== 'bounced' &&
     r.status !== 'invalid_email' &&
+    r.status !== 'risky' &&
     !r.is_suppressed;
 
   const isSchedulable = (r) =>
@@ -296,12 +346,47 @@ export default function UpdateListPage() {
     }
   };
 
+  const openFollowUpForm = () => {
+    if (!selectedId) return;
+    navigate(`/campaigns/${selectedId}?tab=sequence&from=schedule`, {
+      state: { selectedRecipientIds },
+    });
+  };
+
+  const handleAddStage = async () => {
+    if (!selectedId) return;
+    if (!stageForm.subject.trim() || !stageForm.body.trim()) {
+      toast.error('Subject and body are required');
+      return;
+    }
+    setAddingStage(true);
+    try {
+      const nextOrder = stages.length > 0 ? Math.max(...stages.map((s) => s.stage_order)) + 1 : 1;
+      await sequenceService.create(selectedId, {
+        ...stageForm,
+        delay_value: Number(stageForm.delay_value) || 3,
+        stage_order: nextOrder,
+      });
+      toast.success('Follow-up stage added');
+      setStageForm(EMPTY_STAGE_FORM);
+      setStageModalOpen(false);
+      await loadEmails(selectedId);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to add stage');
+    } finally {
+      setAddingStage(false);
+    }
+  };
+
   const openScheduleModal = () => {
+    if (stages.length === 0) {
+      openFollowUpForm();
+      return;
+    }
     if (selectedSchedulableCount === 0) {
       toast.error('Select recipients that can receive a follow-up');
       return;
     }
-    setStageForm(EMPTY_STAGE_FORM);
     setFollowUpAt(defaultScheduleValue());
     setFollowUpModalOpen(true);
   };
@@ -374,11 +459,11 @@ export default function UpdateListPage() {
     return (
       <PageShell maxWidth="max-w-[1500px]">
         <PageHeader
-          eyebrow="Update list"
+          eyebrow="Schedule email"
           title={selectedCampaign?.campaign_name || 'Campaign emails'}
           subtitle={
             selectedCampaign
-              ? `${emailRows.length} contacted · mark replies & schedule follow-ups`
+              ? `${emailRows.length} contact${emailRows.length === 1 ? '' : 's'} · mark replies & schedule follow-ups`
               : 'Mark replies for this campaign'
           }
           actions={
@@ -414,7 +499,7 @@ export default function UpdateListPage() {
               <button
                 type="button"
                 onClick={openScheduleModal}
-                disabled={selectedSchedulableCount === 0}
+                disabled={stages.length > 0 && selectedSchedulableCount === 0}
                 className="btn-secondary text-sm flex items-center gap-2 disabled:opacity-50"
               >
                 <FiCalendar size={14} /> Schedule
@@ -475,7 +560,6 @@ export default function UpdateListPage() {
                   {filteredEmailRows.map((row) => {
                     const eligible = isEligible(row);
                     const selected = selectedRecipientIds.includes(row.recipient_id);
-                    const replied = row.status === 'replied';
                     return (
                       <tr key={row.key} className="hover:bg-slate-50/80">
                         <td className="px-4 py-4">
@@ -500,43 +584,27 @@ export default function UpdateListPage() {
                         <td className="px-6 py-4">
                           <StatusBadge status={row.status} />
                         </td>
-                        <td className="px-6 py-4 text-gray-600">{followUpShort(row)}</td>
+                        <td className="px-6 py-4">
+                          <button
+                            type="button"
+                            onClick={openFollowUpForm}
+                            className="text-sm font-medium text-primary-700 hover:underline"
+                          >
+                            {followUpShort(row)}
+                          </button>
+                        </td>
                         <td className="px-6 py-4 text-gray-600 whitespace-nowrap">
                           {row.last_sent_at ? formatDateTime(row.last_sent_at) : '—'}
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex flex-wrap items-center gap-2">
-                            {replied ? (
-                              <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
-                                <FiCheckCircle size={13} /> Updated
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={markingReplied}
-                                onClick={async () => {
-                                  setSelectedRecipientIds([row.recipient_id]);
-                                  setMarkingReplied(true);
-                                  try {
-                                    const { data } = await campaignService.markReplied(
-                                      selectedId,
-                                      [row.recipient_id]
-                                    );
-                                    toast.success(`Marked ${data.updated} as replied`);
-                                    await loadEmails(selectedId);
-                                  } catch (err) {
-                                    toast.error(
-                                      err.response?.data?.detail || 'Failed to mark as replied'
-                                    );
-                                  } finally {
-                                    setMarkingReplied(false);
-                                  }
-                                }}
-                                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-                              >
-                                <FiCheckCircle size={12} /> Update
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              onClick={() => openUpdate(row)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                            >
+                              <FiCheckCircle size={12} /> Update
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -547,6 +615,167 @@ export default function UpdateListPage() {
             </div>
           )}
         </div>
+
+        <Modal
+          isOpen={!!updateTarget}
+          onClose={() => !savingUpdate && setUpdateTarget(null)}
+          title="Update contact"
+          size="md"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-slate-500">
+              Change this contact’s details, or mark them as replied.
+            </p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="label">Name *</label>
+                <input
+                  className="input-field"
+                  value={updateForm.name}
+                  onChange={(e) => setUpdateForm((f) => ({ ...f, name: e.target.value }))}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="label">Email *</label>
+                <input
+                  type="email"
+                  className="input-field"
+                  value={updateForm.email}
+                  onChange={(e) => setUpdateForm((f) => ({ ...f, email: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">Company</label>
+                <input
+                  className="input-field"
+                  value={updateForm.company}
+                  onChange={(e) => setUpdateForm((f) => ({ ...f, company: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">Designation</label>
+                <input
+                  className="input-field"
+                  value={updateForm.designation}
+                  onChange={(e) => setUpdateForm((f) => ({ ...f, designation: e.target.value }))}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="label">Industry</label>
+                <input
+                  className="input-field"
+                  value={updateForm.industry}
+                  onChange={(e) => setUpdateForm((f) => ({ ...f, industry: e.target.value }))}
+                />
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="rounded border-gray-300"
+                checked={updateForm.replied}
+                onChange={(e) => setUpdateForm((f) => ({ ...f, replied: e.target.checked }))}
+              />
+              Mark as replied
+            </label>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={savingUpdate}
+                onClick={() => setUpdateTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={savingUpdate}
+                onClick={saveUpdate}
+              >
+                {savingUpdate ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+
+        <Modal
+          isOpen={stageModalOpen}
+          onClose={() => !addingStage && setStageModalOpen(false)}
+          title="Follow-up Sequence"
+          size="md"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-slate-500">
+              Add the follow-up email here. It is saved on this campaign with the existing sequence.
+            </p>
+            {stages.length > 0 ? (
+              <ul className="space-y-2">
+                {stages.map((s) => (
+                  <li key={s.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
+                    <p className="font-medium text-slate-900">
+                      Stage {s.stage_order} — after {s.delay_value} {s.delay_unit}
+                    </p>
+                    <p className="text-slate-600">{s.subject}</p>
+                    {s.body ? <p className="mt-1 whitespace-pre-wrap text-xs text-slate-500">{s.body}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-400">No follow-up stages yet — this campaign only sends the initial email.</p>
+            )}
+            <div className="space-y-3 border-t border-gray-100 pt-4">
+              <p className="text-sm font-medium text-gray-700">Add a follow-up stage</p>
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 whitespace-nowrap text-sm text-gray-500">Send after</span>
+                <input
+                  type="number"
+                  min={1}
+                  className="input-field w-20 shrink-0"
+                  value={stageForm.delay_value}
+                  onChange={(e) => setStageForm((f) => ({ ...f, delay_value: e.target.value }))}
+                />
+                <select
+                  className="input-field w-auto shrink-0"
+                  value={stageForm.delay_unit}
+                  onChange={(e) => setStageForm((f) => ({ ...f, delay_unit: e.target.value }))}
+                >
+                  <option value="minutes">Minutes</option>
+                  <option value="hours">Hours</option>
+                  <option value="days">Days</option>
+                </select>
+              </div>
+              <input
+                className="input-field"
+                placeholder="Subject"
+                value={stageForm.subject}
+                onChange={(e) => setStageForm((f) => ({ ...f, subject: e.target.value }))}
+              />
+              <textarea
+                className="input-field font-mono text-sm"
+                rows={5}
+                placeholder="Body — use {{Name}}, {{Company}} etc for personalization"
+                value={stageForm.body}
+                onChange={(e) => setStageForm((f) => ({ ...f, body: e.target.value }))}
+              />
+              <input
+                className="input-field"
+                placeholder="Closing (optional)"
+                value={stageForm.closing}
+                onChange={(e) => setStageForm((f) => ({ ...f, closing: e.target.value }))}
+              />
+              <button
+                type="button"
+                className="btn-primary flex items-center gap-2"
+                disabled={addingStage}
+                onClick={handleAddStage}
+              >
+                {addingStage ? <LoadingSpinner size="sm" /> : <FiPlus size={16} />} Add Stage
+              </button>
+            </div>
+          </div>
+        </Modal>
 
         <Modal
           isOpen={followUpModalOpen}
@@ -749,7 +978,7 @@ export default function UpdateListPage() {
     <PageShell maxWidth="max-w-[1500px]">
       <PageHeader
         eyebrow="Lead generation"
-        title="Update list"
+        title="Schedule email"
         subtitle="Search by campaign or recipient email — open a campaign to mark replies"
         actions={
           <Button variant="secondary" icon={FiArrowLeft} to="/campaigns">

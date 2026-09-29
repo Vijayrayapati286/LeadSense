@@ -159,6 +159,8 @@ class Campaign(Base):
     target_audience: Mapped[str | None] = mapped_column(String(255), nullable=True)
     subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
+    # leadsense = sent from this app; external = recorded after mail left another client.
+    origin: Mapped[str] = mapped_column(String(20), default="leadsense", server_default="leadsense", nullable=False)
     emails_sent: Mapped[int] = mapped_column(Integer, default=0)
     user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     org_id: Mapped[str | None] = mapped_column(
@@ -302,8 +304,9 @@ class Recipient(Base):
 class EmailVerification(Base):
     """Cached MillionVerifier (or mock) result for an email address.
 
-    Checked immediately before SES send so invalid/risky addresses never
-    leave LeadSense. Rows expire after MILLIONVERIFIER_CACHE_DAYS."""
+    Checked immediately before SES send. Bad addresses never leave LeadSense.
+    Risky addresses are skipped unless the sender confirms that send.
+    Rows expire after MILLIONVERIFIER_CACHE_DAYS."""
 
     __tablename__ = "email_verifications"
 
@@ -470,6 +473,13 @@ class CampaignRecipient(Base):
     # and their lists are shared/edited across the team. Carries forward
     # through follow-up stages (same row, not reset per stage).
     sender_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    # Reminder only. The scheduler reads next_send_at, never these columns.
+    manual_follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    manual_follow_up_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when the sender confirms "send all, including risky" for this queue.
+    # The pre-SES gate still blocks bad addresses. Follow-ups on this row keep
+    # the choice so a later stage does not blacklist someone the user opted in.
+    allow_risky_send: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="campaign_recipients")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="campaign_links")
@@ -559,10 +569,38 @@ class EmailLog(Base):
     message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     # AWS SES MessageId from send_raw_email (distinct from MIME Message-ID).
     ses_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # ses = sent by LeadSense; manual = recorded from mail sent outside the app.
+    source: Mapped[str] = mapped_column(String(20), default="ses", server_default="ses", nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="email_logs")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="email_logs")
     sender_user: Mapped["User | None"] = relationship("User", foreign_keys=[sender_user_id])
+
+
+class UserNotification(Base):
+    """In-app notice for the user who sent a message. Scoped by user_id only."""
+
+    __tablename__ = "user_notifications"
+    __table_args__ = (
+        UniqueConstraint("user_id", "dedupe_key", name="uq_user_notification_dedupe"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="bounce")
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    campaign_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=True)
+    recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bounce_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    emailed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
 
 
 class InboundEmail(Base):

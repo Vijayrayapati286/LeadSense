@@ -25,7 +25,7 @@ from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import User
 from app.schemas.schemas import MessageResponse, SimulateEventRequest, SimulateInboundRequest
-from app.services import event_service, inbound_email_service
+from app.services import bounce_notification_service, event_service, inbound_email_service
 from app.services.sns_verify import verify_sns_signature
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,7 @@ def _process_bounce(db: Session, ses_event: dict) -> None:
     bounce = ses_event.get("bounce", {})
     bounce_type = bounce.get("bounceType", "Permanent")
     campaign_id = _extract_campaign_id(ses_event)
+    ses_message_id = (ses_event.get("mail") or {}).get("messageId")
 
     for recipient in bounce.get("bouncedRecipients", []):
         email = recipient.get("emailAddress")
@@ -114,6 +115,13 @@ def _process_bounce(db: Session, ses_event: dict) -> None:
             campaign_id=campaign_id,
             detail=diagnostic or None,
             smtp_code=smtp_match.group(0) if smtp_match else None,
+        )
+        bounce_notification_service.notify_sender_of_bounce(
+            db,
+            ses_message_id=ses_message_id,
+            recipient_email=email,
+            bounce_type=bounce_type,
+            detail=diagnostic or None,
         )
 
 

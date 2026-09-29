@@ -10,11 +10,11 @@ Director) AND recipient_group IN (Jira Team) AND tag IN (Decision Maker).
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Query, Session
 
-from app.config import get_settings
 from app.models import CampaignRecipient, EmailVerification, Recipient, RecipientGroupMember, RecipientTag
+from app.services.millionverifier_service import verification_quality_sql
 from app.utils.helpers import utc_now
 
 SORTABLE_FIELDS = {
@@ -68,7 +68,7 @@ class RecipientSearchFilters:
     group_ids: list[int] = field(default_factory=list)
     tag_ids: list[int] = field(default_factory=list)
     exclude_suppressed: bool = False
-    # verified | failed | unchecked (MillionVerifier cache / suppression)
+    # good | risky | bad | unchecked (MillionVerifier quality)
     email_verification: str = ""
 
     campaign_id: int | None = None
@@ -84,40 +84,43 @@ def _multi_ilike(query: Query, column, values: list[str]) -> Query:
     return query.filter(or_(*[column.ilike(f"%{v}%") for v in values]))
 
 
-def _allowed_verification_results() -> set[str]:
-    raw = get_settings().millionverifier_allowed_results or "ok"
-    return {part.strip().lower() for part in raw.split(",") if part.strip()} or {"ok"}
+_VERIFICATION_FILTERS = {
+    "good": "good",
+    "verified": "good",
+    "risky": "risky",
+    "bad": "bad",
+    "failed": "bad",
+    "unchecked": "unchecked",
+}
 
 
 def _apply_email_verification_filter(query: Query, status: str) -> Query:
-    status = (status or "").strip().lower()
-    if status not in {"verified", "failed", "unchecked"}:
+    status = _VERIFICATION_FILTERS.get((status or "").strip().lower())
+    if status is None:
         return query
 
     now = utc_now()
-    allowed = _allowed_verification_results()
     email_lower = func.lower(Recipient.email)
     active_cache = select(EmailVerification.email).where(EmailVerification.expires_at > now)
 
-    if status == "verified":
-        return query.filter(
-            email_lower.in_(
-                select(EmailVerification.email).where(
-                    EmailVerification.expires_at > now,
-                    EmailVerification.result.in_(sorted(allowed)),
-                )
-            )
+    if status in {"good", "risky", "bad"}:
+        matched = select(EmailVerification.email).where(
+            EmailVerification.expires_at > now,
+            verification_quality_sql(status),
         )
-
-    if status == "failed":
+        if status != "bad":
+            return query.filter(email_lower.in_(matched))
+        # Suppressed with no active Good/Risky cache still counts as Bad.
+        not_bad = select(EmailVerification.email).where(
+            EmailVerification.expires_at > now,
+            or_(verification_quality_sql("good"), verification_quality_sql("risky")),
+        )
         return query.filter(
             or_(
-                Recipient.suppression_reason == "email_verification_failed",
-                email_lower.in_(
-                    select(EmailVerification.email).where(
-                        EmailVerification.expires_at > now,
-                        ~EmailVerification.result.in_(sorted(allowed)),
-                    )
+                email_lower.in_(matched),
+                and_(
+                    Recipient.suppression_reason == "email_verification_failed",
+                    ~email_lower.in_(not_bad),
                 ),
             )
         )

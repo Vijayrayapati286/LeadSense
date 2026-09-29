@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FiActivity, FiClock, FiEdit3, FiLayers, FiPauseCircle, FiPlus } from 'react-icons/fi';
+import { FiActivity, FiClock, FiEdit3, FiLayers, FiMail, FiPauseCircle, FiPlus } from 'react-icons/fi';
 import { campaignService } from '../services/services';
 import { useToast } from '../hooks/useToast';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -67,8 +67,7 @@ export default function CampaignsPage() {
       all: campaigns.length,
       active: campaigns.filter((c) => c.status?.toLowerCase() === 'active').length,
       inactive: campaigns.filter((c) => c.status?.toLowerCase() !== 'active').length,
-      // Campaigns with at least one send — same set you open from Update list
-      updateList: campaigns.filter((c) => Number(c.emails_sent) > 0).length,
+      scheduleEmail: campaigns.filter((c) => c.origin === 'external').length,
     }),
     [campaigns]
   );
@@ -107,6 +106,12 @@ export default function CampaignsPage() {
             <Button variant="secondary" icon={FiClock} onClick={() => setHistoryOpen(true)}>
               History
             </Button>
+            <Button variant="secondary" icon={FiEdit3} to="/campaigns/update-list">
+              Schedule email
+            </Button>
+            <Button variant="secondary" icon={FiMail} to="/campaigns/record-external">
+              Mail from outside
+            </Button>
             <Button variant="primary" icon={FiPlus} to="/campaigns/create">
               Create Campaign
             </Button>
@@ -119,12 +124,12 @@ export default function CampaignsPage() {
         <MetricCard label="Active" value={counts.active} hint="Currently running" tone="green" icon={FiActivity} />
         <MetricCard label="Inactive" value={counts.inactive} hint="Paused or completed" tone="amber" icon={FiPauseCircle} />
         <MetricCard
-          label="Update list"
-          value={counts.updateList}
-          hint="Campaigns ready to update"
+          label="Mail from outside"
+          value={counts.scheduleEmail}
+          hint="Mail recorded outside LeadSense"
           tone="blue"
-          icon={FiEdit3}
-          to="/campaigns/update-list"
+          icon={FiMail}
+          to="/campaigns/record-external"
         />
       </div>
 
@@ -189,8 +194,8 @@ export default function CampaignsPage() {
                       <p className="mt-0.5 font-medium text-slate-800">{formatDate(c.created_at)}</p>
                     </div>
                     <div>
-                      <p className="text-micro font-semibold uppercase tracking-wider text-slate-400">Emails sent</p>
-                      <p className="mt-0.5 font-medium text-slate-800">{c.emails_sent}</p>
+                      <p className="text-micro font-semibold uppercase tracking-wider text-slate-400">Contacts</p>
+                      <p className="mt-0.5 font-medium text-slate-800">{c.contact_count ?? c.emails_sent}</p>
                     </div>
                   </div>
                 </Link>

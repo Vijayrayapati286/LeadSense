@@ -8,6 +8,7 @@ export default function Modal({
   children,
   size = 'md',
   hideHeader = false,
+  level = 'base',
 }) {
   const titleId = useId();
   const dialogRef = useRef(null);
@@ -43,7 +44,7 @@ export default function Modal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className={`fixed inset-0 ${level === 'top' ? 'z-[80]' : 'z-50'} flex items-center justify-center p-4`}>
       {/* Backdrop sits under the sidebar (z-60), so only main content looks blurred */}
       <div className="fixed inset-0 bg-black/40 backdrop-blur-md" onClick={onClose} />
       <div

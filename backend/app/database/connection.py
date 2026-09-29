@@ -321,27 +321,11 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "target_customer": "TEXT",
                 "target_company_size": json_type,
                 "selling_points": json_type,
-                "offering_id": "VARCHAR(64)",
-                "organization_id": "VARCHAR(64)",
-                "smartops_offering_id": "VARCHAR(128)",
-                "file_format": "VARCHAR(16)",
-                "file_name": "VARCHAR(500)",
-                "file_url": "TEXT",
-                "doc_count": "INTEGER DEFAULT 0",
             }
             for name, ddl in offering_adds.items():
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE offerings ADD COLUMN {name} {ddl}"))
                     logger.info("Added offerings.%s", name)
-            try:
-                conn.execute(
-                    text(
-                        "UPDATE offerings SET offering_id = 'ls_off_' || CAST(id AS TEXT) "
-                        "WHERE offering_id IS NULL OR offering_id = ''"
-                    )
-                )
-            except Exception:
-                logger.exception("Failed to backfill offerings.offering_id")
 
         if "offering_matches" in tables:
             cols = {c["name"] for c in inspector.get_columns("offering_matches")}
@@ -392,6 +376,56 @@ def _ensure_app_settings_schema() -> None:
                 logger.info("Added app_settings.%s", name)
 
 
+def _ensure_manual_mail_schema() -> None:
+    """Columns for recording mail sent outside LeadSense. create_all does not ALTER."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    dialect = engine.dialect.name
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME"
+
+    with engine.begin() as conn:
+        if "campaigns" in tables:
+            cols = {c["name"] for c in inspector.get_columns("campaigns")}
+            if "origin" not in cols:
+                conn.execute(
+                    text("ALTER TABLE campaigns ADD COLUMN origin VARCHAR(20) DEFAULT 'leadsense'")
+                )
+                conn.execute(text("UPDATE campaigns SET origin = 'leadsense' WHERE origin IS NULL"))
+                logger.info("Added campaigns.origin")
+        if "email_logs" in tables:
+            cols = {c["name"] for c in inspector.get_columns("email_logs")}
+            adds = {
+                "source": "VARCHAR(20) DEFAULT 'ses'",
+                "subject": "VARCHAR(500)",
+                "body": "TEXT",
+            }
+            for name, ddl in adds.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE email_logs ADD COLUMN {name} {ddl}"))
+                    logger.info("Added email_logs.%s", name)
+            if "source" not in cols:
+                conn.execute(text("UPDATE email_logs SET source = 'ses' WHERE source IS NULL"))
+        if "campaign_recipients" in tables:
+            cols = {c["name"] for c in inspector.get_columns("campaign_recipients")}
+            if "manual_follow_up_at" not in cols:
+                conn.execute(text(f"ALTER TABLE campaign_recipients ADD COLUMN manual_follow_up_at {ts}"))
+                logger.info("Added campaign_recipients.manual_follow_up_at")
+            if "manual_follow_up_action" not in cols:
+                conn.execute(text("ALTER TABLE campaign_recipients ADD COLUMN manual_follow_up_action TEXT"))
+                logger.info("Added campaign_recipients.manual_follow_up_action")
+            if "allow_risky_send" not in cols:
+                risky_default = "FALSE" if dialect != "sqlite" else "0"
+                conn.execute(
+                    text(
+                        "ALTER TABLE campaign_recipients "
+                        f"ADD COLUMN allow_risky_send BOOLEAN NOT NULL DEFAULT {risky_default}"
+                    )
+                )
+                logger.info("Added campaign_recipients.allow_risky_send")
+
+
 def _ensure_ooo_inbound_schema() -> None:
     """Add OOO / inbound tracking columns and table. create_all does not ALTER."""
     from sqlalchemy import inspect
@@ -422,6 +456,51 @@ def _ensure_ooo_inbound_schema() -> None:
     # Re-inspect after possible create_all in init_db; this helper may run before or after.
 
 
+def _ensure_offerings_public_id() -> None:
+    """Add offerings.offering_id before create_all builds offering_documents.
+
+    create_all does not ALTER an existing offerings table. offering_documents
+    foreign-keys offerings.offering_id, so a database created before that
+    column existed crashes startup and the login proxy returns 502.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    if "offerings" not in set(inspector.get_table_names()):
+        return
+
+    cols = {c["name"] for c in inspector.get_columns("offerings")}
+    indexes = {ix["name"] for ix in inspector.get_indexes("offerings")}
+    adds = {
+        "offering_id": "VARCHAR(64)",
+        "organization_id": "VARCHAR(64)",
+        "smartops_offering_id": "VARCHAR(128)",
+        "file_format": "VARCHAR(16)",
+        "file_name": "VARCHAR(500)",
+        "file_url": "TEXT",
+        "doc_count": "INTEGER DEFAULT 0",
+    }
+    with engine.begin() as conn:
+        for name, ddl in adds.items():
+            if name not in cols:
+                conn.execute(text(f"ALTER TABLE offerings ADD COLUMN {name} {ddl}"))
+                logger.info("Added offerings.%s", name)
+        conn.execute(
+            text(
+                "UPDATE offerings SET offering_id = 'ls_off_' || CAST(id AS TEXT) "
+                "WHERE offering_id IS NULL OR offering_id = ''"
+            )
+        )
+        if "ix_offerings_offering_id" not in indexes:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_offerings_offering_id "
+                    "ON offerings (offering_id)"
+                )
+            )
+            logger.info("Added unique index ix_offerings_offering_id")
+
+
 def init_db() -> None:
     """Create all tables, seed dummy data if empty, and provision named users."""
     from app.models import (  # noqa: F401
@@ -435,6 +514,7 @@ def init_db() -> None:
         Role,
         Template,
         User,
+        UserNotification,
         UserRole,
     )
     from app.profile_extractor import models as _profile_extractor_models  # noqa: F401
@@ -444,6 +524,7 @@ def init_db() -> None:
     from app.storage import models as _storage_models  # noqa: F401
     from app.services.seed_service import provision_core_users, provision_provider, provision_tenants, seed_dummy_data
 
+    _ensure_offerings_public_id()
     Base.metadata.create_all(bind=engine)
     _ensure_linkedin_bulk_schema()
     _ensure_offerings_recommendation_schema()
@@ -451,6 +532,7 @@ def init_db() -> None:
     _ensure_organizations_schema()
     _ensure_rbac_schema()
     _ensure_ooo_inbound_schema()
+    _ensure_manual_mail_schema()
 
     db = SessionLocal()
     try:

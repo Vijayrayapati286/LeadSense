@@ -298,3 +298,51 @@ def test_cancel_skips_replied_and_unscheduled(db, service):
     )
     assert result["cancelled"] == 0
     assert result["skipped"] == 2
+
+
+def test_adding_stage_queues_followup_for_people_already_sent(db, service):
+    from app.schemas.schemas import CampaignSequenceStageCreate
+
+    user = _user(db)
+    campaign = _campaign(db, user)
+    sent = _recipient(db)
+    replied = _recipient(db)
+    cr_sent = _link(db, campaign, sent, status="sent")
+    cr_replied = _link(db, campaign, replied, status="replied")
+    cr_sent.last_sent_at = utc_now() - timedelta(days=10)
+    db.commit()
+
+    service.create_sequence_stage(
+        db,
+        campaign.id,
+        CampaignSequenceStageCreate(
+            stage_order=1,
+            delay_value=3,
+            delay_unit="days",
+            subject="Checking in",
+            body="Hello",
+        ),
+    )
+    db.refresh(cr_sent)
+    db.refresh(cr_replied)
+    assert cr_sent.next_send_at is not None
+    assert derive_follow_up_state(cr_sent)[0] == "scheduled"
+    assert cr_replied.next_send_at is None
+
+
+def test_unmark_replied_can_be_turned_off(db, service):
+    user = _user(db)
+    campaign = _campaign(db, user)
+    recipient = _recipient(db)
+    cr = _link(db, campaign, recipient, status="sent")
+    db.commit()
+
+    service.mark_recipients_replied(db, campaign.id, [recipient.id])
+    db.refresh(cr)
+    assert cr.status == "replied"
+
+    result = service.unmark_recipients_replied(db, campaign.id, [recipient.id])
+    assert result["updated"] == 1
+    db.refresh(cr)
+    assert cr.status == "sent"
+    assert cr.replied_at is None

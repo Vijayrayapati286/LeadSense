@@ -35,6 +35,9 @@ export default function CampaignCard({
           {c.owner ? (
             <p className="mt-1 truncate text-caption text-slate-400">{c.owner}</p>
           ) : null}
+          {c.origin === 'external' ? (
+            <p className="mt-1 text-caption font-medium text-primary-600">Outside mail</p>
+          ) : null}
         </div>
         <div className="shrink-0">
           <StatusBadge status={c.status} />
@@ -51,7 +54,7 @@ export default function CampaignCard({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <StatBlock label="Emails Sent" value={c.emails_sent} />
+        <StatBlock label="Contacts" value={c.contact_count ?? c.emails_sent} />
         <StatBlock label="Created" value={formatDate(c.created_at)} />
       </div>
 

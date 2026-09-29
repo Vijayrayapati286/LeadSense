@@ -8,6 +8,7 @@ from app.middleware.auth import get_current_user
 from app.models import User
 from app.schemas.schemas import AppSettingResponse, AppSettingUpdate
 from app.services.app_settings_service import AppSettingsService
+from app.services.credit_balance_service import get_provider_credits
 from app.services.millionverifier_service import millionverifier_diagnostic
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
@@ -44,6 +45,14 @@ def update_app_settings(
 ):
     row = app_settings_service.update(db, data.model_dump(exclude_unset=True))
     return _to_response(row)
+
+
+@router.get("/credits")
+def get_credit_balances(
+    current_user: User = Depends(get_current_user),
+):
+    """Remaining MillionVerifier and Apify credits. Never returns secrets."""
+    return get_provider_credits()
 
 
 @router.get("/millionverifier")

@@ -6,10 +6,12 @@ import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import StatusBadge from '../components/ui/StatusBadge';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import Button from '../components/ui/Button';
 import PageHeader from '../components/ui/PageHeader';
 import PageShell from '../components/ui/PageShell';
 import { MetricCard } from '../components/ui/GrowthWorkspace';
 import { formatDateTime, debounce } from '../utils/helpers';
+import { deliveryStatusDisplay } from '../utils/verificationStatus';
 
 const EMPTY_FILTERS = { userId: '', campaignId: '', groupId: '', dateFrom: '', dateTo: '' };
 
@@ -24,7 +26,14 @@ function LogDetailCells({ log, indent = false }) {
         {log.sender_email && <p className="text-xs text-gray-400">{log.sender_email}</p>}
       </td>
       <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{formatDateTime(log.sent_at)}</td>
-      <td className="px-6 py-3"><StatusBadge status={log.status} /></td>
+      <td className="px-6 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge {...deliveryStatusDisplay(log.status, { errorMessage: log.error_message })} />
+          {log.source === 'manual' && (
+            <span className="text-xs font-medium text-primary-700">Outside mail</span>
+          )}
+        </div>
+      </td>
       <td className="px-6 py-3 text-gray-500 text-xs max-w-xs truncate">{log.error_message || '—'}</td>
     </>
   );
@@ -131,6 +140,11 @@ export default function EmailLogsPage() {
         eyebrow="Lead generation"
         title="Email logs"
         subtitle="Track all sent, failed, and pending emails."
+        actions={
+          <Button variant="secondary" icon={FiCheckCircle} onClick={toggleVerifiedOnly}>
+            {verifiedOnly ? 'All emails' : `Verified emails${verifiedTotal ? ` (${verifiedTotal})` : ''}`}
+          </Button>
+        }
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -330,7 +344,13 @@ export default function EmailLogsPage() {
                                 {group.latest_sent_at ? formatDateTime(group.latest_sent_at) : '—'}
                               </td>
                               <td className="px-6 py-4">
-                                {group.latest_status ? <StatusBadge status={group.latest_status} /> : '—'}
+                                {group.latest_status ? (
+                                  <StatusBadge
+                                    {...deliveryStatusDisplay(group.latest_status, {
+                                      errorMessage: group.logs?.[0]?.error_message,
+                                    })}
+                                  />
+                                ) : '—'}
                               </td>
                               <td className="px-6 py-4 text-gray-400">—</td>
                             </tr>

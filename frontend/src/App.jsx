@@ -11,6 +11,7 @@ import CampaignsPage from './pages/CampaignsPage';
 import CreateCampaignPage from './pages/CreateCampaignPage';
 import CampaignDetailPage from './pages/CampaignDetailPage';
 import UpdateListPage from './pages/UpdateListPage';
+import RecordOutsideMailPage from './pages/RecordOutsideMailPage';
 import RecipientsPage from './pages/RecipientsPage';
 import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
@@ -67,6 +68,7 @@ export default function App() {
           <Route element={<TenantProductRoute />}>
             <Route path="/campaigns" element={<CampaignsPage />} />
             <Route path="/campaigns/create" element={<CreateCampaignPage />} />
+            <Route path="/campaigns/record-external" element={<RecordOutsideMailPage />} />
             <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
             <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />
             <Route path="/recipients" element={<RecipientsPage />} />
@@ -92,6 +94,7 @@ export default function App() {
           </Route>
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/create" element={<CreateCampaignPage />} />
+          <Route path="/campaigns/record-external" element={<RecordOutsideMailPage />} />
           <Route path="/campaigns/update-list" element={<UpdateListPage />} />
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
           <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />

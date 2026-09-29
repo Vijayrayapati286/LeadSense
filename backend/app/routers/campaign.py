@@ -1,6 +1,7 @@
 """Campaign CRUD routes."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -27,6 +28,8 @@ from app.schemas.schemas import (
     MarkRepliedResponse,
     MessageResponse,
     RetagListRequest,
+    RecordManualActivityRequest,
+    RecordManualActivityResponse,
     ScheduleFollowUpRequest,
     ScheduleFollowUpResponse,
     TemplateCreate,
@@ -98,7 +101,44 @@ def list_campaigns(
     campaigns = campaign_service.get_all(
         db, skip=skip, limit=limit, org_id=getattr(current_user, "org_id", None)
     )
-    return [CampaignResponse.model_validate(c) for c in campaigns]
+    ids = [c.id for c in campaigns]
+    counts: dict[int, int] = {}
+    if ids:
+        counts = {
+            campaign_id: total
+            for campaign_id, total in (
+                db.query(CampaignRecipient.campaign_id, func.count(CampaignRecipient.id))
+                .filter(CampaignRecipient.campaign_id.in_(ids))
+                .group_by(CampaignRecipient.campaign_id)
+                .all()
+            )
+        }
+    items = []
+    for campaign in campaigns:
+        item = CampaignResponse.model_validate(campaign)
+        item.contact_count = counts.get(campaign.id, 0)
+        items.append(item)
+    return items
+
+
+@router.post("/campaigns/manual-activity", response_model=RecordManualActivityResponse, status_code=201)
+def record_manual_activity(
+    data: RecordManualActivityRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record mail already sent outside LeadSense. Does not send email."""
+    try:
+        result = campaign_service.record_manual_activity(
+            db,
+            data,
+            user_id=current_user.id,
+            user_name=current_user.name,
+            org_id=getattr(current_user, "org_id", None),
+        )
+        return RecordManualActivityResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/campaigns/for-update", response_model=list[CampaignResponse])
@@ -341,6 +381,7 @@ def get_campaign_recipients(
         response.recipient_email = cr.recipient.email
         response.recipient_company = cr.recipient.company
         response.recipient_designation = cr.recipient.designation
+        response.recipient_industry = cr.recipient.industry
         response.is_suppressed = cr.recipient.is_suppressed
         response.suppression_reason = cr.recipient.suppression_reason
         response.email_verification_status = v_status
@@ -377,6 +418,20 @@ def mark_campaign_recipients_replied(
 ):
     try:
         result = campaign_service.mark_recipients_replied(db, campaign_id, data.recipient_ids)
+        return MarkRepliedResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/campaign/{campaign_id}/recipients/unmark-replied", response_model=MarkRepliedResponse)
+def unmark_campaign_recipients_replied(
+    campaign_id: int,
+    data: MarkRepliedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.unmark_recipients_replied(db, campaign_id, data.recipient_ids)
         return MarkRepliedResponse(**result)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
