@@ -138,6 +138,42 @@ def test_api_invalid_result_blocks(monkeypatch):
         db.commit()
         row = db.query(EmailVerification).filter(EmailVerification.email == "bad@example.com").one()
         assert row.result == "invalid"
+        assert row.quality == "bad"
+    finally:
+        db.close()
+
+
+def test_api_risky_stays_risky_and_does_not_send(monkeypatch):
+    monkeypatch.setenv("USE_MOCK_MILLIONVERIFIER", "false")
+    monkeypatch.setenv("MILLIONVERIFIER_API_KEY", "test-key")
+    monkeypatch.setenv("MILLIONVERIFIER_ALLOWED_RESULTS", "ok")
+    get_settings.cache_clear()
+    svc = MillionVerifierService()
+
+    fake = {
+        "email": "risky@example.com",
+        "result": "catch_all",
+        "resultcode": 2,
+        "quality": "Risky",
+        "error": "",
+    }
+    db = SessionLocal()
+    try:
+        with patch.object(svc, "_call_api", return_value=fake):
+            gate = svc.verify_email(db, "risky@example.com")
+        assert gate.allowed is False
+        assert gate.definitive_reject is True
+        assert gate.result == "catch_all"
+        db.commit()
+        row = db.query(EmailVerification).filter(EmailVerification.email == "risky@example.com").one()
+        assert row.quality == "risky"
+        from app.services.millionverifier_service import resolve_verification_status
+
+        assert resolve_verification_status(
+            email=row.email,
+            suppression_reason="email_verification_failed",
+            cache_row=row,
+        ) == ("risky", "catch_all")
     finally:
         db.close()
 
@@ -314,6 +350,8 @@ def test_expired_cache_is_refreshed(monkeypatch):
 
 
 def test_resolve_verification_status_helpers():
+    from types import SimpleNamespace
+
     from app.services.millionverifier_service import resolve_verification_status
 
     assert resolve_verification_status(
@@ -324,7 +362,42 @@ def test_resolve_verification_status_helpers():
         email="a@b.com",
         suppression_reason="email_verification_failed",
         cache_row=None,
-    )[0] == "failed"
+    ) == ("bad", "invalid")
+
+    fresh = utc_now() + timedelta(days=1)
+
+    def row(result, quality):
+        return SimpleNamespace(result=result, quality=quality, expires_at=fresh)
+
+    assert resolve_verification_status(
+        email="good@example.com",
+        suppression_reason=None,
+        cache_row=row("ok", "good"),
+    ) == ("good", "ok")
+
+    assert resolve_verification_status(
+        email="risky@example.com",
+        suppression_reason="email_verification_failed",
+        cache_row=row("catch_all", "risky"),
+    ) == ("risky", "catch_all")
+
+    assert resolve_verification_status(
+        email="bad@example.com",
+        suppression_reason="email_verification_failed",
+        cache_row=row("invalid", "bad"),
+    ) == ("bad", "invalid")
+
+    assert resolve_verification_status(
+        email="legacy@example.com",
+        suppression_reason=None,
+        cache_row=row("catch_all", None),
+    ) == ("risky", "catch_all")
+
+    from app.services.millionverifier_service import rejection_status
+
+    assert rejection_status("risky", "catch_all") == "risky"
+    assert rejection_status("bad", "invalid") == "invalid_email"
+    assert rejection_status(None, "disposable") == "invalid_email"
 
 
 def test_apply_rejection_suppresses_recipient():

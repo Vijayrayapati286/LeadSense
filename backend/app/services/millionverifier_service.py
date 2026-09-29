@@ -50,6 +50,24 @@ _INTERNAL_STATUS = {
     "error": "error",
 }
 
+# User-facing labels. These follow MillionVerifier `quality` and are never
+# merged: risky stays risky, even when the send allow-list rejects it.
+DISPLAY_GOOD = "good"
+DISPLAY_RISKY = "risky"
+DISPLAY_BAD = "bad"
+DISPLAY_UNCHECKED = "unchecked"
+QUALITY_LABELS = frozenset({DISPLAY_GOOD, DISPLAY_RISKY, DISPLAY_BAD})
+
+# Fallback only when `quality` is missing or not one of the three labels.
+# `unknown` and `error` are left alone so they are not shown as Risky or Bad.
+RESULT_TO_QUALITY = {
+    "ok": DISPLAY_GOOD,
+    "valid": DISPLAY_GOOD,
+    "catch_all": DISPLAY_RISKY,
+    "invalid": DISPLAY_BAD,
+    "disposable": DISPLAY_BAD,
+}
+
 
 class MillionVerifierConfigError(RuntimeError):
     """Raised when MillionVerifier is enabled but misconfigured."""
@@ -163,6 +181,7 @@ class VerificationGateResult:
     allowed: bool
     definitive_reject: bool = False
     result: str | None = None
+    quality: str | None = None
     detail: str | None = None
     from_cache: bool = False
 
@@ -429,11 +448,14 @@ class MillionVerifierService:
         cached = self._get_cached(db, normalized)
         if cached is not None:
             allowed = cached.result.lower() in self._allowed_results()
+            cached_quality = (cached.quality or "").strip().lower() or None
             return VerificationGateResult(
                 allowed=allowed,
                 definitive_reject=cached.result.lower() in _DEFINITIVE_RESULTS and not allowed,
                 result=cached.result,
-                detail=f"Cached MillionVerifier result: {cached.result}",
+                quality=cached_quality,
+                detail=f"Cached MillionVerifier result: {cached.result}"
+                + (f" (quality={cached_quality})" if cached_quality else ""),
                 from_cache=True,
             )
 
@@ -515,7 +537,9 @@ class MillionVerifierService:
         except (TypeError, ValueError):
             resultcode_int = None
         quality = data.get("quality")
-        quality_str = str(quality) if quality is not None else None
+        quality_str = str(quality).strip().lower() if quality is not None else None
+        if quality_str == "":
+            quality_str = None
 
         self._upsert_cache(
             db,
@@ -533,6 +557,7 @@ class MillionVerifierService:
             allowed=allowed,
             definitive_reject=definitive and not allowed,
             result=result,
+            quality=quality_str,
             detail=f"MillionVerifier result: {result}"
             + (f" (quality={quality_str})" if quality_str else ""),
         )
@@ -547,8 +572,12 @@ class MillionVerifierService:
         gate: VerificationGateResult,
         sender_user_id: int | None = None,
     ) -> None:
-        """Suppress + mark invalid_email for a definitive verification failure."""
+        """Suppress a definitive verification failure.
+
+        Risky addresses are stored as ``risky``. Bad addresses stay ``invalid_email``.
+        """
         detail = gate.detail or f"MillionVerifier rejected: {gate.result}"
+        status = rejection_status(gate.quality, gate.result)
         recipient.is_suppressed = True
         recipient.suppression_reason = "email_verification_failed"
 
@@ -562,17 +591,54 @@ class MillionVerifierService:
                 detail=detail,
             )
         )
-        campaign_recipient.status = "invalid_email"
+        campaign_recipient.status = status
         campaign_recipient.next_send_at = None
         db.add(
             EmailLog(
                 campaign_id=campaign_id,
                 recipient_id=recipient.id,
-                status="invalid_email",
+                status=status,
                 error_message=detail,
                 sender_user_id=sender_user_id,
             )
         )
+
+
+def rejection_status(quality: str | None, result: str | None) -> str:
+    """Campaign/log status for a blocked address. Risky stays risky; bad is invalid."""
+    if classify_cached_verification(quality, result) == DISPLAY_RISKY:
+        return "risky"
+    return "invalid_email"
+
+
+def classify_cached_verification(quality: str | None, result: str | None) -> str | None:
+    """Map a stored MillionVerifier row to good, risky, or bad.
+
+    ``quality`` wins when it is already one of those three values. A missing
+    quality falls back to ``result`` (``catch_all`` → risky). Anything else,
+    including ``unknown``, is not relabeled.
+    """
+    stored_quality = (quality or "").strip().lower()
+    if stored_quality in QUALITY_LABELS:
+        return stored_quality
+    stored_result = (result or "").strip().lower()
+    return RESULT_TO_QUALITY.get(stored_result)
+
+
+def verification_quality_sql(label: str):
+    """SQL expression: cached row displays as ``label`` (good, risky, or bad)."""
+    from sqlalchemy import and_, func, or_
+
+    quality_col = func.lower(func.coalesce(EmailVerification.quality, ""))
+    result_col = func.lower(func.coalesce(EmailVerification.result, ""))
+    result_values = [result for result, quality in RESULT_TO_QUALITY.items() if quality == label]
+    return or_(
+        quality_col == label,
+        and_(
+            quality_col.notin_(tuple(QUALITY_LABELS)),
+            result_col.in_(result_values),
+        ),
+    )
 
 
 def resolve_verification_status(
@@ -582,21 +648,28 @@ def resolve_verification_status(
     cache_row: EmailVerification | None,
     allowed_results: set[str] | None = None,
 ) -> tuple[str, str | None]:
-    """Return (status, raw_result) for UI: verified | failed | unchecked."""
-    allowed = allowed_results or {"ok"}
-    if (suppression_reason or "") == "email_verification_failed":
-        raw = cache_row.result if cache_row else "invalid"
-        return "failed", raw
+    """Return (status, raw_result) for UI: good | risky | bad | unchecked.
 
+    The send allow-list is not used here. A risky address stays risky even
+    when it is suppressed and will not be emailed.
+    """
+    del allowed_results  # display follows quality, not which results may send
+    del email
     if cache_row is not None:
         expires = _as_utc(cache_row.expires_at)
         if expires is not None and expires > utc_now():
-            raw = (cache_row.result or "").strip().lower() or "unknown"
-            if raw in allowed:
-                return "verified", raw
-            return "failed", raw
+            raw = (cache_row.result or "").strip().lower() or None
+            label = classify_cached_verification(cache_row.quality, cache_row.result)
+            if label:
+                return label, raw
+            if raw:
+                return raw, raw
 
-    return "unchecked", None
+    if (suppression_reason or "") == "email_verification_failed":
+        raw = (cache_row.result or "").strip().lower() if cache_row and cache_row.result else "invalid"
+        return DISPLAY_BAD, raw or "invalid"
+
+    return DISPLAY_UNCHECKED, None
 
 
 def verification_lookup(db: Session, emails: list[str]) -> dict[str, EmailVerification]:

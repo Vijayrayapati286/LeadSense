@@ -74,6 +74,7 @@ export default function BulkHistoryPage() {
   const [data, setData] = useState({ total: 0, items: [], page: 1 });
   const [counts, setCounts] = useState({ all: 0, completed: 0, needs_review: 0, failed: 0, recents: 0 });
   const [downloadingId, setDownloadingId] = useState(null);
+  const [addingId, setAddingId] = useState(null);
   const [downloadingAll, setDownloadingAll] = useState(false);
   const [sortOrder, setSortOrder] = useState('newest'); // newest | oldest
   const [dateFrom, setDateFrom] = useState('');
@@ -114,6 +115,21 @@ export default function BulkHistoryPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  async function handleAddToIcp(job) {
+    if (!job?.job_id || addingId || downloadingId || downloadingAll) return;
+    setAddingId(job.job_id);
+    try {
+      const result = await linkedinProfileService.addBulkJobToIcp(job.job_id);
+      toast.success(
+        `Added to ICP: ${result?.added ?? 0} new, ${result?.updated ?? 0} updated (${result?.eligible ?? 0} verified)`,
+      );
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Could not add profiles to ICP');
+    } finally {
+      setAddingId(null);
+    }
+  }
 
   async function handleDownload(job) {
     if (!job?.job_id || downloadingId || downloadingAll) return;
@@ -453,6 +469,8 @@ export default function BulkHistoryPage() {
                     job={job}
                     onDownload={isRecents ? undefined : handleDownload}
                     downloading={downloadingId === job.job_id}
+                    onAddToIcp={handleAddToIcp}
+                    adding={addingId === job.job_id}
                   />
                 </div>
               ))}

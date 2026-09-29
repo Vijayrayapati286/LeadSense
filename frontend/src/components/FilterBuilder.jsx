@@ -30,14 +30,15 @@ export const FIELD_DEFS = [
 
 const CAMPAIGN_STATUSES = [
   'not_contacted', 'queued', 'sent', 'delivered', 'opened', 'clicked',
-  'replied', 'bounced', 'out_of_office', 'invalid_email', 'suppressed',
+  'replied', 'bounced', 'out_of_office', 'invalid_email', 'risky', 'suppressed',
 ];
 
 export const RESPONSE_TAGS = ['Cold', 'Negative', 'Warm', 'Hot'];
 
 export const EMAIL_VERIFICATION_OPTIONS = [
-  { value: 'verified', label: 'Verified' },
-  { value: 'failed', label: 'Failed' },
+  { value: 'good', label: 'Good' },
+  { value: 'risky', label: 'Risky' },
+  { value: 'bad', label: 'Bad' },
   { value: 'unchecked', label: 'Not checked yet' },
 ];
 

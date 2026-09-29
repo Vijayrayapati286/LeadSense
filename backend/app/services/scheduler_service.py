@@ -11,10 +11,11 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database.connection import SessionLocal
-from app.models import CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template, User
+from app.models import Campaign, CampaignRecipient, CampaignSequenceStage, EmailLog, Recipient, Template, User
 from app.services.app_settings_service import AppSettingsService
 from app.services.millionverifier_service import millionverifier_service
 from app.services.ses_service import SESService
@@ -56,7 +57,7 @@ def _gate_before_ses(db: Session, cr: CampaignRecipient, recipient: Recipient, o
     return False
 
 # Statuses that should never receive another automated follow-up.
-TERMINAL_STATUSES = {"replied", "suppressed", "bounced", "invalid_email"}
+TERMINAL_STATUSES = {"replied", "suppressed", "bounced", "invalid_email", "risky"}
 
 
 def _terminal_statuses() -> set[str]:
@@ -126,11 +127,13 @@ def process_due_followups() -> None:
             row.id
             for row in db.query(CampaignRecipient.id)
             .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
+            .join(Campaign, Campaign.id == CampaignRecipient.campaign_id)
             .filter(
                 CampaignRecipient.next_send_at.isnot(None),
                 CampaignRecipient.next_send_at <= utc_now(),
                 CampaignRecipient.status.notin_(_terminal_statuses()),
                 Recipient.is_suppressed == False,  # noqa: E712
+                or_(Campaign.origin.is_(None), Campaign.origin != "external"),
             )
             .all()
         ]
@@ -245,11 +248,13 @@ def process_queued_initial_sends() -> None:
             row.id
             for row in db.query(CampaignRecipient.id)
             .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
+            .join(Campaign, Campaign.id == CampaignRecipient.campaign_id)
             .filter(
                 CampaignRecipient.status == "queued",
                 CampaignRecipient.next_send_at.isnot(None),
                 CampaignRecipient.next_send_at <= utc_now(),
                 Recipient.is_suppressed == False,  # noqa: E712
+                or_(Campaign.origin.is_(None), Campaign.origin != "external"),
             )
             .all()
         ]

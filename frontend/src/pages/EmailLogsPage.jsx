@@ -10,6 +10,7 @@ import PageHeader from '../components/ui/PageHeader';
 import PageShell from '../components/ui/PageShell';
 import { MetricCard } from '../components/ui/GrowthWorkspace';
 import { formatDateTime, debounce } from '../utils/helpers';
+import { deliveryStatusDisplay } from '../utils/verificationStatus';
 
 const EMPTY_FILTERS = { userId: '', campaignId: '', groupId: '', dateFrom: '', dateTo: '' };
 
@@ -24,7 +25,14 @@ function LogDetailCells({ log, indent = false }) {
         {log.sender_email && <p className="text-xs text-gray-400">{log.sender_email}</p>}
       </td>
       <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{formatDateTime(log.sent_at)}</td>
-      <td className="px-6 py-3"><StatusBadge status={log.status} /></td>
+      <td className="px-6 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge {...deliveryStatusDisplay(log.status, { errorMessage: log.error_message })} />
+          {log.source === 'manual' && (
+            <span className="text-xs font-medium text-primary-700">Outside mail</span>
+          )}
+        </div>
+      </td>
       <td className="px-6 py-3 text-gray-500 text-xs max-w-xs truncate">{log.error_message || '—'}</td>
     </>
   );
@@ -289,23 +297,6 @@ export default function EmailLogsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {logs.map((log) => (
-                    <tr key={log.id}>
-                      <td className="px-6 py-4">
-                        <p className="font-medium text-gray-900">{log.recipient_name || log.recipient_email || 'Prospect'}</p>
-                        <p className="text-xs text-gray-500">{log.recipient_email}</p>
-                      </td>
-                      <td className="px-6 py-4 text-gray-600">{log.campaign_name || 'Campaign'}</td>
-                      <td className="px-6 py-4 text-gray-600">
-                        {log.sender_name || <span className="text-gray-400">—</span>}
-                        {log.sender_email && <p className="text-xs text-gray-400">{log.sender_email}</p>}
-                      </td>
-                      <td className="px-6 py-4 text-gray-600 whitespace-nowrap">{formatDateTime(log.sent_at)}</td>
-                      <td className="px-6 py-4"><StatusBadge status={log.status} /></td>
-                      <td className="px-6 py-4 text-gray-500 text-xs max-w-xs truncate">{log.error_message || '—'}</td>
-                    </tr>
-                  ))}
-                  {logs.length === 0 && (
                   {grouped
                     ? groups.map((group) => {
                         const key = (group.group_key || group.recipient_email || '').toLowerCase();
@@ -347,7 +338,13 @@ export default function EmailLogsPage() {
                                 {group.latest_sent_at ? formatDateTime(group.latest_sent_at) : '—'}
                               </td>
                               <td className="px-6 py-4">
-                                {group.latest_status ? <StatusBadge status={group.latest_status} /> : '—'}
+                                {group.latest_status ? (
+                                  <StatusBadge
+                                    {...deliveryStatusDisplay(group.latest_status, {
+                                      errorMessage: group.logs?.[0]?.error_message,
+                                    })}
+                                  />
+                                ) : '—'}
                               </td>
                               <td className="px-6 py-4 text-gray-400">—</td>
                             </tr>

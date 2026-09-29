@@ -40,6 +40,7 @@ import {
 import { useToast } from '../hooks/useToast';
 import { useContactSearch } from '../hooks/useContactSearch';
 import { extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
+import { deliveryStatusDisplay } from '../utils/verificationStatus';
 import { buildRecipientContext, buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -272,6 +273,7 @@ export default function CampaignDetailPage() {
     r.status !== 'replied' &&
     r.status !== 'bounced' &&
     r.status !== 'invalid_email' &&
+    r.status !== 'risky' &&
     !r.is_suppressed;
 
   const isFollowUpSchedulable = (r) =>
@@ -1212,12 +1214,22 @@ export default function CampaignDetailPage() {
               <button type="button" onClick={() => setHistoryOpen(true)} className="btn-secondary flex items-center gap-2">
                 <FiClock size={16} /> History
               </button>
-              <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
-                <FiSend size={16} /> Send Campaign
-                {activeSelectedIds.length > 0 && (
-                  <span className="bg-white/20 rounded-full px-1.5 text-xs">{activeSelectedIds.length}</span>
-                )}
-              </button>
+              {campaign.origin === 'external' ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/campaigns/record-external?campaign=${id}`)}
+                  className="btn-primary flex items-center gap-2"
+                >
+                  <FiMail size={16} /> Schedule email
+                </button>
+              ) : (
+                <button onClick={handleOpenPreview} className="btn-primary flex items-center gap-2">
+                  <FiSend size={16} /> Send Campaign
+                  {activeSelectedIds.length > 0 && (
+                    <span className="bg-white/20 rounded-full px-1.5 text-xs">{activeSelectedIds.length}</span>
+                  )}
+                </button>
+              )}
             </>
           )}
         </div>
@@ -1283,6 +1295,11 @@ export default function CampaignDetailPage() {
                   </p>
                 </div>
               </div>
+              {campaign.origin === 'external' && (
+                <p className="mt-4 text-sm text-primary-700">
+                  Tracked outside LeadSense. Sends from this campaign stay manual.
+                </p>
+              )}
               {campaign.description && (
                 <div className="mt-4">
                   <p className="text-gray-500">Description</p>
@@ -1608,7 +1625,11 @@ export default function CampaignDetailPage() {
                                   </p>
                                 )}
                               </div>
-                              <StatusBadge status={r.status} />
+                              <StatusBadge
+                                {...deliveryStatusDisplay(r.status, {
+                                  verificationStatus: r.email_verification_status,
+                                })}
+                              />
                             </div>
                           </div>
                         </div>
@@ -1616,6 +1637,12 @@ export default function CampaignDetailPage() {
                         <div className="mt-auto grid grid-cols-2 gap-3">
                           <div className="rounded-xl bg-slate-50 py-3 text-center">
                             <div className="text-sm font-bold text-slate-950">{r.follow_up_label || 'No follow-up'}</div>
+                            {r.manual_follow_up_at && (
+                              <div className="mt-1 truncate px-2 text-xs text-slate-500">
+                                Outside: {formatDate(r.manual_follow_up_at)}
+                                {r.manual_follow_up_action ? ` · ${r.manual_follow_up_action}` : ''}
+                              </div>
+                            )}
                             <div className="mt-0.5 text-micro font-semibold uppercase tracking-wider text-slate-400">Follow-up</div>
                           </div>
                           <div className="rounded-xl bg-slate-50 py-3 text-center">
@@ -2654,7 +2681,7 @@ export default function CampaignDetailPage() {
                         </p>
                         <p className="text-xs text-gray-500 truncate">{log.recipient_email}</p>
                       </div>
-                      <StatusBadge status={log.status} />
+                      <StatusBadge {...deliveryStatusDisplay(log.status, { errorMessage: log.error_message })} />
                     </div>
                     <p className="text-xs text-gray-500 mt-1">{formatDateTime(log.sent_at)}</p>
                     {log.error_message ? (

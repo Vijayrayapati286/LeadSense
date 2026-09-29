@@ -28,6 +28,7 @@ from app.routers import (
     leads,
     logs,
     mailers,
+    notifications,
     onboard,
     organizations,
     rbac,
@@ -111,6 +112,7 @@ app.include_router(templates.router, prefix=API_PREFIX)
 app.include_router(mailers.router, prefix=API_PREFIX)
 app.include_router(email.router, prefix=API_PREFIX)
 app.include_router(logs.router, prefix=API_PREFIX)
+app.include_router(notifications.router, prefix=API_PREFIX)
 app.include_router(blacklist.router, prefix=API_PREFIX)
 app.include_router(webhooks.router, prefix=API_PREFIX)
 app.include_router(app_settings.router, prefix=API_PREFIX)

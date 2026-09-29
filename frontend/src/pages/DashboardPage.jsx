@@ -29,6 +29,7 @@ import { useToast } from '../hooks/useToast';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
 import Button from '../components/ui/Button';
+import NotificationBell from '../components/NotificationBell';
 import PageShell from '../components/ui/PageShell';
 import PageHeader from '../components/ui/PageHeader';
 import SurfaceCard from '../components/ui/SurfaceCard';
@@ -144,9 +145,12 @@ export default function DashboardPage() {
         title={<>Welcome back, {firstName}! <span aria-hidden="true">👋</span></>}
         subtitle="Here's what's happening with your campaigns today."
         actions={
-          <Button icon={FiDownload} loading={exporting} onClick={handleExportReport}>
-            Export report
-          </Button>
+          <>
+            <NotificationBell />
+            <Button icon={FiDownload} loading={exporting} onClick={handleExportReport}>
+              Export report
+            </Button>
+          </>
         }
       />
 

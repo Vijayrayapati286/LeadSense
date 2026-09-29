@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FiUser, FiMail, FiBriefcase, FiShield, FiSliders, FiSave } from 'react-icons/fi';
+import { FiUser, FiMail, FiBriefcase, FiShield, FiSliders, FiSave, FiCreditCard } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import { appSettingsService, authService } from '../services/services';
@@ -7,6 +7,47 @@ import { RESPONSE_TAGS } from '../components/FilterBuilder';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import PageHeader from '../components/ui/PageHeader';
 import PageShell from '../components/ui/PageShell';
+
+function formatCount(value) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  return Number(value).toLocaleString();
+}
+
+function formatUsd(value) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function creditLabel(block, format) {
+  if (!block) return 'Unavailable';
+  if (block.status === 'ok') {
+    const amount = format(block);
+    return amount == null ? 'Unavailable' : `${amount} remaining`;
+  }
+  if (block.status === 'not_configured') return 'Not configured';
+  if (block.status === 'mock') return 'Mock mode';
+  if (block.status === 'disabled') return 'Disabled';
+  return 'Unavailable';
+}
+
+function CreditRow({ name, block, format, extra }) {
+  const label = creditLabel(block, format);
+  const ok = block?.status === 'ok';
+  return (
+    <div className="flex items-center justify-between gap-3 p-3 border border-gray-100 rounded-lg">
+      <div className="min-w-0">
+        <span className="text-sm font-medium text-gray-700">{name}</span>
+        {extra ? <p className="text-xs text-gray-400 mt-0.5">{extra}</p> : null}
+        {!ok && block?.detail ? <p className="text-xs text-gray-400 mt-0.5">{block.detail}</p> : null}
+      </div>
+      <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium shrink-0 ${
+        ok ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+      }`}>
+        {label}
+      </span>
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const { user, loadUser } = useAuth();
@@ -16,6 +57,8 @@ export default function SettingsPage() {
   const [appSettings, setAppSettings] = useState(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [credits, setCredits] = useState(null);
+  const [loadingCredits, setLoadingCredits] = useState(true);
 
   useEffect(() => {
     if (user) {
@@ -33,6 +76,13 @@ export default function SettingsPage() {
       .catch(() => toast.error('Failed to load application settings'))
       .finally(() => setLoadingSettings(false));
   }, [toast]);
+
+  useEffect(() => {
+    appSettingsService.credits()
+      .then(({ data }) => setCredits(data))
+      .catch(() => setCredits(null))
+      .finally(() => setLoadingCredits(false));
+  }, []);
 
   const handleSaveProfile = async () => {
     const name = profile.name.trim();
@@ -212,6 +262,34 @@ export default function SettingsPage() {
             <button onClick={handleSaveSettings} disabled={savingSettings} className="btn-primary flex items-center gap-2">
               {savingSettings ? <LoadingSpinner size="sm" /> : <><FiSave size={16} /> Save Settings</>}
             </button>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h2 className="text-lg font-semibold mb-1 flex items-center gap-2">
+          <FiCreditCard size={20} /> Credits remaining
+        </h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Current balances for the services LeadSense uses to verify email and extract LinkedIn profiles.
+        </p>
+        {loadingCredits ? (
+          <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+        ) : (
+          <div className="space-y-3">
+            <CreditRow
+              name="MillionVerifier"
+              block={credits?.millionverifier}
+              format={(block) => formatCount(block.credits_remaining)}
+            />
+            <CreditRow
+              name="Apify"
+              block={credits?.apify}
+              format={(block) => formatUsd(block.credits_remaining)}
+              extra={credits?.apify?.status === 'ok' && credits.apify.credits_limit != null
+                ? `${formatUsd(credits.apify.credits_used)} used of ${formatUsd(credits.apify.credits_limit)} this cycle`
+                : null}
+            />
           </div>
         )}
       </div>

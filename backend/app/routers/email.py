@@ -99,6 +99,11 @@ def send_emails(
     campaign = db.query(Campaign).filter(Campaign.id == data.campaign_id).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    if getattr(campaign, "origin", None) == "external":
+        raise HTTPException(
+            status_code=400,
+            detail="This campaign is tracked outside LeadSense and is not sent from here",
+        )
 
     if data.recipient_ids:
         recipients_all = db.query(Recipient).filter(Recipient.id.in_(data.recipient_ids)).all()

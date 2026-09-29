@@ -244,6 +244,7 @@ export default function UpdateListPage() {
     r.status !== 'replied' &&
     r.status !== 'bounced' &&
     r.status !== 'invalid_email' &&
+    r.status !== 'risky' &&
     !r.is_suppressed;
 
   const isSchedulable = (r) =>

@@ -1,8 +1,11 @@
 import StatusBadge from './StatusBadge';
 
 const LABELS = {
-  verified: 'Verified',
-  failed: 'Failed',
+  good: 'Good',
+  risky: 'Risky',
+  bad: 'Bad',
+  verified: 'Good',
+  failed: 'Bad',
   unchecked: 'Not checked',
 };
 

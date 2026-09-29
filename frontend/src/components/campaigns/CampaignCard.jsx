@@ -35,6 +35,9 @@ export default function CampaignCard({
           {c.owner ? (
             <p className="mt-1 truncate text-caption text-slate-400">{c.owner}</p>
           ) : null}
+          {c.origin === 'external' ? (
+            <p className="mt-1 text-caption font-medium text-primary-600">Outside mail</p>
+          ) : null}
         </div>
         <div className="shrink-0">
           <StatusBadge status={c.status} />

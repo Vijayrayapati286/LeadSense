@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.icp.models import IcpRecordRow
 from app.linkedin.bulk_models import BulkExtractJobRow
 from app.models import Campaign, CampaignRecipient, EmailLog, EmailVerification, Recipient, User
+from app.services.millionverifier_service import classify_cached_verification
 
 
 class AdminDashboardService:
@@ -151,13 +152,10 @@ class AdminDashboardService:
             verified_rows = []
 
         emails_verified = len(verified_rows)
-        valid = sum(1 for r in verified_rows if (r.result or "").lower() in ("ok", "valid"))
-        invalid = sum(1 for r in verified_rows if (r.result or "").lower() == "invalid")
-        risky = sum(
-            1
-            for r in verified_rows
-            if (r.result or "").lower() in ("risky", "catch_all", "unknown", "disposable")
-        )
+        labels = [classify_cached_verification(r.quality, r.result) for r in verified_rows]
+        valid = sum(1 for label in labels if label == "good")
+        invalid = sum(1 for label in labels if label == "bad")
+        risky = sum(1 for label in labels if label == "risky")
 
         return {
             "org_id": org_id,

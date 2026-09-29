@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
+    # Outbound bounce-rate alerts. Empty topic ARN disables publishing.
+    # Region falls back to AWS_REGION. Credentials use the standard AWS chain
+    # (explicit keys, then the instance role) — never hardcoded.
+    sns_topic_arn: str = Field("", validation_alias="SNS_TOPIC_ARN")
+    sns_region: str = Field("", validation_alias="SNS_REGION")
     # S3 file storage (binaries). Leave USE_MOCK_S3=true for local/dev without AWS.
     # Production: set S3_BUCKET_NAME + USE_MOCK_S3=false; prefer IAM role over long-lived keys.
     s3_bucket_name: str = Field("", validation_alias="S3_BUCKET_NAME")

@@ -27,6 +27,8 @@ from app.schemas.schemas import (
     MarkRepliedResponse,
     MessageResponse,
     RetagListRequest,
+    RecordManualActivityRequest,
+    RecordManualActivityResponse,
     ScheduleFollowUpRequest,
     ScheduleFollowUpResponse,
     TemplateCreate,
@@ -99,6 +101,26 @@ def list_campaigns(
         db, skip=skip, limit=limit, org_id=getattr(current_user, "org_id", None)
     )
     return [CampaignResponse.model_validate(c) for c in campaigns]
+
+
+@router.post("/campaigns/manual-activity", response_model=RecordManualActivityResponse, status_code=201)
+def record_manual_activity(
+    data: RecordManualActivityRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record mail already sent outside LeadSense. Does not send email."""
+    try:
+        result = campaign_service.record_manual_activity(
+            db,
+            data,
+            user_id=current_user.id,
+            user_name=current_user.name,
+            org_id=getattr(current_user, "org_id", None),
+        )
+        return RecordManualActivityResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/campaigns/for-update", response_model=list[CampaignResponse])

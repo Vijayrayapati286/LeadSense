@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { FiChevronRight, FiDownload } from 'react-icons/fi';
+import { FiChevronRight, FiDownload, FiUsers } from 'react-icons/fi';
 import { StatusBadge, statusMeta } from '../ui/GrowthWorkspace';
 import { formatDateTime } from '../../utils/helpers';
 
@@ -21,11 +21,22 @@ function shortDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function HistoryJobCard({ job, onSelect, onDownload, downloading = false }) {
+export default function HistoryJobCard({
+  job,
+  onSelect,
+  onDownload,
+  downloading = false,
+  onAddToIcp,
+  adding = false,
+}) {
   const total = job.total || 0;
   const success = job.completed ?? job.success ?? 0;
   const failed = job.failed || 0;
   const needsReview = job.needs_review || 0;
+  const verified = job.verified || 0;
+  const resolved = job.resolved || 0;
+  const icpReady = verified + resolved;
+  const canAddToIcp = job.status === 'done' && icpReady > 0 && typeof onAddToIcp === 'function';
   const clean = Math.max(success - needsReview, 0);
   const processed = success + failed;
 
@@ -65,19 +76,55 @@ export default function HistoryJobCard({ job, onSelect, onDownload, downloading 
       </button>
     ) : null;
 
+  const addToIcpButton = canAddToIcp ? (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onAddToIcp(job);
+      }}
+      disabled={adding}
+      title={
+        needsReview > 0
+          ? `Add ${icpReady} verified profile${icpReady === 1 ? '' : 's'}. ${needsReview} still need review.`
+          : `Add ${icpReady} verified profile${icpReady === 1 ? '' : 's'} to ICP`
+      }
+      aria-label={`Add verified profiles from ${title} to ICP`}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 transition-colors hover:bg-emerald-100 disabled:cursor-wait disabled:opacity-60"
+    >
+      <FiUsers size={12} aria-hidden="true" />
+      {adding ? 'Adding…' : 'Add to ICP'}
+    </button>
+  ) : null;
+
   const body = (
     <>
     <div className="flex items-center gap-3 sm:gap-4">
       {/* Status dot + file info */}
-      <div className="flex min-w-0 flex-1 items-center gap-3 sm:max-w-[min(100%,16rem)] lg:max-w-xs">
+      <div className="flex min-w-0 flex-1 items-center gap-3 sm:max-w-[min(100%,24rem)] lg:max-w-md">
         <span
           className={`h-2.5 w-2.5 shrink-0 rounded-full ${dotColor} ${statusKey === 'running' ? 'animate-pulse' : ''}`}
           aria-hidden="true"
         />
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-slate-900 sm:text-[15px]">{title}</p>
-          <p className="mt-0.5 truncate text-xs text-slate-500">
+          <p className="mt-0.5 text-xs leading-5 text-slate-500">
             {total.toLocaleString()} profiles
+            <span aria-hidden="true"> · </span>
+            <span className="text-emerald-700">{verified.toLocaleString()} verified</span>
+            {resolved > 0 ? (
+              <>
+                <span aria-hidden="true"> · </span>
+                <span className="text-emerald-700">{resolved.toLocaleString()} resolved</span>
+              </>
+            ) : null}
+            {needsReview > 0 ? (
+              <>
+                <span aria-hidden="true"> · </span>
+                <span className="text-amber-700">{needsReview.toLocaleString()} need review</span>
+              </>
+            ) : null}
             <span aria-hidden="true"> · </span>
             <span className="hidden sm:inline">{formatDateTime(uploadedAt)}</span>
             <span className="sm:hidden">{shortDate(uploadedAt)}</span>
@@ -119,6 +166,7 @@ export default function HistoryJobCard({ job, onSelect, onDownload, downloading 
 
       {/* Download + chevron */}
       <div className="flex shrink-0 items-center gap-2">
+        {addToIcpButton}
         {downloadButton}
         <StatusBadge status={statusKey} className="sm:hidden" />
         <FiChevronRight

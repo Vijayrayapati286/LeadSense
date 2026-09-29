@@ -216,10 +216,48 @@ class CampaignResponse(BaseModel):
     target_audience: str | None
     subject: str | None
     status: str
+    origin: str = "leadsense"
     emails_sent: int
     created_at: datetime
     scheduled_at: datetime | None = None
     use_recipient_timezone: bool = False
+
+
+class ManualContactInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    email: str = Field(..., min_length=3, max_length=255)
+
+
+class RecordManualActivityRequest(BaseModel):
+    """Record mail that was already sent outside LeadSense. Does not send."""
+
+    mode: Literal["existing", "new"]
+    campaign_id: int | None = None
+    campaign_name: str | None = Field(None, max_length=255)
+    campaign_code: str | None = Field(None, max_length=100)
+    description: str | None = None
+    owner: str | None = None
+    department: str | None = None
+    recipient_ids: list[int] = []
+    new_contacts: list[ManualContactInput] = []
+    subject: str = Field(..., min_length=1, max_length=500)
+    body: str = Field(..., min_length=1, max_length=100_000)
+    sent_at: datetime
+    follow_up_at: datetime | None = None
+    follow_up_action: str | None = Field(None, max_length=500)
+    # When true, also queue the campaign's next sequence stage for these contacts.
+    send_follow_up: bool = False
+
+
+class RecordManualActivityResponse(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    origin: str
+    recorded: int
+    created_contacts: int
+    reused_contacts: int
+    follow_ups_scheduled: int = 0
+    follow_ups_skipped: int = 0
 
 
 # ── Template ──────────────────────────────────────────────────────────────────
@@ -392,8 +430,7 @@ class RecipientResponse(BaseModel):
     city: str | None = None
     source: str | None = None
 
-    # MillionVerifier pre-send gate (from cache / suppression).
-    # verified | failed | unchecked
+    # MillionVerifier quality shown in the UI: good | risky | bad | unchecked.
     email_verification_status: str | None = None
     email_verification_result: str | None = None
 
@@ -614,6 +651,8 @@ class CampaignRecipientResponse(BaseModel):
     # Derived UI labels — existing status strings are unchanged.
     follow_up_state: str | None = None  # none | scheduled | sent | cancelled
     follow_up_label: str | None = None
+    manual_follow_up_at: datetime | None = None
+    manual_follow_up_action: str | None = None
     campaign_count: int = 0
     campaign_names: list[str] = []
 
@@ -839,6 +878,9 @@ class EmailLogResponse(BaseModel):
     status: str
     error_message: str | None
     sent_at: datetime
+    source: str = "ses"
+    subject: str | None = None
+    body: str | None = None
     recipient_name: str | None = None
     recipient_email: str | None = None
     campaign_name: str | None = None
@@ -1030,3 +1072,20 @@ class UserRoleResponse(BaseModel):
 class UserRoleAssignRequest(BaseModel):
     user_id: int
     role_id: str
+
+
+class NotificationItem(BaseModel):
+    id: int
+    kind: str
+    title: str
+    body: str
+    recipient_email: str | None = None
+    campaign_id: int | None = None
+    bounce_type: str | None = None
+    read: bool
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationItem]
+    unread_count: int
