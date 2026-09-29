@@ -1676,7 +1676,7 @@ export default function CampaignDetailPage() {
                             <div className="text-sm font-bold text-slate-950">{r.follow_up_label || 'No follow-up'}</div>
                             {r.manual_follow_up_at && (
                               <div className="mt-1 truncate px-2 text-xs text-slate-500">
-                                Outside: {formatDate(r.manual_follow_up_at)}
+                                Outside: {formatDateTime(r.manual_follow_up_at)}
                                 {r.manual_follow_up_action ? ` · ${r.manual_follow_up_action}` : ''}
                               </div>
                             )}

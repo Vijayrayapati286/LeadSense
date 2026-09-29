@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FiArrowLeft, FiMail, FiSend, FiX } from 'react-icons/fi';
-import { campaignService, sequenceService } from '../services/services';
+import { campaignService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import { generateCampaignId } from '../utils/helpers';
@@ -23,6 +23,13 @@ function dateToIso(value) {
   return new Date(`${value}T12:00:00`).toISOString();
 }
 
+function followUpInstant(date, time) {
+  if (!date) return null;
+  const clock = /^\d{2}:\d{2}/.test(time || '') ? time.slice(0, 5) : '09:00';
+  const when = new Date(`${date}T${clock}:00`);
+  return Number.isNaN(when.getTime()) ? null : when;
+}
+
 function looksLikeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
@@ -38,7 +45,6 @@ export default function RecordOutsideMailPage() {
   const [campaignQuery, setCampaignQuery] = useState('');
   const [campaignListOpen, setCampaignListOpen] = useState(false);
   const [campaign, setCampaign] = useState(null);
-  const [followUpStages, setFollowUpStages] = useState([]);
   const [campaignName, setCampaignName] = useState('');
   const [description, setDescription] = useState('');
 
@@ -49,6 +55,7 @@ export default function RecordOutsideMailPage() {
   const [body, setBody] = useState('');
   const [sentDate, setSentDate] = useState(todayInputValue);
   const [followUpDate, setFollowUpDate] = useState('');
+  const [followUpTime, setFollowUpTime] = useState('09:00');
   const [followUpAction, setFollowUpAction] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -68,17 +75,6 @@ export default function RecordOutsideMailPage() {
       setCampaignQuery(match.campaign_name);
     }
   }, [searchParams, campaigns]);
-
-  useEffect(() => {
-    if (!campaign || campaign.origin === 'external') {
-      setFollowUpStages([]);
-      return;
-    }
-    sequenceService
-      .getAll(campaign.id)
-      .then(({ data }) => setFollowUpStages(data || []))
-      .catch(() => setFollowUpStages([]));
-  }, [campaign]);
 
   const campaignMatches = useMemo(() => {
     const term = campaignQuery.trim().toLowerCase();
@@ -116,21 +112,18 @@ export default function RecordOutsideMailPage() {
     mode === 'existing' &&
     campaign &&
     campaign.origin !== 'external' &&
-    followUpStages.length > 0 &&
     Boolean(followUpDate);
 
   const sendHint =
     mode === 'new'
       ? 'A new outside-mail campaign is saved as a reminder. LeadSense will not send it.'
       : !campaign
-        ? ''
+        ? 'Select a campaign above.'
         : campaign.origin === 'external'
           ? 'This campaign is tracked outside LeadSense. Save stores the follow-up as a reminder.'
-          : followUpStages.length === 0
-            ? 'Add a follow-up stage on this campaign before LeadSense can send one.'
-            : !followUpDate
-              ? 'Choose a follow-up date to send it from LeadSense.'
-              : '';
+          : !followUpDate
+            ? 'Choose a follow-up date and time to send it from LeadSense.'
+            : '';
 
   const handleSave = async (sendFollowUp) => {
     if (mode === 'existing' && !campaign) {
@@ -141,7 +134,20 @@ export default function RecordOutsideMailPage() {
       toast.error('Enter a campaign name');
       return;
     }
-    if (selected.length === 0) {
+    let contacts = selected;
+    if (typedEmail) {
+      if (!looksLikeEmail(typedEmail)) {
+        toast.error('Enter a valid email');
+        return;
+      }
+      const email = typedEmail.toLowerCase();
+      if (!selectedEmails.has(email)) {
+        contacts = [...selected, { name: email.split('@')[0], email, isNew: true }];
+        setSelected(contacts);
+        setContactEmail('');
+      }
+    }
+    if (contacts.length === 0) {
       toast.error('Enter at least one email');
       return;
     }
@@ -158,9 +164,9 @@ export default function RecordOutsideMailPage() {
         toast.error(sendHint || 'This campaign cannot send a follow-up yet');
         return;
       }
-      const when = new Date(`${followUpDate}T09:00:00`);
-      if (Number.isNaN(when.getTime()) || when <= new Date()) {
-        toast.error('Choose a future follow-up date');
+      const when = followUpInstant(followUpDate, followUpTime);
+      if (!when || when <= new Date()) {
+        toast.error('Choose a future follow-up date and time');
         return;
       }
     }
@@ -175,12 +181,12 @@ export default function RecordOutsideMailPage() {
         description: mode === 'new' ? description.trim() || null : null,
         owner: user?.name || null,
         department: user?.department || null,
-        recipient_ids: selected.filter((c) => !c.isNew && c.id).map((c) => c.id),
-        new_contacts: selected.filter((c) => c.isNew).map((c) => ({ name: c.name, email: c.email })),
+        recipient_ids: contacts.filter((c) => !c.isNew && c.id).map((c) => c.id),
+        new_contacts: contacts.filter((c) => c.isNew).map((c) => ({ name: c.name, email: c.email })),
         subject: subject.trim(),
         body: body.trim(),
         sent_at: dateToIso(sentDate),
-        follow_up_at: followUpDate ? new Date(`${followUpDate}T09:00:00`).toISOString() : null,
+        follow_up_at: followUpInstant(followUpDate, followUpTime)?.toISOString() ?? null,
         follow_up_action: followUpAction.trim() || null,
         send_follow_up: Boolean(sendFollowUp),
       });
@@ -346,7 +352,7 @@ export default function RecordOutsideMailPage() {
             placeholder="Paste the email you sent"
           />
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <label className="label">Sent date</label>
             <input className="input-field" type="date" value={sentDate} onChange={(e) => setSentDate(e.target.value)} />
@@ -360,7 +366,16 @@ export default function RecordOutsideMailPage() {
               onChange={(e) => setFollowUpDate(e.target.value)}
             />
           </div>
-          <div className="sm:col-span-2">
+          <div>
+            <label className="label">Next follow-up time</label>
+            <input
+              className="input-field"
+              type="time"
+              value={followUpTime}
+              onChange={(e) => setFollowUpTime(e.target.value)}
+            />
+          </div>
+          <div className="sm:col-span-3">
             <label className="label">Follow-up action</label>
             <input
               className="input-field"
@@ -384,7 +399,8 @@ export default function RecordOutsideMailPage() {
           <Button
             icon={FiSend}
             loading={saving === 'send'}
-            disabled={Boolean(saving) || !canSendFollowUp}
+            disabled={Boolean(saving)}
+            title={sendHint || undefined}
             onClick={() => handleSave(true)}
           >
             Save and send follow-up
