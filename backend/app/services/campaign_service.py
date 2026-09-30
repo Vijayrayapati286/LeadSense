@@ -861,16 +861,16 @@ class CampaignService:
         """Set absolute next_send_at for eligible non-replied recipients.
 
         Content is taken from the campaign's next sequence stage at send time
-        (existing process_due_followups). Requires at least one sequence stage.
+        (existing process_due_followups). If the campaign has no follow-up
+        stage yet, the first one is copied from the campaign email so scheduling
+        only needs a send time.
         """
-        if not self.get_by_id(db, campaign_id):
+        campaign = self.get_by_id(db, campaign_id)
+        if not campaign:
             raise ValueError("Campaign not found")
 
+        self._ensure_followup_stage(db, campaign)
         stages = self.list_sequence_stages(db, campaign_id)
-        if not stages:
-            raise ValueError(
-                "Add at least one follow-up stage on the Follow-up Sequence tab before scheduling"
-            )
 
         if scheduled_at.tzinfo is None:
             raise ValueError("scheduled_at must include a timezone")

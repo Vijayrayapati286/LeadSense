@@ -346,3 +346,24 @@ def test_unmark_replied_can_be_turned_off(db, service):
     db.refresh(cr)
     assert cr.status == "sent"
     assert cr.replied_at is None
+
+
+def test_schedule_without_stage_copies_campaign_email(db, service):
+    """Scheduling only needs a time. A missing follow-up stage is copied from the campaign email."""
+    user = _user(db)
+    campaign = _campaign(db, user)
+    campaign.subject = "Quick follow-up"
+    recipient = _recipient(db)
+    _link(db, campaign, recipient, status="sent")
+    db.commit()
+
+    when = utc_now() + timedelta(days=1)
+    result = service.schedule_followups(
+        db, campaign.id, when, recipient_ids=[recipient.id]
+    )
+    assert result["scheduled"] == 1
+
+    stages = service.list_sequence_stages(db, campaign.id)
+    assert len(stages) == 1
+    assert stages[0].stage_order == 1
+    assert stages[0].subject == "Quick follow-up"

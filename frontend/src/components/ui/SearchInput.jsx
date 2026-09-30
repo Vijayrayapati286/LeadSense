@@ -2,7 +2,7 @@ import { FiSearch } from 'react-icons/fi';
 
 
 
-export default function SearchInput({ value = '', onChange, onKeyDown, placeholder = 'Search...', className = '' }) {
+export default function SearchInput({ id, value = '', onChange, onKeyDown, placeholder = 'Search...', className = '' }) {
 
   return (
 
@@ -12,6 +12,7 @@ export default function SearchInput({ value = '', onChange, onKeyDown, placehold
 
       <input
 
+        id={id}
         type="text"
 
         value={value}

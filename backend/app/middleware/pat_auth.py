@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 _auth_service = AuthService()
 
+# Optional bearer so /auth/me can accept either a user JWT or a PAT.
+security = HTTPBearer(auto_error=False)
+
 _AUTH_HEADERS = {"WWW-Authenticate": "Bearer"}
 
 __all__ = (
