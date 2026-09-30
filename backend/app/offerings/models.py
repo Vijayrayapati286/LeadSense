@@ -142,6 +142,7 @@ class OfferingRow(Base):
     file_format: Mapped[str | None] = mapped_column(String(16), nullable=True)
     file_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     file_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
     doc_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=OFFERING_STATUS_ACTIVE)
@@ -167,6 +168,7 @@ class OfferingDocumentRow(Base):
     file_name: Mapped[str] = mapped_column(String(500), nullable=False)
     file_format: Mapped[str] = mapped_column(String(16), nullable=False)
     s3_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

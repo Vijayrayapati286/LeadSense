@@ -72,6 +72,7 @@ class OfferingCreate(BaseModel):
     created_at: str | None = None
     doc_count: int | None = None
     docs: list[dict] | None = None
+    content: str | None = None
 
     @field_validator(
         "name",
@@ -148,6 +149,7 @@ class OfferingResponse(BaseModel):
     target_customer: str | None = None
     hard_filter_rules: dict[str, Any] = Field(default_factory=dict)
     profile_text: str | None = None
+    content: str | None = None
     target_industries: list[Any] = Field(default_factory=list)
     target_company_size: list[Any] = Field(default_factory=list)
     company_size_min: int | None = None

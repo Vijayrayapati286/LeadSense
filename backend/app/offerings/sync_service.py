@@ -60,6 +60,7 @@ def serialize_sync_offering(row: OfferingRow, *, doc_count: int | None = None) -
         "name": row.name,
         "status": row.status or OFFERING_STATUS_ACTIVE,
         "doc_count": count,
+        "content": row.content,
         "created_at": created.isoformat() if created else None,
     }
 
@@ -110,6 +111,7 @@ def _incoming_docs(data: dict[str, Any], *, public_offering_id: str) -> list[dic
             "file_name": file_name,
             "file_format": data.get("file_format"),
             "s3_key": (data.get("s3_key") or data.get("file_url") or "").strip() or None,
+            "content": (data.get("content") or "").strip() or None,
             "created_at": data.get("created_at"),
         }
     ]
@@ -125,6 +127,7 @@ def _upsert_documents(db: Session, offering_id: str, docs: list[dict[str, Any]])
             raise ValueError("each document requires file_name")
         file_format = _normalize_format(item.get("file_format"), required=True)
         s3_key = str(item.get("s3_key") or item.get("file_url") or "").strip() or None
+        content = str(item.get("content") or "").strip() or None
         created_at = _parse_created_at(item.get("created_at"))
         row = db.query(OfferingDocumentRow).filter(OfferingDocumentRow.doc_id == doc_id).first()
         if row:
@@ -132,6 +135,8 @@ def _upsert_documents(db: Session, offering_id: str, docs: list[dict[str, Any]])
             row.file_name = file_name
             row.file_format = file_format or row.file_format
             row.s3_key = s3_key if s3_key is not None else row.s3_key
+            if content:
+                row.content = content
             continue
         db.add(
             OfferingDocumentRow(
@@ -140,6 +145,7 @@ def _upsert_documents(db: Session, offering_id: str, docs: list[dict[str, Any]])
                 file_name=file_name,
                 file_format=file_format or "pdf",
                 s3_key=s3_key,
+                content=content,
                 created_at=created_at,
             )
         )
@@ -204,6 +210,16 @@ def upsert_from_smartops(
     except (TypeError, ValueError):
         declared_n = stored
     row.doc_count = max(declared_n, stored)
+    combined = str(data.get("content") or "").strip()
+    if not combined:
+        pieces = []
+        for item in docs:
+            body = str(item.get("content") or "").strip()
+            if body:
+                pieces.append(body)
+        combined = "\n\n".join(pieces)
+    if combined:
+        row.content = combined[:200_000]
     if docs:
         first = docs[0]
         row.file_name = str(first.get("file_name") or "").strip() or row.file_name

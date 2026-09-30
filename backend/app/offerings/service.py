@@ -227,6 +227,7 @@ def serialize_offering(row: OfferingRow, *, stats: dict[str, int] | None = None)
         "pricing_range": row.pricing_range,
         "hard_filter_rules": row.hard_filter_rules or {},
         "profile_text": row.profile_text,
+        "content": row.content,
         "vouchers": _list_or_empty(row.vouchers),
         "email_template": row.email_template,
         "status": row.status,

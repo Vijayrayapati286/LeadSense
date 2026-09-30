@@ -86,6 +86,7 @@ def _docs(*names: tuple[str, str, str]) -> list[dict]:
             "file_name": file_name,
             "file_format": file_format,
             "s3_key": f"offerings/ten_xxx/{file_name}",
+            "content": f"Extracted text from {file_name}",
             "created_at": "2026-09-25T15:30:00Z",
         }
         for doc_id, file_name, file_format in names
@@ -126,6 +127,7 @@ def test_smartops_create_idempotent_update_and_list(client):
     assert body["status"] == "active"
     assert body["doc_count"] == 2
     assert body["offering_id"].startswith("ls_off_")
+    assert "Extracted text from pitch_deck.pdf" in (body.get("content") or "")
     offering_id = body["offering_id"]
 
     again = test_client.post("/api/offerings", headers=_auth(pat), json=_payload(org_id))
