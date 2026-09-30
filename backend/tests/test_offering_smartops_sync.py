@@ -186,8 +186,44 @@ def test_invalid_pat_is_not_reported_as_jwt(client):
     assert resp.json()["detail"] == "Invalid or revoked PAT"
 
 
-def test_pat_auth_exports_security_for_routers():
-    """auth/organizations/leads routers import security from pat_auth at startup."""
-    from app.middleware.pat_auth import security
+def _dep_calls(dependant) -> list:
+    calls = []
+    for dep in getattr(dependant, "dependencies", []) or []:
+        if getattr(dep, "call", None) is not None:
+            calls.append(dep.call)
+        calls.extend(_dep_calls(dep))
+    return calls
+
+
+def test_backend_boot_imports_and_offerings_use_pat_auth(client):
+    """Catch UAT boot/import failures and leftover JWT-only offering sync routes."""
+    test_client, org_id, pat = client
+    from app.main import app
+    from app.middleware.pat_auth import get_offering_auth, security
+    from app.routers import auth as auth_router
+    from fastapi.routing import APIRoute
 
     assert security is not None
+    assert auth_router.bearer_security is security
+    assert test_client.get("/health").status_code == 200
+    assert test_client.get(
+        "/api/v1/integrations/me", headers=_auth(pat)
+    ).status_code == 200
+
+    sync_routes = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        methods = set(route.methods or [])
+        if route.path == "/api/offerings" and methods & {"GET", "POST"}:
+            sync_routes.append(route)
+        if route.path == "/api/offerings/{offering_id}" and "PUT" in methods:
+            sync_routes.append(route)
+
+    assert len(sync_routes) >= 3, "GET/POST /api/offerings and PUT /api/offerings/{id} must exist"
+    for route in sync_routes:
+        calls = _dep_calls(route.dependant)
+        assert get_offering_auth in calls, (
+            f"{sorted(route.methods)} {route.path} must use get_offering_auth, not JWT-only auth"
+        )
+

@@ -17,10 +17,25 @@ from app.services.auth_service import AuthService
 
 logger = logging.getLogger(__name__)
 
+# Imported by auth/organizations/leads routers as `security as bearer_security`.
+# Must stay exported or uvicorn fails at import: cannot import name 'security'.
 security = HTTPBearer(auto_error=False)
 _auth_service = AuthService()
 
 _AUTH_HEADERS = {"WWW-Authenticate": "Bearer"}
+
+__all__ = (
+    "OfferingAuth",
+    "PatPrincipal",
+    "bearer_from_request",
+    "get_offering_auth",
+    "get_pat_principal",
+    "get_raw_bearer",
+    "require_org_scope",
+    "security",
+    "try_pat_principal",
+    "whoami_response",
+)
 
 
 @dataclass
@@ -52,6 +67,13 @@ def bearer_from_request(request: Request) -> str | None:
     return token or None
 
 
+def _raw_bearer(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = None,
+) -> str | None:
+    return bearer_from_request(request) or get_raw_bearer(credentials)
+
+
 @dataclass
 class OfferingAuth:
     """PAT (SmartOps) or JWT (LeadSense UI) for offering list/create/update."""
@@ -62,10 +84,11 @@ class OfferingAuth:
 
 def get_offering_auth(
     request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: Session = Depends(get_db),
 ) -> OfferingAuth:
     """PAT first, then user JWT. Never decode a PAT as a login token."""
-    raw = bearer_from_request(request)
+    raw = _raw_bearer(request, credentials)
     if not raw:
         raise _unauthorized("Not authenticated")
 
@@ -74,7 +97,11 @@ def get_offering_auth(
         logger.info("offerings_auth method=pat org=%s", principal.organization_id)
         return OfferingAuth(pat=principal, user=None)
 
-    user = _auth_service.get_current_user(db, raw)
+    try:
+        user = _auth_service.get_current_user(db, raw)
+    except Exception:
+        logger.debug("offerings_auth jwt lookup failed", exc_info=True)
+        user = None
     if user:
         logger.info("offerings_auth method=jwt user=%s", getattr(user, "id", None))
         return OfferingAuth(pat=None, user=user)
@@ -133,7 +160,11 @@ def require_org_scope(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
         return org_id, principal, None
 
-    user = _auth_service.get_current_user(db, raw)
+    try:
+        user = _auth_service.get_current_user(db, raw)
+    except Exception:
+        logger.debug("org_scope jwt lookup failed", exc_info=True)
+        user = None
     if not user:
         if str(raw).startswith("pat_"):
             raise _unauthorized("Invalid or revoked PAT")
@@ -151,9 +182,10 @@ def require_org_scope(
 
 async def get_pat_principal(
     request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: Session = Depends(get_db),
 ) -> PatPrincipal:
-    raw = bearer_from_request(request)
+    raw = _raw_bearer(request, credentials)
     if not raw:
         raise _unauthorized("Not authenticated")
     principal = try_pat_principal(db, raw)
