@@ -4,14 +4,9 @@ import {
   FiArrowLeft,
   FiCheckCircle,
   FiCalendar,
-  FiClock,
-  FiMail,
-  FiFileText,
-  FiPaperclip,
   FiSend,
   FiX,
   FiArrowRight,
-  FiPlus,
 } from 'react-icons/fi';
 import { campaignService, recipientService, sequenceService } from '../services/services';
 import { useToast } from '../hooks/useToast';
@@ -25,14 +20,6 @@ import CampaignCard from '../components/campaigns/CampaignCard';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import { debounce, formatDateTime } from '../utils/helpers';
-
-const EMPTY_STAGE_FORM = {
-  delay_value: 3,
-  delay_unit: 'days',
-  subject: '',
-  body: '',
-  closing: '',
-};
 
 function defaultScheduleValue() {
   const d = new Date(Date.now() + 5 * 60 * 1000);
@@ -72,7 +59,6 @@ export default function UpdateListPage() {
   const [followUpAt, setFollowUpAt] = useState('');
   const [schedulingFollowUp, setSchedulingFollowUp] = useState(false);
   const [pendingOpenSchedule, setPendingOpenSchedule] = useState(false);
-  const [stageForm, setStageForm] = useState(EMPTY_STAGE_FORM);
   const [updateTarget, setUpdateTarget] = useState(null);
   const [updateForm, setUpdateForm] = useState({
     name: '',
@@ -83,8 +69,6 @@ export default function UpdateListPage() {
     replied: false,
   });
   const [savingUpdate, setSavingUpdate] = useState(false);
-  const [stageModalOpen, setStageModalOpen] = useState(false);
-  const [addingStage, setAddingStage] = useState(false);
 
   const loadCampaigns = useCallback(async () => {
     setCampaignLoading(true);
@@ -219,12 +203,6 @@ export default function UpdateListPage() {
 
   useEffect(() => {
     if (!pendingOpenSchedule || emailsLoading) return;
-    if (stages.length === 0) {
-      setPendingOpenSchedule(false);
-      setStageForm(EMPTY_STAGE_FORM);
-      setStageModalOpen(true);
-      return;
-    }
     if (selectedRecipientIds.length === 0) {
       setPendingOpenSchedule(false);
       return;
@@ -232,7 +210,7 @@ export default function UpdateListPage() {
     setFollowUpAt(defaultScheduleValue());
     setFollowUpModalOpen(true);
     setPendingOpenSchedule(false);
-  }, [pendingOpenSchedule, emailsLoading, stages.length, selectedRecipientIds.length, toast]);
+  }, [pendingOpenSchedule, emailsLoading, selectedRecipientIds.length]);
 
   const filteredEmailRows = useMemo(() => {
     const term = emailSearch.trim().toLowerCase();
@@ -346,47 +324,18 @@ export default function UpdateListPage() {
     }
   };
 
-  const openFollowUpForm = () => {
-    if (!selectedId) return;
-    navigate(`/campaigns/${selectedId}?tab=sequence&from=schedule`, {
-      state: { selectedRecipientIds },
-    });
-  };
-
-  const handleAddStage = async () => {
-    if (!selectedId) return;
-    if (!stageForm.subject.trim() || !stageForm.body.trim()) {
-      toast.error('Subject and body are required');
-      return;
-    }
-    setAddingStage(true);
-    try {
-      const nextOrder = stages.length > 0 ? Math.max(...stages.map((s) => s.stage_order)) + 1 : 1;
-      await sequenceService.create(selectedId, {
-        ...stageForm,
-        delay_value: Number(stageForm.delay_value) || 3,
-        stage_order: nextOrder,
-      });
-      toast.success('Follow-up stage added');
-      setStageForm(EMPTY_STAGE_FORM);
-      setStageModalOpen(false);
-      await loadEmails(selectedId);
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to add stage');
-    } finally {
-      setAddingStage(false);
-    }
-  };
-
   const openScheduleModal = () => {
-    if (stages.length === 0) {
-      openFollowUpForm();
-      return;
-    }
     if (selectedSchedulableCount === 0) {
       toast.error('Select recipients that can receive a follow-up');
       return;
     }
+    setFollowUpAt(defaultScheduleValue());
+    setFollowUpModalOpen(true);
+  };
+
+  const openScheduleForRow = (row) => {
+    if (!isSchedulable(row)) return;
+    setSelectedRecipientIds([row.recipient_id]);
     setFollowUpAt(defaultScheduleValue());
     setFollowUpModalOpen(true);
   };
@@ -406,20 +355,6 @@ export default function UpdateListPage() {
 
     setSchedulingFollowUp(true);
     try {
-      // Create stage 1 in-place if this campaign has none yet.
-      if (stages.length === 0) {
-        if (!stageForm.subject.trim() || !stageForm.body.trim()) {
-          toast.error('Subject and body are required for the follow-up email');
-          setSchedulingFollowUp(false);
-          return;
-        }
-        await sequenceService.create(selectedId, {
-          ...stageForm,
-          delay_value: Number(stageForm.delay_value) || 3,
-          stage_order: 1,
-        });
-      }
-
       const { data } = await campaignService.scheduleFollowUp(selectedId, {
         scheduled_at: new Date(followUpAt).toISOString(),
         recipient_ids: ids,
@@ -430,7 +365,6 @@ export default function UpdateListPage() {
           (data.skipped ? ` (${data.skipped} skipped)` : '')
       );
       setFollowUpModalOpen(false);
-      setStageForm(EMPTY_STAGE_FORM);
       await loadEmails(selectedId);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to schedule follow-up');
@@ -499,7 +433,7 @@ export default function UpdateListPage() {
               <button
                 type="button"
                 onClick={openScheduleModal}
-                disabled={stages.length > 0 && selectedSchedulableCount === 0}
+                disabled={selectedSchedulableCount === 0}
                 className="btn-secondary text-sm flex items-center gap-2 disabled:opacity-50"
               >
                 <FiCalendar size={14} /> Schedule
@@ -585,13 +519,17 @@ export default function UpdateListPage() {
                           <StatusBadge status={row.status} />
                         </td>
                         <td className="px-6 py-4">
-                          <button
-                            type="button"
-                            onClick={openFollowUpForm}
-                            className="text-sm font-medium text-primary-700 hover:underline"
-                          >
-                            {followUpShort(row)}
-                          </button>
+                          {isSchedulable(row) ? (
+                            <button
+                              type="button"
+                              onClick={() => openScheduleForRow(row)}
+                              className="text-sm font-medium text-primary-700 hover:underline"
+                            >
+                              {followUpShort(row)}
+                            </button>
+                          ) : (
+                            <span className="text-sm text-gray-500">{followUpShort(row)}</span>
+                          )}
                         </td>
                         <td className="px-6 py-4 text-gray-600 whitespace-nowrap">
                           {row.last_sent_at ? formatDateTime(row.last_sent_at) : '—'}
@@ -701,83 +639,6 @@ export default function UpdateListPage() {
         </Modal>
 
         <Modal
-          isOpen={stageModalOpen}
-          onClose={() => !addingStage && setStageModalOpen(false)}
-          title="Follow-up Sequence"
-          size="md"
-        >
-          <div className="space-y-4">
-            <p className="text-sm text-slate-500">
-              Add the follow-up email here. It is saved on this campaign with the existing sequence.
-            </p>
-            {stages.length > 0 ? (
-              <ul className="space-y-2">
-                {stages.map((s) => (
-                  <li key={s.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
-                    <p className="font-medium text-slate-900">
-                      Stage {s.stage_order} — after {s.delay_value} {s.delay_unit}
-                    </p>
-                    <p className="text-slate-600">{s.subject}</p>
-                    {s.body ? <p className="mt-1 whitespace-pre-wrap text-xs text-slate-500">{s.body}</p> : null}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-gray-400">No follow-up stages yet — this campaign only sends the initial email.</p>
-            )}
-            <div className="space-y-3 border-t border-gray-100 pt-4">
-              <p className="text-sm font-medium text-gray-700">Add a follow-up stage</p>
-              <div className="flex items-center gap-2">
-                <span className="shrink-0 whitespace-nowrap text-sm text-gray-500">Send after</span>
-                <input
-                  type="number"
-                  min={1}
-                  className="input-field w-20 shrink-0"
-                  value={stageForm.delay_value}
-                  onChange={(e) => setStageForm((f) => ({ ...f, delay_value: e.target.value }))}
-                />
-                <select
-                  className="input-field w-auto shrink-0"
-                  value={stageForm.delay_unit}
-                  onChange={(e) => setStageForm((f) => ({ ...f, delay_unit: e.target.value }))}
-                >
-                  <option value="minutes">Minutes</option>
-                  <option value="hours">Hours</option>
-                  <option value="days">Days</option>
-                </select>
-              </div>
-              <input
-                className="input-field"
-                placeholder="Subject"
-                value={stageForm.subject}
-                onChange={(e) => setStageForm((f) => ({ ...f, subject: e.target.value }))}
-              />
-              <textarea
-                className="input-field font-mono text-sm"
-                rows={5}
-                placeholder="Body — use {{Name}}, {{Company}} etc for personalization"
-                value={stageForm.body}
-                onChange={(e) => setStageForm((f) => ({ ...f, body: e.target.value }))}
-              />
-              <input
-                className="input-field"
-                placeholder="Closing (optional)"
-                value={stageForm.closing}
-                onChange={(e) => setStageForm((f) => ({ ...f, closing: e.target.value }))}
-              />
-              <button
-                type="button"
-                className="btn-primary flex items-center gap-2"
-                disabled={addingStage}
-                onClick={handleAddStage}
-              >
-                {addingStage ? <LoadingSpinner size="sm" /> : <FiPlus size={16} />} Add Stage
-              </button>
-            </div>
-          </div>
-        </Modal>
-
-        <Modal
           isOpen={followUpModalOpen}
           onClose={() => !schedulingFollowUp && setFollowUpModalOpen(false)}
           size="md"
@@ -809,19 +670,7 @@ export default function UpdateListPage() {
               </button>
             </div>
 
-            {/* Info banner */}
-            {stages.length === 0 ? (
-              <div className="mt-5 flex items-start gap-2.5 rounded-2xl border border-primary-100 bg-primary-50/80 px-3.5 py-3">
-                <FiSend size={16} className="mt-0.5 shrink-0 text-primary-600" />
-                <p className="text-sm text-primary-900">
-                  <span className="font-semibold">Follow-up email</span>
-                  <span className="text-primary-800/80">
-                    {' '}
-                    — This campaign has no follow-up stage yet — fill this in, then pick when to send.
-                  </span>
-                </p>
-              </div>
-            ) : (
+            {stages.length > 0 && (
               <div className="mt-5 flex items-start gap-2.5 rounded-2xl border border-emerald-100 bg-emerald-50/80 px-3.5 py-3">
                 <FiSend size={16} className="mt-0.5 shrink-0 text-emerald-600" />
                 <p className="text-sm text-emerald-900">
@@ -835,92 +684,6 @@ export default function UpdateListPage() {
             )}
 
             <div className="mt-5 space-y-4">
-              {stages.length === 0 && (
-                <>
-                  <div>
-                    <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                      <FiClock size={14} className="text-primary-500" />
-                      Send after <span className="text-red-500">*</span>
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        min={1}
-                        className="input-field w-24"
-                        value={stageForm.delay_value}
-                        onChange={(e) =>
-                          setStageForm((f) => ({ ...f, delay_value: e.target.value }))
-                        }
-                      />
-                      <div className="relative min-w-0 flex-1">
-                        <FiCalendar
-                          size={14}
-                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                        />
-                        <select
-                          className="input-field w-full pl-9"
-                          value={stageForm.delay_unit}
-                          onChange={(e) =>
-                            setStageForm((f) => ({ ...f, delay_unit: e.target.value }))
-                          }
-                        >
-                          <option value="minutes">Minutes</option>
-                          <option value="hours">Hours</option>
-                          <option value="days">Days</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                      <FiMail size={14} className="text-sky-500" />
-                      Subject <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="Subject"
-                      value={stageForm.subject}
-                      onChange={(e) =>
-                        setStageForm((f) => ({ ...f, subject: e.target.value }))
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                      <FiFileText size={14} className="text-emerald-500" />
-                      Body <span className="text-red-500">*</span>
-                    </label>
-                    <textarea
-                      className="input-field min-h-[110px] resize-y"
-                      placeholder="Body — use {{Name}}, {{Company}} etc for personalization"
-                      value={stageForm.body}
-                      onChange={(e) =>
-                        setStageForm((f) => ({ ...f, body: e.target.value }))
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                      <FiPaperclip size={14} className="text-amber-500" />
-                      Closing (optional)
-                    </label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="Closing (optional)"
-                      value={stageForm.closing}
-                      onChange={(e) =>
-                        setStageForm((f) => ({ ...f, closing: e.target.value }))
-                      }
-                    />
-                  </div>
-                </>
-              )}
-
               <div>
                 <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700">
                   <FiCalendar size={14} className="text-primary-500" />

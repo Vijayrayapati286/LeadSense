@@ -149,6 +149,18 @@ export default function CampaignDetailPage() {
     }
   }, [searchParams, location.state?.activeTab]);
 
+  useEffect(() => {
+    if (!fromSchedule || !id) return;
+    const ids = location.state?.selectedRecipientIds;
+    navigate(`/campaigns/update-list?campaign=${id}`, {
+      replace: true,
+      state: {
+        openSchedule: Array.isArray(ids) && ids.length > 0,
+        selectedRecipientIds: Array.isArray(ids) ? ids : [],
+      },
+    });
+  }, [fromSchedule, id, location.state, navigate]);
+
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRecipientId, setPreviewRecipientId] = useState(null);
   const [scheduleAt, setScheduleAt] = useState('');
@@ -348,10 +360,6 @@ export default function CampaignDetailPage() {
   };
 
   const openFollowUpModal = (scope = 'selected') => {
-    if (stages.length === 0) {
-      toast.error('Add a follow-up stage on the Follow-up Sequence tab first');
-      return;
-    }
     if (scope === 'selected' && trackingSelected.length === 0) {
       toast.error('Select recipients for follow-up, or use “Schedule remaining”');
       return;
@@ -1186,7 +1194,7 @@ export default function CampaignDetailPage() {
     }
   };
 
-  if (loading) {
+  if (loading || fromSchedule) {
     return (
       <div className="flex items-center justify-center h-64">
         <LoadingSpinner size="lg" />

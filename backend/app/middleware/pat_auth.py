@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -18,6 +18,9 @@ from app.services.auth_service import AuthService
 logger = logging.getLogger(__name__)
 
 _auth_service = AuthService()
+
+# Optional bearer so /auth/me can accept either a user JWT or a PAT.
+security = HTTPBearer(auto_error=False)
 
 _AUTH_HEADERS = {"WWW-Authenticate": "Bearer"}
 
