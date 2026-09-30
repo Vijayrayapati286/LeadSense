@@ -184,3 +184,10 @@ def test_invalid_pat_is_not_reported_as_jwt(client):
     )
     assert resp.status_code == 401
     assert resp.json()["detail"] == "Invalid or revoked PAT"
+
+
+def test_pat_auth_exports_security_for_routers():
+    """auth/organizations/leads routers import security from pat_auth at startup."""
+    from app.middleware.pat_auth import security
+
+    assert security is not None

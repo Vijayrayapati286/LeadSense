@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -17,6 +17,7 @@ from app.services.auth_service import AuthService
 
 logger = logging.getLogger(__name__)
 
+security = HTTPBearer(auto_error=False)
 _auth_service = AuthService()
 
 _AUTH_HEADERS = {"WWW-Authenticate": "Bearer"}
