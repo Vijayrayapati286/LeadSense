@@ -79,6 +79,7 @@ const PROVIDER_NAV_ITEMS = [
   { path: '/users', label: 'Users', icon: FiUsers, permission: 'members:read' },
   { path: '/invites', label: 'Invites', icon: FiMail, permission: 'members:invite' },
   { path: '/access', label: 'Roles', icon: FiShield, permission: 'access:read' },
+  { path: '/settings', label: 'Settings', icon: FiSettings, permission: 'settings:read' },
 ];
 
 function filterNavItems(items, user) {
@@ -189,7 +190,7 @@ function NavGroup({ item, collapsed }) {
 
 export default function Sidebar({ collapsed = false, onToggle }) {
   const { user, logout } = useAuth();
-  const profilePath = isProviderOrg(user) ? '/dashboard' : '/settings';
+  const profilePath = '/settings';
 
   return (
     <aside

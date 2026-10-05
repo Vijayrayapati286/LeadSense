@@ -2,59 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --color-primary-50: 239 246 255;
-  --color-primary-100: 219 234 254;
-  --color-primary-200: 191 219 254;
-  --color-primary-300: 147 197 253;
-  --color-primary-400: 96 165 250;
-  --color-primary-500: 59 130 246;
-  --color-primary-600: 37 99 235;
-  --color-primary-700: 29 78 216;
-  --color-primary-800: 30 64 175;
-  --color-primary-900: 30 58 138;
-  --color-sidebar: 11 18 32;
-  --color-surface: 255 255 255;
-  --color-surface-muted: 248 249 251;
-  --color-surface-inset: 241 245 249;
-  --color-accent: 37 99 235;
-  --color-accent-hover: 29 78 216;
-  --shadow-button: 0 4px 14px rgba(37, 99, 235, 0.2);
-  --page-glow-a: rgba(59, 130, 246, 0.08);
-  --page-glow-b: rgba(14, 165, 233, 0.05);
-  --hero-glow: rgba(59, 130, 246, 0.14);
-  --link-color: #2563eb;
-}
-
-[data-theme='sunset-coral'] {
-  --color-primary-50: 255 244 238;
-  --color-primary-100: 255 228 214;
-  --color-primary-200: 255 201 173;
-  --color-primary-300: 255 168 122;
-  --color-primary-400: 255 138 76;
-  --color-primary-500: 255 107 53;
-  --color-primary-600: 255 94 0;
-  --color-primary-700: 224 78 0;
-  --color-primary-800: 184 61 0;
-  --color-primary-900: 122 40 0;
-  --color-sidebar: 30 30 36;
-  --color-surface-muted: 250 249 248;
-  --color-accent: 255 94 0;
-  --color-accent-hover: 224 78 0;
-  --shadow-button: 0 4px 14px rgba(255, 94, 0, 0.28);
-  --page-glow-a: rgba(255, 107, 53, 0.14);
-  --page-glow-b: rgba(255, 180, 140, 0.1);
-  --hero-glow: rgba(255, 107, 53, 0.18);
-  --link-color: #ff5e00;
-}
+/* Accent tokens live on <html> (see theme.js). Do not define --ls-* here —
+   Tailwind inlines :root --color-* / --ls-* values into utilities at build time. */
 
 @layer base {
+  html {
+    color-scheme: light;
+  }
+
   body {
     @apply bg-surface-muted text-ink font-sans antialiased;
     font-family: 'Inter', system-ui, sans-serif;
+    background-color: rgb(var(--ls-surface-muted));
     background-image:
       radial-gradient(circle at 92% 4%, var(--page-glow-a), transparent 24rem),
       radial-gradient(circle at 18% 92%, var(--page-glow-b), transparent 28rem);
+    transition: background-color 0.25s ease;
   }
 
   button, a, input, textarea, select {
@@ -64,11 +27,12 @@
 
 @layer components {
   .btn-primary {
-    @apply bg-primary-600 text-white px-4 py-2.5 rounded-xl font-semibold shadow-button
-           hover:bg-primary-700 hover:shadow-lg hover:shadow-primary-500/20 hover:-translate-y-0.5
+    @apply bg-primary-600 text-white px-4 py-2.5 rounded-xl font-semibold
+           hover:bg-primary-700 hover:-translate-y-0.5
            transition-all duration-200 active:scale-[.98]
            focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2
            disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-none disabled:hover:translate-y-0;
+    box-shadow: var(--shadow-button);
   }
 
   .btn-secondary {

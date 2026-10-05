@@ -1,30 +1,34 @@
 /** @type {import('tailwindcss').Config} */
+
+function rgbChannel(variable) {
+  return ({ opacityValue }) =>
+    opacityValue === undefined
+      ? `rgb(var(${variable}))`
+      : `rgb(var(${variable}) / ${opacityValue})`;
+}
+
+const primary = Object.fromEntries(
+  [50, 100, 200, 300, 400, 500, 600, 700, 800, 900].map((step) => [
+    String(step),
+    rgbChannel(`--ls-primary-${step}`),
+  ]),
+);
+
 export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
       colors: {
-        primary: {
-          50: 'rgb(var(--color-primary-50) / <alpha-value>)',
-          100: 'rgb(var(--color-primary-100) / <alpha-value>)',
-          200: 'rgb(var(--color-primary-200) / <alpha-value>)',
-          300: 'rgb(var(--color-primary-300) / <alpha-value>)',
-          400: 'rgb(var(--color-primary-400) / <alpha-value>)',
-          500: 'rgb(var(--color-primary-500) / <alpha-value>)',
-          600: 'rgb(var(--color-primary-600) / <alpha-value>)',
-          700: 'rgb(var(--color-primary-700) / <alpha-value>)',
-          800: 'rgb(var(--color-primary-800) / <alpha-value>)',
-          900: 'rgb(var(--color-primary-900) / <alpha-value>)',
-        },
+        primary,
         sidebar: {
-          DEFAULT: 'rgb(var(--color-sidebar) / <alpha-value>)',
+          DEFAULT: rgbChannel('--ls-sidebar'),
           hover: 'rgba(255,255,255,0.06)',
-          active: 'rgb(var(--color-primary-500) / <alpha-value>)',
+          active: rgbChannel('--ls-primary-500'),
         },
         surface: {
-          DEFAULT: 'rgb(var(--color-surface) / <alpha-value>)',
-          muted: 'rgb(var(--color-surface-muted) / <alpha-value>)',
-          inset: 'rgb(var(--color-surface-inset) / <alpha-value>)',
+          DEFAULT: rgbChannel('--ls-surface'),
+          muted: rgbChannel('--ls-surface-muted'),
+          inset: rgbChannel('--ls-surface-inset'),
         },
         ink: {
           DEFAULT: '#0f172a',
@@ -32,8 +36,8 @@ export default {
           tertiary: '#94a3b8',
         },
         accent: {
-          DEFAULT: 'rgb(var(--color-accent) / <alpha-value>)',
-          hover: 'rgb(var(--color-accent-hover) / <alpha-value>)',
+          DEFAULT: rgbChannel('--ls-accent'),
+          hover: rgbChannel('--ls-accent-hover'),
         },
       },
       borderRadius: {

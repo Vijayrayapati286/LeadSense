@@ -90,7 +90,6 @@ export default function App() {
             <Route path="/offerings/new" element={<OfferingCreatePage />} />
             <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />
             <Route path="/offerings/:id" element={<OfferingDetailPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
           </Route>
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/create" element={<CreateCampaignPage />} />
@@ -117,7 +116,9 @@ export default function App() {
           <Route path="/offerings/new" element={<OfferingCreatePage />} />
           <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />
           <Route path="/offerings/:id" element={<OfferingDetailPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route element={<RequirePermission permission="settings:read" />}>
+            <Route path="/settings" element={<SettingsPage />} />
+          </Route>
         </Route>
       </Route>
 
