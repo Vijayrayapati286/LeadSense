@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.offerings.models import OFFERING_STATUS_ACTIVE, OfferingDocumentRow, OfferingRow
 
 ALLOWED_FILE_FORMATS = {"pdf", "docx", "pptx", "txt"}
+CONTENT_MAX_CHARS = 200_000
 
 
 def new_offering_id() -> str:
@@ -95,6 +96,29 @@ def list_sync_offerings(db: Session, organization_id: str) -> list[dict[str, Any
         .all()
     )
     return [serialize_sync_offering(row, doc_count=_doc_count(db, row.offering_id)) for row in rows]
+
+
+def _combined_offering_content(
+    data: dict[str, Any],
+    docs: list[dict[str, Any]],
+    description: str | None,
+) -> str:
+    """Full offering text for offerings.content: payload, else description + every doc."""
+    top = str(data.get("content") or "").strip()
+    if top:
+        return top[:CONTENT_MAX_CHARS]
+    parts: list[str] = []
+    desc = (description or "").strip()
+    if desc:
+        parts.append(desc)
+    for item in docs:
+        body = str(item.get("content") or "").strip()
+        if not body:
+            continue
+        name = str(item.get("file_name") or "document").strip() or "document"
+        parts.append(f"## {name}\n{body}")
+    text = "\n\n".join(parts)
+    return text[:CONTENT_MAX_CHARS] if text else ""
 
 
 def _incoming_docs(data: dict[str, Any], *, public_offering_id: str) -> list[dict[str, Any]]:
@@ -210,16 +234,9 @@ def upsert_from_smartops(
     except (TypeError, ValueError):
         declared_n = stored
     row.doc_count = max(declared_n, stored)
-    combined = str(data.get("content") or "").strip()
-    if not combined:
-        pieces = []
-        for item in docs:
-            body = str(item.get("content") or "").strip()
-            if body:
-                pieces.append(body)
-        combined = "\n\n".join(pieces)
+    combined = _combined_offering_content(data, docs, description)
     if combined:
-        row.content = combined[:200_000]
+        row.content = combined
     if docs:
         first = docs[0]
         row.file_name = str(first.get("file_name") or "").strip() or row.file_name
