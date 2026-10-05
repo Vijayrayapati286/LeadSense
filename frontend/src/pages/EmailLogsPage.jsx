@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback, Fragment } from 'react';
 import { FiActivity, FiCheckCircle, FiChevronDown, FiChevronRight, FiFilter, FiMail } from 'react-icons/fi';
 import { logService, userService, campaignService, recipientGroupService } from '../services/services';
+import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
+import { hasPermission } from '../utils/permissions';
 import SearchInput from '../components/ui/SearchInput';
 import Pagination from '../components/ui/Pagination';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -57,13 +59,16 @@ export default function EmailLogsPage() {
   const [groupsFilter, setGroupsFilter] = useState([]);
   const [loading, setLoading] = useState(true);
   const toast = useToast();
+  const { user } = useAuth();
   const pageSize = 10;
 
   useEffect(() => {
-    userService.getAll().then(({ data }) => setUsers(data)).catch(() => {});
+    if (hasPermission(user, 'members:read')) {
+      userService.getAll().then(({ data }) => setUsers(data)).catch(() => {});
+    }
     campaignService.getAll().then(({ data }) => setCampaigns(data)).catch(() => {});
     recipientGroupService.getAll().then(({ data }) => setGroupsFilter(data)).catch(() => {});
-  }, []);
+  }, [user]);
 
   const loadLogs = useCallback(async () => {
     setLoading(true);

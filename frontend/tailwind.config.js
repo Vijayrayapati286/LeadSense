@@ -5,26 +5,26 @@ export default {
     extend: {
       colors: {
         primary: {
-          50: '#eff6ff',
-          100: '#dbeafe',
-          200: '#bfdbfe',
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#3b82f6',
-          600: '#2563eb',
-          700: '#1d4ed8',
-          800: '#1e40af',
-          900: '#1e3a8a',
+          50: 'rgb(var(--color-primary-50) / <alpha-value>)',
+          100: 'rgb(var(--color-primary-100) / <alpha-value>)',
+          200: 'rgb(var(--color-primary-200) / <alpha-value>)',
+          300: 'rgb(var(--color-primary-300) / <alpha-value>)',
+          400: 'rgb(var(--color-primary-400) / <alpha-value>)',
+          500: 'rgb(var(--color-primary-500) / <alpha-value>)',
+          600: 'rgb(var(--color-primary-600) / <alpha-value>)',
+          700: 'rgb(var(--color-primary-700) / <alpha-value>)',
+          800: 'rgb(var(--color-primary-800) / <alpha-value>)',
+          900: 'rgb(var(--color-primary-900) / <alpha-value>)',
         },
         sidebar: {
-          DEFAULT: '#0b1220',
+          DEFAULT: 'rgb(var(--color-sidebar) / <alpha-value>)',
           hover: 'rgba(255,255,255,0.06)',
-          active: '#3b82f6',
+          active: 'rgb(var(--color-primary-500) / <alpha-value>)',
         },
         surface: {
-          DEFAULT: '#ffffff',
-          muted: '#f8f9fb',
-          inset: '#f1f5f9',
+          DEFAULT: 'rgb(var(--color-surface) / <alpha-value>)',
+          muted: 'rgb(var(--color-surface-muted) / <alpha-value>)',
+          inset: 'rgb(var(--color-surface-inset) / <alpha-value>)',
         },
         ink: {
           DEFAULT: '#0f172a',
@@ -32,8 +32,8 @@ export default {
           tertiary: '#94a3b8',
         },
         accent: {
-          DEFAULT: '#2563eb',
-          hover: '#1d4ed8',
+          DEFAULT: 'rgb(var(--color-accent) / <alpha-value>)',
+          hover: 'rgb(var(--color-accent-hover) / <alpha-value>)',
         },
       },
       borderRadius: {
@@ -45,7 +45,7 @@ export default {
       boxShadow: {
         card: '0 6px 24px rgba(15, 23, 42, 0.04)',
         'card-hover': '0 8px 30px rgba(15, 23, 42, 0.08)',
-        button: '0 4px 14px rgba(37, 99, 235, 0.2)',
+        button: 'var(--shadow-button)',
       },
       fontSize: {
         display: ['1.75rem', { lineHeight: '2.25rem', fontWeight: '700' }],

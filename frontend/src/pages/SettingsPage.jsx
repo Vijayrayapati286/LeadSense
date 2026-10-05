@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { FiUser, FiMail, FiBriefcase, FiShield, FiSliders, FiSave, FiCreditCard } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
+import { useTheme } from '../hooks/useTheme';
 import { useToast } from '../hooks/useToast';
+import { THEMES } from '../theme';
 import { appSettingsService, authService } from '../services/services';
 import { RESPONSE_TAGS } from '../components/FilterBuilder';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
@@ -51,6 +53,7 @@ function CreditRow({ name, block, format, extra }) {
 
 export default function SettingsPage() {
   const { user, loadUser } = useAuth();
+  const { theme, setTheme } = useTheme();
   const toast = useToast();
   const [profile, setProfile] = useState({ name: '', email: '', department: '' });
   const [savingProfile, setSavingProfile] = useState(false);
@@ -139,6 +142,46 @@ export default function SettingsPage() {
         title="Settings"
         subtitle="Manage your account and application preferences."
       />
+
+      <div className="card">
+        <h2 className="text-lg font-semibold mb-1">Appearance</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Keep the current workspace, or switch to Sunset Coral. This choice is saved in this browser.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {THEMES.map((item) => {
+            const selected = theme === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setTheme(item.id)}
+                aria-pressed={selected}
+                className={`rounded-xl border p-4 text-left transition ${
+                  selected
+                    ? 'border-primary-500 bg-primary-50 ring-2 ring-primary-200'
+                    : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}
+              >
+                <span className="mb-3 flex gap-1.5">
+                  {item.swatches.map((color) => (
+                    <span
+                      key={color}
+                      className="h-6 w-6 rounded-full border border-black/10"
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                </span>
+                <span className="block text-sm font-semibold text-gray-900">{item.name}</span>
+                <span className="mt-1 block text-xs text-gray-500">{item.description}</span>
+                <span className="mt-3 block text-xs font-semibold text-primary-600">
+                  {selected ? 'Active' : 'Use this theme'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       <div className="card">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
