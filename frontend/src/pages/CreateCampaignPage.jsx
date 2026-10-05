@@ -5,6 +5,7 @@ import { campaignService, offeringsService, templateService, mailerService, cust
 import { getWorkspaceDefaults } from '../utils/workspaceDefaults';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
+import { hasPermission } from '../utils/permissions';
 import { generateCampaignId, extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
 import { buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
@@ -99,8 +100,10 @@ export default function CreateCampaignPage() {
 
   useEffect(() => {
     customFieldService.getAll().then(({ data }) => setCustomFields(data)).catch(() => {});
-    userService.getAll().then(({ data }) => setUsers(data)).catch(() => {});
-  }, []);
+    if (hasPermission(user, 'members:read')) {
+      userService.getAll().then(({ data }) => setUsers(data)).catch(() => {});
+    }
+  }, [user]);
 
   useEffect(() => {
     if (isEditMode) return;

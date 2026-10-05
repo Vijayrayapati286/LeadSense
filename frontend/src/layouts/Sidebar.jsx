@@ -193,7 +193,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
 
   return (
     <aside
-      className={`fixed left-0 top-0 z-[60] flex h-full flex-col border-r border-white/[0.06] bg-[#0b1220] text-white transition-all duration-300 ${
+      className={`fixed left-0 top-0 z-[60] flex h-full flex-col border-r border-white/[0.06] bg-sidebar text-white transition-all duration-300 ${
         collapsed ? 'w-[72px]' : 'w-64'
       }`}
     >
@@ -231,7 +231,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
               <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-700 text-xs font-bold text-white">
                 {initials(user.name)}
               </span>
-              <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-[#0b1220] bg-emerald-400" />
+              <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar bg-emerald-400" />
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-white">{user.name}</p>
@@ -250,7 +250,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
           >
             <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-slate-700 text-xs font-bold">
               {initials(user.name)}
-              <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-[#0b1220] bg-emerald-400" />
+              <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar bg-emerald-400" />
             </span>
           </Link>
         ) : null}

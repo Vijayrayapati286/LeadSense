@@ -1,16 +1,18 @@
 """In-app bounce notifications for the sending user.
 
-Revision ID: 038
-Revises: 037
+Revision ID: 045
+Revises: 044
 Create Date: 2026-09-29 13:30:00.000000
+
+Moved off revision 038, which already belongs to ICP export mapping.
 """
 from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "038"
-down_revision: Union[str, None] = "037"
+revision: str = "045"
+down_revision: Union[str, None] = "044"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

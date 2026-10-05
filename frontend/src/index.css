@@ -2,13 +2,59 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --color-primary-50: 239 246 255;
+  --color-primary-100: 219 234 254;
+  --color-primary-200: 191 219 254;
+  --color-primary-300: 147 197 253;
+  --color-primary-400: 96 165 250;
+  --color-primary-500: 59 130 246;
+  --color-primary-600: 37 99 235;
+  --color-primary-700: 29 78 216;
+  --color-primary-800: 30 64 175;
+  --color-primary-900: 30 58 138;
+  --color-sidebar: 11 18 32;
+  --color-surface: 255 255 255;
+  --color-surface-muted: 248 249 251;
+  --color-surface-inset: 241 245 249;
+  --color-accent: 37 99 235;
+  --color-accent-hover: 29 78 216;
+  --shadow-button: 0 4px 14px rgba(37, 99, 235, 0.2);
+  --page-glow-a: rgba(59, 130, 246, 0.08);
+  --page-glow-b: rgba(14, 165, 233, 0.05);
+  --hero-glow: rgba(59, 130, 246, 0.14);
+  --link-color: #2563eb;
+}
+
+[data-theme='sunset-coral'] {
+  --color-primary-50: 255 244 238;
+  --color-primary-100: 255 228 214;
+  --color-primary-200: 255 201 173;
+  --color-primary-300: 255 168 122;
+  --color-primary-400: 255 138 76;
+  --color-primary-500: 255 107 53;
+  --color-primary-600: 255 94 0;
+  --color-primary-700: 224 78 0;
+  --color-primary-800: 184 61 0;
+  --color-primary-900: 122 40 0;
+  --color-sidebar: 30 30 36;
+  --color-surface-muted: 250 249 248;
+  --color-accent: 255 94 0;
+  --color-accent-hover: 224 78 0;
+  --shadow-button: 0 4px 14px rgba(255, 94, 0, 0.28);
+  --page-glow-a: rgba(255, 107, 53, 0.14);
+  --page-glow-b: rgba(255, 180, 140, 0.1);
+  --hero-glow: rgba(255, 107, 53, 0.18);
+  --link-color: #ff5e00;
+}
+
 @layer base {
   body {
     @apply bg-surface-muted text-ink font-sans antialiased;
     font-family: 'Inter', system-ui, sans-serif;
     background-image:
-      radial-gradient(circle at 92% 4%, rgba(59, 130, 246, 0.08), transparent 24rem),
-      radial-gradient(circle at 18% 92%, rgba(14, 165, 233, 0.05), transparent 28rem);
+      radial-gradient(circle at 92% 4%, var(--page-glow-a), transparent 24rem),
+      radial-gradient(circle at 18% 92%, var(--page-glow-b), transparent 28rem);
   }
 
   button, a, input, textarea, select {
@@ -72,7 +118,7 @@
   .workspace-hero::after {
     content: '';
     @apply pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full;
-    background: radial-gradient(circle, rgba(59, 130, 246, .14), transparent 68%);
+    background: radial-gradient(circle, var(--hero-glow), transparent 68%);
   }
 
   .workspace-eyebrow {
@@ -199,6 +245,32 @@
     background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, .7), transparent);
     animation: shimmer 1.5s infinite;
   }
+
+  .ai-outreach-banner {
+    background-image: linear-gradient(to right, #6d28d9, #4f46e5, #3b82f6);
+    box-shadow: 0 20px 25px -5px rgb(79 70 229 / 0.15), 0 8px 10px -6px rgb(79 70 229 / 0.15);
+  }
+
+  .ai-outreach-sub {
+    color: #e0e7ff;
+  }
+
+  .ai-outreach-cta {
+    color: #4338ca;
+  }
+}
+
+[data-theme='sunset-coral'] .ai-outreach-banner {
+  background-image: linear-gradient(to right, #ff5e00, #ff6b35, #ff8a4c);
+  box-shadow: 0 20px 25px -5px rgb(255 94 0 / 0.28), 0 8px 10px -6px rgb(255 94 0 / 0.18);
+}
+
+[data-theme='sunset-coral'] .ai-outreach-sub {
+  color: rgb(255 255 255 / 0.92);
+}
+
+[data-theme='sunset-coral'] .ai-outreach-cta {
+  color: #ff5e00;
 }
 
 @keyframes riseIn {
@@ -241,7 +313,7 @@
   list-style-type: decimal;
 }
 .rich-text-content a {
-  color: #2563eb;
+  color: var(--link-color);
   text-decoration: underline;
 }
 .rich-text-content blockquote {

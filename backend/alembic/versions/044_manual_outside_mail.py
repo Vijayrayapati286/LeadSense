@@ -1,8 +1,10 @@
 """Record mail sent outside LeadSense.
 
-Revision ID: 037
-Revises: 036
+Revision ID: 044
+Revises: 043
 Create Date: 2026-09-29 10:50:00.000000
+
+Moved off revision 037, which already belongs to OOO inbound email.
 """
 import sys
 from pathlib import Path
@@ -14,8 +16,8 @@ from alembic import op
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from column_utils import add_column_if_missing
 
-revision: str = "037"
-down_revision: Union[str, None] = "036"
+revision: str = "044"
+down_revision: Union[str, None] = "043"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
