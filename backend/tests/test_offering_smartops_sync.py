@@ -172,6 +172,27 @@ def test_smartops_create_idempotent_update_and_list(client):
     assert updated.json()["doc_count"] == 3
 
 
+def test_smartops_pat_delete_removes_offering(client):
+    test_client, org_id, pat = client
+    created = test_client.post("/api/offerings", headers=_auth(pat), json=_payload(org_id))
+    assert created.status_code == 201, created.text
+    offering_id = created.json()["offering_id"]
+
+    deleted = test_client.delete(f"/api/offerings/{offering_id}", headers=_auth(pat))
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["deleted"] is True
+
+    listed = test_client.get(f"/api/offerings?organization_id={org_id}", headers=_auth(pat))
+    assert listed.status_code == 200
+    assert listed.json()["items"] == []
+
+    # Idempotent second delete
+    again = test_client.delete(f"/api/offerings/{offering_id}", headers=_auth(pat))
+    assert again.status_code == 200
+    assert again.json()["deleted"] is False
+
+
 def test_stores_description_on_offerings_content_when_docs_have_no_text(client):
     test_client, org_id, pat = client
     docs = [
