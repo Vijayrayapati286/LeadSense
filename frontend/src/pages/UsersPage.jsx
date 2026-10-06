@@ -1,22 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { FiPlus, FiUsers } from 'react-icons/fi';
-import { userService, inviteService } from '../services/services';
+import { userService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
 import { hasPermission } from '../utils/permissions';
 import { useToast } from '../hooks/useToast';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Button from '../components/ui/Button';
 import PageShell from '../components/ui/PageShell';
-import SurfaceCard from '../components/ui/SurfaceCard';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import SearchInput from '../components/ui/SearchInput';
-
-const EMPTY_CREATE = {
-  email: '',
-  role: 'USER',
-};
 
 function initials(name) {
   return (name || '?')
@@ -50,8 +44,6 @@ export default function UsersPage() {
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
 
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState(EMPTY_CREATE);
   const [roleUser, setRoleUser] = useState(null);
   const [nextRole, setNextRole] = useState('USER');
   const [statusUser, setStatusUser] = useState(null);
@@ -97,22 +89,6 @@ export default function UsersPage() {
 
   const fieldClass =
     'mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100';
-
-  const handleCreate = async (event) => {
-    event.preventDefault();
-    setSaving(true);
-    try {
-      await inviteService.create({ email: createForm.email, role: createForm.role });
-      toast.success('Verification email sent');
-      setCreateOpen(false);
-      setCreateForm(EMPTY_CREATE);
-      await loadUsers();
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to add member');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const handleChangeRole = async () => {
     if (!roleUser) return;
@@ -171,24 +147,14 @@ export default function UsersPage() {
           </p>
         </div>
         {hasPermission(user, 'members:invite') ? (
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
-            >
-              <FiPlus size={16} />
-              Add User
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/invites')}
-              className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
-            >
-              <FiPlus size={16} />
-              Invite Member
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/invites')}
+            className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+          >
+            <FiPlus size={16} />
+            Invite Member
+          </button>
         ) : null}
       </div>
 
@@ -298,30 +264,6 @@ export default function UsersPage() {
         Need to invite someone by email first?{' '}
         <Link to="/invites" className="font-medium text-primary-600 hover:underline">Go to Invites</Link>
       </p>
-
-      <Modal isOpen={createOpen} onClose={() => setCreateOpen(false)} title="Add User">
-        <form className="space-y-4" onSubmit={handleCreate}>
-          <p className="text-sm text-slate-600">
-            They receive a verification email, then set their own password. They join{' '}
-            <span className="font-medium">{user?.org_name || 'your organization'}</span> only.
-          </p>
-          <label className="block text-sm font-medium text-slate-700">
-            Email
-            <input type="email" className={fieldClass} required value={createForm.email} onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))} />
-          </label>
-          <label className="block text-sm font-medium text-slate-700">
-            Role
-            <select className={fieldClass} value={createForm.role} onChange={(e) => setCreateForm((f) => ({ ...f, role: e.target.value }))}>
-              <option value="USER">User</option>
-              <option value="ADMIN">Admin</option>
-            </select>
-          </label>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>Send verification</Button>
-          </div>
-        </form>
-      </Modal>
 
       <Modal isOpen={Boolean(roleUser)} onClose={() => setRoleUser(null)} title="Change Role" size="sm">
         <div className="space-y-4">

@@ -129,12 +129,20 @@ def _incoming_docs(data: dict[str, Any], *, public_offering_id: str) -> list[dic
     file_name = (data.get("file_name") or "").strip()
     if not file_name:
         return []
+    legacy_url = (data.get("file_url") or "").strip() or None
+    s3_key = (data.get("s3_key") or "").strip() or None
+    download_url = (data.get("download_url") or "").strip() or None
+    if not download_url and legacy_url and legacy_url.startswith("http"):
+        download_url = legacy_url
+    if not s3_key and legacy_url and not legacy_url.startswith("http"):
+        s3_key = legacy_url
     return [
         {
             "doc_id": f"legacy_{public_offering_id}",
             "file_name": file_name,
             "file_format": data.get("file_format"),
-            "s3_key": (data.get("s3_key") or data.get("file_url") or "").strip() or None,
+            "s3_key": s3_key,
+            "download_url": download_url,
             "content": (data.get("content") or "").strip() or None,
             "created_at": data.get("created_at"),
         }
@@ -150,7 +158,16 @@ def _upsert_documents(db: Session, offering_id: str, docs: list[dict[str, Any]])
         if not file_name:
             raise ValueError("each document requires file_name")
         file_format = _normalize_format(item.get("file_format"), required=True)
-        s3_key = str(item.get("s3_key") or item.get("file_url") or "").strip() or None
+        s3_key = str(item.get("s3_key") or "").strip() or None
+        download_url = str(item.get("download_url") or "").strip() or None
+        # Only accept HTTPS download links; never treat opaque s3_key as file_url.
+        if download_url and not download_url.startswith("http"):
+            download_url = None
+        legacy_file_url = str(item.get("file_url") or "").strip() or None
+        if not download_url and legacy_file_url and legacy_file_url.startswith("http"):
+            download_url = legacy_file_url
+        if not s3_key and legacy_file_url and not legacy_file_url.startswith("http"):
+            s3_key = legacy_file_url
         content = str(item.get("content") or "").strip() or None
         created_at = _parse_created_at(item.get("created_at"))
         row = db.query(OfferingDocumentRow).filter(OfferingDocumentRow.doc_id == doc_id).first()
@@ -159,6 +176,8 @@ def _upsert_documents(db: Session, offering_id: str, docs: list[dict[str, Any]])
             row.file_name = file_name
             row.file_format = file_format or row.file_format
             row.s3_key = s3_key if s3_key is not None else row.s3_key
+            if download_url:
+                row.download_url = download_url
             if content:
                 row.content = content
             continue
@@ -169,6 +188,7 @@ def _upsert_documents(db: Session, offering_id: str, docs: list[dict[str, Any]])
                 file_name=file_name,
                 file_format=file_format or "pdf",
                 s3_key=s3_key,
+                download_url=download_url,
                 content=content,
                 created_at=created_at,
             )
@@ -241,6 +261,13 @@ def upsert_from_smartops(
         first = docs[0]
         row.file_name = str(first.get("file_name") or "").strip() or row.file_name
         row.file_format = _normalize_format(first.get("file_format")) or row.file_format
-        row.file_url = str(first.get("s3_key") or first.get("file_url") or "").strip() or row.file_url
+        first_download = str(first.get("download_url") or "").strip()
+        if first_download.startswith("http"):
+            row.file_url = first_download
+        else:
+            legacy = str(first.get("file_url") or "").strip()
+            if legacy.startswith("http"):
+                row.file_url = legacy
+            # Do not overwrite file_url with opaque s3_key
     db.flush()
     return row, created

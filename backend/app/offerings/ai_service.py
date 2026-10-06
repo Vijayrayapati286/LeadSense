@@ -42,6 +42,16 @@ EMAIL_SYSTEM = (
     "bullet lists. Always respond with valid JSON only."
 )
 
+CAMPAIGN_TYPE_SYSTEM = (
+    "You are an elite B2B sales email copywriter. Given offering document content, "
+    "write three DISTINCT high-level outreach emails for campaign compose: "
+    "introduction, product demo invite, and follow-up. "
+    "Ground each email in different facets of the offering content "
+    "(value prop vs demo proof points vs reminder + next step). "
+    "Always respond with valid JSON only. Use placeholders {{Name}}, {{Company}}, "
+    "{{Designation}}, {{Industry}}."
+)
+
 
 class OfferingAIService:
     def __init__(self):
@@ -92,6 +102,36 @@ class OfferingAIService:
         payload = self._mock_generate(description)
         payload.is_mock = True
         return payload
+
+    def generate_campaign_type_templates(
+        self,
+        *,
+        offering_name: str,
+        content: str,
+    ) -> list[dict[str, str]]:
+        """Intro / Demo / Follow-up emails grounded in synced offering docs."""
+        name = (offering_name or "Our Solution").strip() or "Our Solution"
+        body = (content or "").strip()
+        if self.settings.use_mock_groq or not self.settings.groq_api_key:
+            return self._mock_campaign_type_templates(name, body)
+
+        last_err: Exception | None = None
+        for attempt in range(2):
+            try:
+                raw = self._groq_json(
+                    system=CAMPAIGN_TYPE_SYSTEM,
+                    user=self._campaign_type_prompt(name, body),
+                    temperature=0.6,
+                    max_tokens=2500,
+                )
+                return self._validate_campaign_type_templates(raw, name, body)
+            except Exception as exc:
+                last_err = exc
+                logger.warning(
+                    "Campaign type email generate attempt %s failed: %s", attempt + 1, exc
+                )
+        logger.warning("Falling back to mock campaign type templates: %s", last_err)
+        return self._mock_campaign_type_templates(name, body)
 
     def generate_email_templates(self, data: GenerateOfferingEmailRequest) -> dict:
         """Generate 2–3 distinct outreach email variants from offering context."""
@@ -200,6 +240,126 @@ class OfferingAIService:
 
     def _validate_semantic(self, raw: dict) -> SemanticMatchEvidence:
         return SemanticMatchEvidence.model_validate(raw)
+
+    def _campaign_type_prompt(self, offering_name: str, content: str) -> str:
+        clipped = (content or "").strip()[:6000] or "(no document content — invent carefully from the name only)"
+        return f"""Write exactly 3 campaign emails for this offering.
+
+Offering name: {offering_name}
+
+Offering document content (source of truth — extract high-level points, do not dump raw text):
+---
+{clipped}
+---
+
+Return JSON with key "templates" — an array of exactly 3 objects in this order:
+1) type: "introduction", name: "Introduction Outreach"
+   Warm first touch; highlight who it's for and the core problem solved.
+2) type: "demo", name: "Product Demo Invite"
+   Invite to a short demo; emphasize proof points / differentiators from the docs.
+3) type: "follow_up", name: "Follow-up Email"
+   Polite follow-up; remind of one concrete outcome and ask for a short call.
+
+Each object fields:
+- type, name, subject (under 90 chars), body (plain text, under ~160 words)
+Body must start with a greeting using {{{{Name}}}}, mention {{{{Company}}}} / {{{{Designation}}}} / {{{{Industry}}}} where natural.
+Each body must use DIFFERENT high-level points from the offering content (not the same paragraph)."""
+
+    @staticmethod
+    def _content_slices(content: str, size: int = 280) -> tuple[str, str, str]:
+        cleaned = " ".join((content or "").split())
+        if not cleaned:
+            return ("", "", "")
+        if len(cleaned) <= size:
+            return (cleaned, cleaned, cleaned)
+        mid = max(size, len(cleaned) // 2)
+        end = max(size, (len(cleaned) * 2) // 3)
+        a = cleaned[:size].rsplit(" ", 1)[0] + "…"
+        b = cleaned[mid : mid + size].rsplit(" ", 1)[0] + "…"
+        c = cleaned[end : end + size].rsplit(" ", 1)[0] + "…"
+        return (a, b, c)
+
+    def _mock_campaign_type_templates(
+        self, offering_name: str, content: str
+    ) -> list[dict[str, str]]:
+        intro_blurb, demo_blurb, follow_blurb = self._content_slices(content)
+        if not intro_blurb:
+            intro_blurb = f"{offering_name} helps teams like {{{{Company}}}} improve outcomes."
+            demo_blurb = f"See how {offering_name} works in a short walkthrough tailored to {{{{Industry}}}}."
+            follow_blurb = f"A quick follow-up on {offering_name} for {{{{Company}}}}."
+        return [
+            {
+                "name": "Introduction Outreach",
+                "subject": f"Quick introduction — {{{{Company}}}} & {offering_name}",
+                "body": (
+                    f"Hello {{{{Name}}}},\n\n"
+                    f"I came across {{{{Company}}}} and was impressed by your work in the "
+                    f"{{{{Industry}}}} space. As {{{{Designation}}}}, I thought you might be "
+                    f"interested in {offering_name}.\n\n"
+                    f"{intro_blurb}\n\n"
+                    f"Would you be open to a brief chat?"
+                ),
+                "template_source": "offering_ai",
+            },
+            {
+                "name": "Product Demo Invite",
+                "subject": f"Exclusive demo of {offering_name} for {{{{Company}}}}",
+                "body": (
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"We're offering select {{{{Industry}}}} leaders a short demo of "
+                    f"{offering_name}. Given your role as {{{{Designation}}}} at "
+                    f"{{{{Company}}}}, these proof points may matter:\n\n"
+                    f"{demo_blurb}\n\n"
+                    f"Can I reserve a slot for you this week?"
+                ),
+                "template_source": "offering_ai",
+            },
+            {
+                "name": "Follow-up Email",
+                "subject": f"Following up — {{{{Name}}}} / {offering_name}",
+                "body": (
+                    f"Dear {{{{Name}}}},\n\n"
+                    f"I wanted to follow up on {offering_name} for {{{{Company}}}}. "
+                    f"I know you're busy as {{{{Designation}}}}, but one outcome stood out:\n\n"
+                    f"{follow_blurb}\n\n"
+                    f"Would a 10-minute call work for you?"
+                ),
+                "template_source": "offering_ai",
+            },
+        ]
+
+    def _validate_campaign_type_templates(
+        self, raw: dict, offering_name: str, content: str
+    ) -> list[dict[str, str]]:
+        items = raw.get("templates") or raw.get("versions") or []
+        if not isinstance(items, list) or len(items) < 3:
+            raise ValueError("AI response missing 3 campaign templates")
+        expected = [
+            ("introduction", "Introduction Outreach"),
+            ("demo", "Product Demo Invite"),
+            ("follow_up", "Follow-up Email"),
+        ]
+        out: list[dict[str, str]] = []
+        for idx, (etype, ename) in enumerate(expected):
+            item = items[idx] if isinstance(items[idx], dict) else {}
+            subject = str(item.get("subject") or "").strip()
+            body = str(item.get("body") or "").strip()
+            if not subject or not body:
+                raise ValueError(f"AI template missing subject/body for {ename}")
+            out.append(
+                {
+                    "name": ename,
+                    "subject": subject,
+                    "body": body,
+                    "template_source": "offering_ai",
+                    "type": str(item.get("type") or etype),
+                }
+            )
+        bodies = {t["body"] for t in out}
+        if len(bodies) < 2:
+            # Model repeated the same blurb — fall back to mock distinct slices
+            return self._mock_campaign_type_templates(offering_name, content)
+        return out
 
     def _email_prompt(self, data: GenerateOfferingEmailRequest) -> str:
         def join(items: list[str]) -> str:

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import User
+from app.offerings.models import OfferingRow
 from app.offerings.service import get_offering
 from app.schemas.schemas import (
     AITemplateRequest,
@@ -19,7 +20,7 @@ from app.utils.helpers import add_known_field_case_aliases, extract_placeholders
 router = APIRouter(prefix="/templates", tags=["Templates"])
 ai_service = AIService()
 
-# Hardcoded placeholder templates
+# Fallback when no offering is selected
 PLACEHOLDER_TEMPLATES = [
     {
         "id": 1,
@@ -65,33 +66,95 @@ def _offering_template_display_name(offering_name: str | None, stored_name: str 
     return "Introduction Outreach"
 
 
+def _resolve_offering_for_templates(
+    db: Session,
+    offering_id: int,
+    current_user: User,
+) -> OfferingRow | None:
+    """Load offering for campaign templates (user-owned or same-org SmartOps sync)."""
+    user_id = getattr(current_user, "id", None)
+    org_id = getattr(current_user, "org_id", None)
+    row = get_offering(db, offering_id, user_id=user_id)
+    if row:
+        return row
+    row = get_offering(db, offering_id, user_id=None, organization_id=org_id)
+    if row:
+        return row
+    if org_id:
+        return (
+            db.query(OfferingRow)
+            .filter(OfferingRow.id == offering_id, OfferingRow.organization_id == org_id)
+            .first()
+        )
+    return None
+
+
+def _templates_from_offering(row: OfferingRow) -> list[dict]:
+    """Build Introduction / Product Demo / Follow-up from offering docs (AI-by-type)."""
+    from app.offerings.ai_service import OfferingAIService
+
+    offering_name = (row.name or "Our Solution").strip()
+    raw_content = (row.content or row.description or row.short_description or "").strip()
+    oid = row.id
+
+    generated = OfferingAIService().generate_campaign_type_templates(
+        offering_name=offering_name,
+        content=raw_content,
+    )
+    id_by_name = {
+        "Introduction Outreach": f"offering-{oid}-intro",
+        "Product Demo Invite": f"offering-{oid}-demo",
+        "Follow-up Email": f"offering-{oid}-followup",
+    }
+    templates = []
+    for item in generated:
+        name = item.get("name") or "Introduction Outreach"
+        templates.append(
+            {
+                "id": id_by_name.get(name, f"offering-{oid}-intro"),
+                "name": name,
+                "subject": item["subject"],
+                "body": item["body"],
+                "source": "offering",
+                "template_source": item.get("template_source") or "offering_ai",
+                "offering_id": oid,
+                "offering_name": offering_name,
+            }
+        )
+
+    email_template = getattr(row, "email_template", None) or {}
+    if email_template.get("subject") and email_template.get("body") and templates:
+        templates[0] = {
+            "id": f"offering-{oid}-intro",
+            "name": "Introduction Outreach",
+            "subject": email_template["subject"],
+            "body": email_template["body"],
+            "source": "offering",
+            "template_source": email_template.get("source") or "upload",
+            "source_filename": email_template.get("source_filename"),
+            "offering_id": oid,
+            "offering_name": offering_name,
+            "display_name": _offering_template_display_name(
+                offering_name, email_template.get("name")
+            ),
+        }
+    return templates
+
+
 @router.get("/placeholder-templates")
 def get_placeholder_templates(
     offering_id: int | None = Query(None, ge=1),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return email templates for campaign compose — offering email only when saved on offering."""
-    templates: list[dict] = []
+    """Return Offering Email templates for campaign compose.
+
+    When ``offering_id`` is set, Introduction / Product Demo / Follow-up are
+    grounded in that offering's synced SmartOps content.
+    """
     if offering_id is not None:
-        row = get_offering(db, offering_id, user_id=getattr(current_user, "id", None))
-        email_template = getattr(row, "email_template", None) if row else None
-        if email_template and email_template.get("subject") and email_template.get("body"):
-            offering_name = getattr(row, "name", None) if row else None
-            templates = [
-                {
-                    "id": f"offering-{offering_id}",
-                    "name": _offering_template_display_name(offering_name, email_template.get("name")),
-                    "subject": email_template["subject"],
-                    "body": email_template["body"],
-                    "source": "offering",
-                    "template_source": email_template.get("source"),
-                    "source_filename": email_template.get("source_filename"),
-                    "offering_name": offering_name,
-                },
-            ]
-        else:
-            templates = list(PLACEHOLDER_TEMPLATES)
+        row = _resolve_offering_for_templates(db, offering_id, current_user)
+        templates = _templates_from_offering(row) if row else list(PLACEHOLDER_TEMPLATES)
     else:
         templates = list(PLACEHOLDER_TEMPLATES)
     enriched = []
