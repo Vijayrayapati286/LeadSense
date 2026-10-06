@@ -12,7 +12,7 @@ import {
   FiUsers,
 } from 'react-icons/fi';
 import { useToast } from '../hooks/useToast';
-import { linkedinProfileService } from '../services/services';
+import { icpService, linkedinProfileService } from '../services/services';
 import { downloadBlob } from '../utils/helpers';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import GitDiffCompare, { buildDiff } from '../components/bulk/GitDiffCompare';
@@ -94,6 +94,8 @@ export default function LinkedInProfileExtractorPage() {
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkDownloading, setBulkDownloading] = useState(false);
   const [icpAdding, setIcpAdding] = useState(false);
+  const [singleIcpAdding, setSingleIcpAdding] = useState(false);
+  const [singleIcpAdded, setSingleIcpAdded] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [reviewItems, setReviewItems] = useState([]);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -155,6 +157,7 @@ export default function LinkedInProfileExtractorPage() {
     setResult(null);
     setExistingSnapshot(null);
     setAwaitingApproval(false);
+    setSingleIcpAdded(false);
 
     try {
       const response = await linkedinProfileService.extract(trimmed);
@@ -193,6 +196,36 @@ export default function LinkedInProfileExtractorPage() {
       toast.error(message);
     } finally {
       setExtracting(false);
+    }
+  };
+
+  const handleAddSingleToIcp = async () => {
+    if (!result?.name?.trim()) {
+      toast.error('This profile has no name, so it cannot be added to ICP');
+      return;
+    }
+    setSingleIcpAdding(true);
+    try {
+      await icpService.create({
+        name: result.name,
+        company_name: result.company || null,
+        designation: result.job_title || null,
+        about: result.summary || result.headline || null,
+        linkedin_url: result.profile_url || url,
+        location: result.location || null,
+        image: result.image || null,
+        icp_status: 'verified',
+      });
+      setSingleIcpAdded(true);
+      toast.success('Added to ICP');
+    } catch (err) {
+      const message =
+        (typeof err.response?.data?.detail === 'string' && err.response.data.detail) ||
+        err.message ||
+        'Could not add this profile to ICP';
+      toast.error(message);
+    } finally {
+      setSingleIcpAdding(false);
     }
   };
 
@@ -861,6 +894,27 @@ export default function LinkedInProfileExtractorPage() {
               <Field label="About / Summary" value={result.summary} />
             </div>
           </dl>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleAddSingleToIcp}
+              disabled={singleIcpAdding || singleIcpAdded || !result.name?.trim()}
+              className="btn-primary inline-flex items-center gap-2"
+              title="Save this extracted profile to the ICP database"
+            >
+              {singleIcpAdding ? (
+                <>
+                  <LoadingSpinner size="sm" />
+                  Adding to ICP…
+                </>
+              ) : (
+                <>
+                  <FiUsers size={16} />
+                  {singleIcpAdded ? 'Added to ICP' : 'Add to ICP'}
+                </>
+              )}
+            </button>
+          </div>
         </div>
       )}
 
