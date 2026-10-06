@@ -220,6 +220,12 @@ _NAME_SUFFIXES = {
     "jr", "sr", "ii", "iii", "iv", "phd", "md", "mba", "cpa", "esq", "cfa",
     "pmp", "msc", "bsc", "ma", "ba", "do", "dds", "rn", "jd", "cma", "cfp",
 }
+# Credentials LinkedIn appends inside the name. Punctuation splits "J.D." and
+# "SHRM-CP" into separate tokens, so these are removed wherever they sit.
+_NAME_CREDENTIALS = {
+    "shrm", "shrmcp", "shrmscp", "phr", "sphr", "aphr", "gphr", "sphri",
+    "gba", "scp", "cp", "cebs", "ccp",
+}
 
 # Filler words that differ freely between a spreadsheet title and a LinkedIn headline.
 _TITLE_STOPWORDS = {"and", "of", "the", "at", "for", "in", "to", "a", "an", "amp"}
@@ -404,7 +410,11 @@ def normalize_name(value: Any) -> str:
     text = normalize_text(value)
     if not text:
         return ""
-    tokens = [t for t in text.split() if t not in _NAME_PREFIXES]
+    tokens = [
+        t
+        for t in text.split()
+        if t not in _NAME_PREFIXES and t not in _NAME_CREDENTIALS
+    ]
     while tokens and tokens[-1] in _NAME_SUFFIXES:
         tokens.pop()
     core = [t for t in tokens if len(t) > 1]
