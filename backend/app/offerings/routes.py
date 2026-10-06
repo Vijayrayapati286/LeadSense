@@ -122,7 +122,7 @@ def create_offering_route(
             row, created = upsert_from_smartops(
                 db,
                 organization_id=pat_org,
-                data=body.model_dump(exclude_unset=True),
+                data=body.model_dump(),
                 owner_user_id=getattr(org, "owner_user_id", None) if org else None,
             )
         except ValueError as exc:
@@ -331,7 +331,7 @@ def update_offering_route(
                 db,
                 organization_id=pat_org,
                 data={
-                    **body.model_dump(exclude_unset=True),
+                    **body.model_dump(),
                     "smartops_offering_id": body.smartops_offering_id or row.smartops_offering_id,
                     "name": body.name or row.name,
                 },

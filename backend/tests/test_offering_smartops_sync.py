@@ -127,8 +127,22 @@ def test_smartops_create_idempotent_update_and_list(client):
     assert body["status"] == "active"
     assert body["doc_count"] == 2
     assert body["offering_id"].startswith("ls_off_")
-    assert "Extracted text from pitch_deck.pdf" in (body.get("content") or "")
+    stored = body.get("content") or ""
+    assert "Q4 enterprise solution overview with pricing" in stored
+    assert "Extracted text from pitch_deck.pdf" in stored
+    assert "Extracted text from pricing_guide.docx" in stored
     offering_id = body["offering_id"]
+
+    from app.database.connection import SessionLocal
+    from app.offerings.models import OfferingRow
+
+    db = SessionLocal()
+    try:
+        row = db.query(OfferingRow).filter(OfferingRow.offering_id == offering_id).one()
+        assert row.content == stored
+        assert "Extracted text from pricing_guide.docx" in (row.content or "")
+    finally:
+        db.close()
 
     again = test_client.post("/api/offerings", headers=_auth(pat), json=_payload(org_id))
     assert again.status_code == 200, again.text
@@ -156,6 +170,35 @@ def test_smartops_create_idempotent_update_and_list(client):
     assert updated.json()["name"] == "Enterprise Pitch Pack Revised"
     assert updated.json()["offering_id"] == offering_id
     assert updated.json()["doc_count"] == 3
+
+
+def test_stores_description_on_offerings_content_when_docs_have_no_text(client):
+    test_client, org_id, pat = client
+    docs = [
+        {
+            "doc_id": "odoc_notext_1",
+            "file_name": "deck.pptx",
+            "file_format": "pptx",
+            "s3_key": "offerings/ten_xxx/deck.pptx",
+        }
+    ]
+    resp = test_client.post(
+        "/api/offerings",
+        headers=_auth(pat),
+        json=_payload(org_id, docs=docs, content=None, description="Folder-only description"),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["content"] == "Folder-only description"
+
+    from app.database.connection import SessionLocal
+    from app.offerings.models import OfferingRow
+
+    db = SessionLocal()
+    try:
+        row = db.query(OfferingRow).filter(OfferingRow.offering_id == resp.json()["offering_id"]).one()
+        assert row.content == "Folder-only description"
+    finally:
+        db.close()
 
 
 def test_smartops_rejects_other_org(client):

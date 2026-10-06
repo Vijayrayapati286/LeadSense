@@ -333,6 +333,9 @@ def _ensure_offerings_recommendation_schema() -> None:
             if "content" not in doc_cols:
                 conn.execute(text("ALTER TABLE offering_documents ADD COLUMN content TEXT"))
                 logger.info("Added offering_documents.content")
+            if "download_url" not in doc_cols:
+                conn.execute(text("ALTER TABLE offering_documents ADD COLUMN download_url TEXT"))
+                logger.info("Added offering_documents.download_url")
 
         if "offering_matches" in tables:
             cols = {c["name"] for c in inspector.get_columns("offering_matches")}
