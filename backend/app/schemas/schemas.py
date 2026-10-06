@@ -15,6 +15,37 @@ class UserResponse(BaseModel):
     name: str
     email: str
     department: str
+    org_id: str | None = None
+    role: str = "USER"
+    status: str = "ACTIVE"
+    org_name: str | None = None
+    org_type: str | None = None
+    client_name: str | None = None
+    permissions: list[str] = []
+
+
+class UserCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    role: Literal["ADMIN", "USER"] = "USER"
+    department: str = Field(default="Sales", min_length=1, max_length=255)
+    status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
+
+
+class UserAdminUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    department: str | None = Field(None, min_length=1, max_length=255)
+    role: Literal["ADMIN", "USER"] | None = None
+    status: Literal["ACTIVE", "INACTIVE"] | None = None
+
+
+class UserStatusUpdateRequest(BaseModel):
+    status: Literal["ACTIVE", "INACTIVE"]
+
+
+class UserResetPasswordRequest(BaseModel):
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 class UserProfileUpdate(BaseModel):
@@ -88,6 +119,64 @@ class DashboardResponse(BaseModel):
     recent_campaigns: list[RecentCampaign]
 
 
+class AdminDashboardSummary(BaseModel):
+    total_users: int
+    campaigns: int
+    emails_sent: int
+    delivered: int
+    bounced: int
+    replies: int
+
+
+class AdminUserActivity(BaseModel):
+    user_id: int
+    name: str
+    email: str
+    campaigns: int
+    emails_sent: int
+    status: str
+
+
+class AdminCampaignPerformance(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    sent: int
+    delivered: int
+    bounced: int
+    replied: int
+
+
+class AdminIcpStats(BaseModel):
+    accounts: int
+    contacts: int
+    verified_emails: int
+    invalid_emails: int
+
+
+class AdminLinkedInStats(BaseModel):
+    total_extracted: int
+    successfully_extracted: int
+    failed: int
+    added_to_icp: int
+
+
+class AdminEmailVerificationStats(BaseModel):
+    emails_verified: int
+    valid: int
+    invalid: int
+    risky: int
+
+
+class AdminDashboardResponse(BaseModel):
+    org_id: str
+    summary: AdminDashboardSummary
+    user_activity: list[AdminUserActivity]
+    campaign_performance: list[AdminCampaignPerformance]
+    icp: AdminIcpStats
+    linkedin: AdminLinkedInStats
+    email_verification: AdminEmailVerificationStats
+
+
 # ── Campaign ──────────────────────────────────────────────────────────────────
 
 class CampaignCreate(BaseModel):
@@ -127,10 +216,49 @@ class CampaignResponse(BaseModel):
     target_audience: str | None
     subject: str | None
     status: str
+    origin: str = "leadsense"
     emails_sent: int
+    contact_count: int = 0
     created_at: datetime
     scheduled_at: datetime | None = None
     use_recipient_timezone: bool = False
+
+
+class ManualContactInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    email: str = Field(..., min_length=3, max_length=255)
+
+
+class RecordManualActivityRequest(BaseModel):
+    """Record mail that was already sent outside LeadSense. Does not send."""
+
+    mode: Literal["existing", "new"]
+    campaign_id: int | None = None
+    campaign_name: str | None = Field(None, max_length=255)
+    campaign_code: str | None = Field(None, max_length=100)
+    description: str | None = None
+    owner: str | None = None
+    department: str | None = None
+    recipient_ids: list[int] = []
+    new_contacts: list[ManualContactInput] = []
+    subject: str = Field(..., min_length=1, max_length=500)
+    body: str = Field(..., min_length=1, max_length=100_000)
+    sent_at: datetime
+    follow_up_at: datetime | None = None
+    follow_up_action: str | None = Field(None, max_length=500)
+    # When true, also queue the campaign's next sequence stage for these contacts.
+    send_follow_up: bool = False
+
+
+class RecordManualActivityResponse(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    origin: str
+    recorded: int
+    created_contacts: int
+    reused_contacts: int
+    follow_ups_scheduled: int = 0
+    follow_ups_skipped: int = 0
 
 
 # ── Template ──────────────────────────────────────────────────────────────────
@@ -303,8 +431,7 @@ class RecipientResponse(BaseModel):
     city: str | None = None
     source: str | None = None
 
-    # MillionVerifier pre-send gate (from cache / suppression).
-    # verified | failed | unchecked
+    # MillionVerifier quality shown in the UI: good | risky | bad | unchecked.
     email_verification_status: str | None = None
     email_verification_result: str | None = None
 
@@ -406,11 +533,16 @@ class SuppressionEntryListResponse(BaseModel):
 
 class SimulateEventRequest(BaseModel):
     email: str
-    event_type: Literal["bounce", "complaint", "reply"]
+    event_type: Literal["bounce", "complaint", "reply", "out_of_office"]
     bounce_type: Literal["Permanent", "Transient"] = "Permanent"
     campaign_id: int | None = None
     smtp_code: str | None = None
     detail: str | None = None
+
+
+class SimulateInboundRequest(BaseModel):
+    """Base64-encoded raw MIME for local OOO/reply injection (DEBUG only)."""
+    raw_email_base64: str
 
 
 # ── Recipient Groups ───────────────────────────────────────────────────────────
@@ -492,7 +624,7 @@ class SavedSearchResponse(BaseModel):
 
 CampaignRecipientStatus = Literal[
     "not_contacted", "sent", "delivered", "opened", "clicked",
-    "replied", "bounced", "invalid_email", "suppressed",
+    "replied", "bounced", "invalid_email", "suppressed", "out_of_office",
 ]
 
 
@@ -508,13 +640,23 @@ class CampaignRecipientResponse(BaseModel):
     last_sent_at: datetime | None
     replied_at: datetime | None
     bounced_at: datetime | None
+    ooo_at: datetime | None = None
     recipient_name: str | None = None
     recipient_email: str | None = None
     recipient_company: str | None = None
+    recipient_designation: str | None = None
+    recipient_industry: str | None = None
     is_suppressed: bool = False
     suppression_reason: str | None = None
     email_verification_status: str | None = None
     email_verification_result: str | None = None
+    # Derived UI labels — existing status strings are unchanged.
+    follow_up_state: str | None = None  # none | scheduled | sent | cancelled
+    follow_up_label: str | None = None
+    manual_follow_up_at: datetime | None = None
+    manual_follow_up_action: str | None = None
+    campaign_count: int = 0
+    campaign_names: list[str] = []
 
 
 class CampaignRecipientListResponse(BaseModel):
@@ -600,6 +742,110 @@ class CampaignSequenceStageResponse(BaseModel):
     cta: str | None
 
 
+# ── Manual reply / follow-up scheduling (additive; does not rename statuses) ───
+
+class MarkRepliedRequest(BaseModel):
+    recipient_ids: list[int] = Field(..., min_length=1)
+
+
+class MarkRepliedUndoItem(BaseModel):
+    recipient_id: int
+    previous_status: str
+    previous_next_send_at: datetime | None = None
+
+
+class MarkRepliedResponse(BaseModel):
+    updated: int
+    skipped: int = 0
+    undo_items: list[MarkRepliedUndoItem] = []
+
+
+class UndoMarkRepliedRequest(BaseModel):
+    items: list[MarkRepliedUndoItem] = Field(..., min_length=1)
+
+
+class ScheduleFollowUpRequest(BaseModel):
+    """Schedule follow-up at an absolute datetime for non-replied recipients.
+
+    Provide either recipient_ids (selected) or set all_non_replied=True.
+    Content comes from the campaign's next CampaignSequenceStage (must exist).
+    """
+
+    scheduled_at: datetime
+    recipient_ids: list[int] | None = None
+    all_non_replied: bool = False
+
+
+class ScheduleFollowUpResponse(BaseModel):
+    scheduled: int
+    skipped: int = 0
+    scheduled_at: datetime
+
+
+class CancelFollowUpRequest(BaseModel):
+    """Cancel pending follow-ups for selected recipients, or all scheduled on this campaign."""
+
+    recipient_ids: list[int] | None = None
+    all_scheduled: bool = False
+
+
+class CancelFollowUpResponse(BaseModel):
+    cancelled: int
+    skipped: int = 0
+
+
+class CampaignRecipientStatsResponse(BaseModel):
+    total: int = 0
+    sent: int = 0
+    replied: int = 0
+    no_reply: int = 0
+    follow_up_scheduled: int = 0
+    follow_up_sent: int = 0
+    follow_up_cancelled: int = 0
+    bounced: int = 0
+    not_contacted: int = 0
+
+
+# ── Update list (email-centric cards) ─────────────────────────────────────────
+
+class UpdateListCampaignMembership(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    campaign_code: str
+    status: str
+    last_sent_at: datetime | None = None
+    follow_up_label: str | None = None
+    current_stage: int = 0
+    follow_up_sent: bool = False
+
+
+class UpdateListEmailCard(BaseModel):
+    recipient_id: int
+    name: str | None = None
+    email: str
+    company: str | None = None
+    designation: str | None = None
+    campaign_count: int = 0
+    follow_up_sent_count: int = 0
+    marked_updated_count: int = 0
+    campaigns: list[UpdateListCampaignMembership] = []
+    # Aggregate: replied if all replied; sent if any sent-like; mixed otherwise
+    display_status: str = "sent"
+    unreplied_campaign_count: int = 0
+
+
+class UpdateListEmailResponse(BaseModel):
+    items: list[UpdateListEmailCard]
+    total: int
+
+
+class MarkEmailRepliedRequest(BaseModel):
+    """Mark this email as replied in all (or selected) campaigns it belongs to."""
+
+    email: str = Field(..., min_length=3)
+    campaign_ids: list[int] | None = None  # None = every campaign for this email
+
+
 # ── Email ─────────────────────────────────────────────────────────────────────
 
 class SendEmailRequest(BaseModel):
@@ -608,6 +854,12 @@ class SendEmailRequest(BaseModel):
     body: str
     type: str = "placeholder"
     recipient_ids: list[int] | None = None
+    # When true, count risky vs other recipients and do not queue.
+    preview_risky: bool = False
+    # Required to queue once any selected address is already classified risky.
+    # send_good_only leaves those addresses out. include_risky queues them
+    # and lets this campaign's sends go through the risky verification gate.
+    risky_choice: Literal["send_good_only", "include_risky"] | None = None
 
 
 class IncompleteRecipientInfo(BaseModel):
@@ -619,8 +871,13 @@ class SendEmailResponse(BaseModel):
     queued: int
     skipped_suppressed: int = 0
     skipped_incomplete_data: int = 0
+    skipped_risky: int = 0
     incomplete: list[IncompleteRecipientInfo] = []
     immediate_sent: int = 0
+    requires_risky_confirmation: bool = False
+    risky_count: int = 0
+    good_count: int = 0
+    risky_emails: list[str] = []
 
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
@@ -634,6 +891,9 @@ class EmailLogResponse(BaseModel):
     status: str
     error_message: str | None
     sent_at: datetime
+    source: str = "ses"
+    subject: str | None = None
+    body: str | None = None
     recipient_name: str | None = None
     recipient_email: str | None = None
     campaign_name: str | None = None
@@ -641,11 +901,30 @@ class EmailLogResponse(BaseModel):
     sender_email: str | None = None
 
 
+class VerifiedEmailGroupResponse(BaseModel):
+    """One unique verified prospect (by name) with every matching send nested under it."""
+
+    group_key: str
+    recipient_name: str | None = None
+    recipient_email: str | None = None
+    recipient_id: int | None = None
+    emails: list[str] = []
+    email_count: int = 0
+    send_count: int = 0
+    latest_sent_at: datetime | None = None
+    latest_status: str | None = None
+    latest_campaign_name: str | None = None
+    logs: list[EmailLogResponse] = []
+
+
 class EmailLogListResponse(BaseModel):
-    items: list[EmailLogResponse]
+    items: list[EmailLogResponse] = []
+    groups: list[VerifiedEmailGroupResponse] = []
     total: int
     page: int
     page_size: int
+    verified_total: int = 0
+    grouped: bool = False
 
 
 # ── Generic ───────────────────────────────────────────────────────────────────
@@ -653,3 +932,173 @@ class EmailLogListResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
     success: bool = True
+
+
+# ── Organizations + PATs (SmartOps) ───────────────────────────────────────────
+
+class OrganizationCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    owner_name: str = Field(..., min_length=1, max_length=255)
+    owner_email: EmailStr
+    client_name: str | None = Field(default=None, max_length=255)
+    type: Literal["TENANT"] = "TENANT"
+    pat_name: str | None = Field(default="SmartOps", max_length=255)
+
+
+class OrganizationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    organization_id: str
+    name: str
+    type: str
+    status: str
+    client_name: str | None = None
+    owner_user_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class OrganizationTokenResponse(BaseModel):
+    token_id: str
+    organization_id: str
+    token_prefix: str
+    name: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class OrganizationTokenCreateRequest(BaseModel):
+    name: str | None = Field(None, max_length=255)
+    scopes: list[str] | None = None
+
+
+class OrganizationTokenCreateResponse(OrganizationTokenResponse):
+    """Includes raw PAT — returned only once at creation."""
+
+    token: str
+
+
+class OrganizationCreateResponse(OrganizationResponse):
+    """Org create always includes a one-time PAT for SmartOps handoff."""
+
+    token: OrganizationTokenCreateResponse
+    owner_email: str | None = None
+    owner_verify_url: str | None = None
+
+
+class IntegrationWhoamiResponse(BaseModel):
+    organization_id: str
+    organization_name: str
+    type: str
+    token_status: str
+    token_id: str | None = None
+    token_name: str | None = None
+
+
+# ── Leads (SmartOps sync) ─────────────────────────────────────────────────────
+
+class LeadCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    status: str = Field(default="open", max_length=50)
+    name: str | None = Field(default=None, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
+    company: str | None = Field(default=None, max_length=255)
+    source: str | None = Field(default=None, max_length=255)
+    due_date: date | None = None
+    notes: str | None = None
+    external_id: str | None = Field(default=None, max_length=128)
+
+
+class LeadUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    status: str | None = Field(default=None, max_length=50)
+    name: str | None = Field(default=None, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
+    company: str | None = Field(default=None, max_length=255)
+    source: str | None = Field(default=None, max_length=255)
+    due_date: date | None = None
+    notes: str | None = None
+    external_id: str | None = Field(default=None, max_length=128)
+
+
+class LeadResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    organization_id: str
+    title: str
+    status: str
+    name: str | None = None
+    email: str | None = None
+    company: str | None = None
+    source: str | None = None
+    due_date: date | None = None
+    notes: str | None = None
+    external_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class LeadListResponse(BaseModel):
+    items: list[LeadResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+# ── RBAC (roles / permissions / assignments) ──────────────────────────────────
+
+class RoleResponse(BaseModel):
+    id: str
+    name: str
+    role_type: str
+    scope: str
+    is_system: bool
+    is_invitable: bool
+    description: str | None = None
+    permissions: list[str] = Field(default_factory=list)
+
+
+class PermissionResponse(BaseModel):
+    id: str
+    name: str
+    category: str
+    description: str | None = None
+
+
+class UserRoleResponse(BaseModel):
+    id: str
+    user_id: int
+    user_name: str | None = None
+    user_email: str | None = None
+    role_id: str
+    role_name: str
+    role_type: str | None = None
+    organization_id: str
+    created_at: datetime | None = None
+
+
+class UserRoleAssignRequest(BaseModel):
+    user_id: int
+    role_id: str
+
+
+class NotificationItem(BaseModel):
+    id: int
+    kind: str
+    title: str
+    body: str
+    recipient_email: str | None = None
+    campaign_id: int | None = None
+    bounce_type: str | None = None
+    read: bool
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationItem]
+    unread_count: int

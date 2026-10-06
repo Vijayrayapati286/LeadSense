@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { FiAlertCircle, FiArchive, FiCheckCircle, FiClock, FiDownload, FiExternalLink, FiEye, FiFileText, FiRefreshCw, FiSearch, FiUsers } from 'react-icons/fi';
+import { FiAlertCircle, FiCheckCircle, FiClock, FiDownload, FiExternalLink, FiEye, FiFileText, FiRefreshCw, FiSearch, FiUsers } from 'react-icons/fi';
 import AuditLogPanel from '../components/bulk/AuditLogPanel';
 import ReviewCompareModal from '../components/bulk/ReviewCompareModal';
 import Pagination from '../components/ui/Pagination';
@@ -77,31 +77,31 @@ export default function BulkJobDetailPage() {
     }
   }
 
-  async function onBackup() {
+  async function onResolveSelected(decisions) {
+    if (!selectedItem) return;
     setBusy(true);
     try {
-      await linkedinProfileService.createBulkBackup(jobId);
-      const { data } = await linkedinProfileService.downloadBulkJobBackup(jobId);
-      downloadBlob(data, `bulk-job-${jobId}-backup.zip`);
-      toast.success('Backup created');
-      load(items.page || 1);
+      await linkedinProfileService.resolveConflict(jobId, selectedItem.item_id, decisions);
+      toast.success('Profile resolved');
+      await load(items.page || 1);
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Backup failed');
+      toast.error(err?.response?.data?.detail || 'Could not resolve this profile');
+      throw err;
     } finally {
       setBusy(false);
     }
   }
 
-  async function onResolveSelected(decisions) {
-    if (!selectedItem) return;
+  async function onAddToIcp() {
     setBusy(true);
     try {
-      const result = await linkedinProfileService.resolveConflict(jobId, selectedItem.item_id, decisions);
-      toast.success(result?.icp_synced ? 'Resolved and added to ICP Database' : 'Profile resolved');
+      const result = await linkedinProfileService.addBulkJobToIcp(jobId);
+      toast.success(
+        `Added to ICP: ${result?.added ?? 0} new, ${result?.updated ?? 0} updated (${result?.eligible ?? 0} verified)`,
+      );
       await load(items.page || 1);
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Could not resolve this profile');
-      throw err;
+      toast.error(err?.response?.data?.detail || 'Could not add profiles to ICP');
     } finally {
       setBusy(false);
     }
@@ -179,14 +179,18 @@ export default function BulkJobDetailPage() {
               <FiDownload size={14} /> Excel
             </button>
           )}
-          <button
-            type="button"
-            onClick={onBackup}
-            disabled={busy}
-            className="btn-secondary inline-flex items-center gap-2"
-          >
-            <FiArchive size={14} /> Backup
-          </button>
+          {job.status === 'done' && (job.needs_review || 0) === 0 && ((job.verified || 0) + (job.resolved || 0) > 0) ? (
+            <button
+              type="button"
+              onClick={onAddToIcp}
+              disabled={busy}
+              className="btn-primary inline-flex items-center gap-2"
+              title="Add verified profiles now that every conflict is resolved"
+            >
+              <FiUsers size={14} /> Add to ICP
+              {` (${(job.verified || 0) + (job.resolved || 0)})`}
+            </button>
+          ) : null}
           {(job.needs_review || 0) > 0 && (
             <Link
               to={`/linkedin-needs-review?job=${job.job_id}`}
@@ -201,7 +205,7 @@ export default function BulkJobDetailPage() {
         <div className="relative z-10 mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
           <Link to="/linkedin-history" className="font-semibold text-primary-600 hover:text-primary-700">← All history</Link>
           <StatusBadge status={(job.needs_review || 0) > 0 && job.status === 'done' ? 'needs_review' : job.status} />
-          <span className="font-mono">{job.job_id}</span>
+          {job.original_file_name ? <span>{job.original_file_name}</span> : null}
           <span>Last updated {formatDateTime(job.updated_at || job.completed_at)}</span>
         </div>
       </WorkspaceHeader>

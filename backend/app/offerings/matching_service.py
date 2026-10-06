@@ -399,14 +399,20 @@ def list_icp_ids_for_user(
     user_id: int | None,
     *,
     verified_only: bool = False,
+    org_id: str | None = None,
 ) -> list[int]:
     """Return ICP ids to score for an offering match job.
 
-    By default includes all contacts for the user. When verified_only=True,
-    only VERIFIED and RESOLVED rows are included (same as ICP eligibility).
+    By default includes all contacts for the tenant (org) when known.
+    When verified_only=True, only VERIFIED and RESOLVED rows are included.
     """
+    from app.icp.service import resolve_org_id
+
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = db.query(IcpRecordRow.id)
-    if user_id is not None:
+    if org_id:
+        q = q.filter(IcpRecordRow.org_id == org_id)
+    elif user_id is not None:
         q = q.filter(IcpRecordRow.user_id == user_id)
     if verified_only:
         q = q.filter(IcpRecordRow.verification_status.in_(_MATCH_VERIFIED_STATUSES))

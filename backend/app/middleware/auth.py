@@ -24,11 +24,22 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = auth_service.get_current_user(db, credentials.credentials)
+    raw = credentials.credentials.strip()
+    from app.middleware.pat_auth import try_pat_principal
+
+    # PAT / legacy integration tokens are not JWTs (no dots). Do not call them expired JWTs.
+    if raw.count(".") < 2 and try_pat_principal(db, raw):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This endpoint requires a user login token, not a PAT",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = auth_service.get_current_user(db, raw)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
+            detail="Invalid or revoked PAT" if raw.startswith("pat_") else "Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user

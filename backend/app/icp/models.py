@@ -21,7 +21,11 @@ SOURCE_MANUAL = "manual"
 class IcpRecordRow(Base):
     __tablename__ = "icp_records"
     __table_args__ = (
-        UniqueConstraint("user_id", "linkedin_url", name="uq_icp_user_linkedin_url"),
+        UniqueConstraint("org_id", "linkedin_url", name="uq_icp_org_linkedin_url"),
+        Index("ix_icp_org_verified_at", "org_id", "verified_at"),
+        Index("ix_icp_org_industry", "org_id", "industry"),
+        Index("ix_icp_org_dedupe", "org_id", "dedupe_key"),
+        # Legacy per-user indexes kept for rows without org_id
         Index("ix_icp_user_verified_at", "user_id", "verified_at"),
         Index("ix_icp_user_industry", "user_id", "industry"),
         Index("ix_icp_user_dedupe", "user_id", "dedupe_key"),
@@ -29,18 +33,36 @@ class IcpRecordRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    org_id: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
 
     name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     designation: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    department: Mapped[str | None] = mapped_column(String(255), nullable=True)
     about: Mapped[str | None] = mapped_column(Text, nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
+    phone: Mapped[str | None] = mapped_column(String(100), nullable=True)
     image: Mapped[str | None] = mapped_column(Text, nullable=True)
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company_size: Mapped[str | None] = mapped_column(String(100), nullable=True)
     location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    state: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    country_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    contact_state: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_country: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company_website: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    company_linkedin_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    company_location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    company_city: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    annual_revenue: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    company_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Export aliases kept in sync with company_* / contact_* fields
+    account_linkedin_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    account_city: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    account_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     embedding: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)

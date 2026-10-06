@@ -1,30 +1,34 @@
 /** @type {import('tailwindcss').Config} */
+
+function rgbChannel(variable) {
+  return ({ opacityValue }) =>
+    opacityValue === undefined
+      ? `rgb(var(${variable}))`
+      : `rgb(var(${variable}) / ${opacityValue})`;
+}
+
+const primary = Object.fromEntries(
+  [50, 100, 200, 300, 400, 500, 600, 700, 800, 900].map((step) => [
+    String(step),
+    rgbChannel(`--ls-primary-${step}`),
+  ]),
+);
+
 export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
       colors: {
-        primary: {
-          50: '#eff6ff',
-          100: '#dbeafe',
-          200: '#bfdbfe',
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#3b82f6',
-          600: '#2563eb',
-          700: '#1d4ed8',
-          800: '#1e40af',
-          900: '#1e3a8a',
-        },
+        primary,
         sidebar: {
-          DEFAULT: '#0b1220',
+          DEFAULT: rgbChannel('--ls-sidebar'),
           hover: 'rgba(255,255,255,0.06)',
-          active: '#3b82f6',
+          active: rgbChannel('--ls-primary-500'),
         },
         surface: {
-          DEFAULT: '#ffffff',
-          muted: '#f8f9fb',
-          inset: '#f1f5f9',
+          DEFAULT: rgbChannel('--ls-surface'),
+          muted: rgbChannel('--ls-surface-muted'),
+          inset: rgbChannel('--ls-surface-inset'),
         },
         ink: {
           DEFAULT: '#0f172a',
@@ -32,8 +36,8 @@ export default {
           tertiary: '#94a3b8',
         },
         accent: {
-          DEFAULT: '#2563eb',
-          hover: '#1d4ed8',
+          DEFAULT: rgbChannel('--ls-accent'),
+          hover: rgbChannel('--ls-accent-hover'),
         },
       },
       borderRadius: {
@@ -45,7 +49,7 @@ export default {
       boxShadow: {
         card: '0 6px 24px rgba(15, 23, 42, 0.04)',
         'card-hover': '0 8px 30px rgba(15, 23, 42, 0.08)',
-        button: '0 4px 14px rgba(37, 99, 235, 0.2)',
+        button: 'var(--shadow-button)',
       },
       fontSize: {
         display: ['1.75rem', { lineHeight: '2.25rem', fontWeight: '700' }],

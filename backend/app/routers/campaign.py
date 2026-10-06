@@ -1,6 +1,7 @@
 """Campaign CRUD routes."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -11,21 +12,33 @@ from app.schemas.schemas import (
     CampaignListSummaryResponse,
     CampaignRecipientListResponse,
     CampaignRecipientResponse,
+    CampaignRecipientStatsResponse,
     CampaignCreate,
     CampaignResponse,
     CampaignSequenceStageCreate,
     CampaignSequenceStageResponse,
     CampaignSequenceStageUpdate,
     CampaignUpdate,
+    CancelFollowUpRequest,
+    CancelFollowUpResponse,
     ListScheduleRequest,
     ListScheduleResponse,
+    MarkEmailRepliedRequest,
+    MarkRepliedRequest,
+    MarkRepliedResponse,
     MessageResponse,
     RetagListRequest,
+    RecordManualActivityRequest,
+    RecordManualActivityResponse,
+    ScheduleFollowUpRequest,
+    ScheduleFollowUpResponse,
     TemplateCreate,
     TemplateResponse,
     TemplateUpdate,
+    UndoMarkRepliedRequest,
+    UpdateListEmailResponse,
 )
-from app.services.campaign_service import CampaignService
+from app.services.campaign_service import CampaignService, derive_follow_up_state
 from app.services.millionverifier_service import (
     MillionVerifierService,
     resolve_verification_status,
@@ -35,6 +48,17 @@ from app.utils.helpers import utc_now
 
 router = APIRouter(tags=["Campaigns"])
 campaign_service = CampaignService()
+
+
+def _org_id(user: User) -> str | None:
+    return getattr(user, "org_id", None)
+
+
+def _campaign_or_404(db: Session, campaign_id: int, user: User) -> Campaign:
+    campaign = campaign_service.get_by_id(db, campaign_id, org_id=_org_id(user))
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
 
 
 def _verification_fields(db: Session, emails: list[str], suppression_reasons: list[str | None]) -> list[tuple[str, str | None]]:
@@ -59,7 +83,9 @@ def create_campaign(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        campaign = campaign_service.create(db, data, user_id=current_user.id)
+        campaign = campaign_service.create(
+            db, data, user_id=current_user.id, org_id=getattr(current_user, "org_id", None)
+        )
         return CampaignResponse.model_validate(campaign)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -72,8 +98,84 @@ def list_campaigns(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaigns = campaign_service.get_all(db, skip=skip, limit=limit)
+    campaigns = campaign_service.get_all(
+        db, skip=skip, limit=limit, org_id=getattr(current_user, "org_id", None)
+    )
+    ids = [c.id for c in campaigns]
+    counts: dict[int, int] = {}
+    if ids:
+        counts = {
+            campaign_id: total
+            for campaign_id, total in (
+                db.query(CampaignRecipient.campaign_id, func.count(CampaignRecipient.id))
+                .filter(CampaignRecipient.campaign_id.in_(ids))
+                .group_by(CampaignRecipient.campaign_id)
+                .all()
+            )
+        }
+    items = []
+    for campaign in campaigns:
+        item = CampaignResponse.model_validate(campaign)
+        item.contact_count = counts.get(campaign.id, 0)
+        items.append(item)
+    return items
+
+
+@router.post("/campaigns/manual-activity", response_model=RecordManualActivityResponse, status_code=201)
+def record_manual_activity(
+    data: RecordManualActivityRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record mail already sent outside LeadSense. Does not send email."""
+    try:
+        result = campaign_service.record_manual_activity(
+            db,
+            data,
+            user_id=current_user.id,
+            user_name=current_user.name,
+            org_id=getattr(current_user, "org_id", None),
+        )
+        return RecordManualActivityResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/campaigns/for-update", response_model=list[CampaignResponse])
+def list_campaigns_for_update(
+    q: str = "",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update list picker: search by campaign name/ID or recipient email/name."""
+    campaigns = campaign_service.search_for_update(db, q=q)
     return [CampaignResponse.model_validate(c) for c in campaigns]
+
+
+@router.get("/campaigns/update-emails", response_model=UpdateListEmailResponse)
+def list_emails_for_update(
+    q: str = "",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Email-centric Update list: each card shows every campaign that email belongs to."""
+    items = campaign_service.list_emails_for_update(db, q=q)
+    return UpdateListEmailResponse(items=items, total=len(items))
+
+
+@router.post("/campaigns/update-emails/mark-replied", response_model=MarkRepliedResponse)
+def mark_email_replied_across_campaigns(
+    data: MarkEmailRepliedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.mark_email_replied(
+            db, data.email, campaign_ids=data.campaign_ids
+        )
+        return MarkRepliedResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.get("/campaign/{campaign_id}", response_model=CampaignResponse)
@@ -82,7 +184,9 @@ def get_campaign(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = campaign_service.get_by_id(db, campaign_id)
+    campaign = campaign_service.get_by_id(
+        db, campaign_id, org_id=getattr(current_user, "org_id", None)
+    )
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return CampaignResponse.model_validate(campaign)
@@ -94,6 +198,7 @@ def get_campaign_template(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     template = campaign_service.get_template(db, campaign_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -106,6 +211,7 @@ def list_campaign_templates(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     templates = campaign_service.list_templates(db, campaign_id)
     return [TemplateResponse.model_validate(t) for t in templates]
 
@@ -145,7 +251,9 @@ def update_campaign(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        campaign = campaign_service.update(db, campaign_id, data)
+        campaign = campaign_service.update(
+            db, campaign_id, data, org_id=getattr(current_user, "org_id", None)
+        )
         return CampaignResponse.model_validate(campaign)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -158,7 +266,7 @@ def delete_campaign(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        campaign_service.delete(db, campaign_id)
+        campaign_service.delete(db, campaign_id, org_id=getattr(current_user, "org_id", None))
         return MessageResponse(message="Campaign deleted successfully")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -171,6 +279,7 @@ def save_campaign_template(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     try:
         template = campaign_service.save_template(db, campaign_id, data.model_dump())
         return TemplateResponse.model_validate(template)
@@ -184,6 +293,7 @@ def list_sequence_stages(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     stages = campaign_service.list_sequence_stages(db, campaign_id)
     return [CampaignSequenceStageResponse.model_validate(s) for s in stages]
 
@@ -195,6 +305,7 @@ def create_sequence_stage(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     try:
         stage = campaign_service.create_sequence_stage(db, campaign_id, data)
         return CampaignSequenceStageResponse.model_validate(stage)
@@ -235,12 +346,31 @@ def get_campaign_recipients(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     rows = (
         db.query(CampaignRecipient)
         .filter(CampaignRecipient.campaign_id == campaign_id)
         .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
         .all()
     )
+    recipient_ids = [cr.recipient_id for cr in rows]
+    campaign_meta: dict[int, tuple[int, list[str]]] = {}
+    if recipient_ids:
+        link_rows = (
+            db.query(CampaignRecipient.recipient_id, Campaign.campaign_name)
+            .join(Campaign, Campaign.id == CampaignRecipient.campaign_id)
+            .filter(CampaignRecipient.recipient_id.in_(recipient_ids))
+            .order_by(Campaign.created_at.desc())
+            .all()
+        )
+        names_by_recipient: dict[int, list[str]] = {}
+        for rid, name in link_rows:
+            names_by_recipient.setdefault(rid, []).append(name or "Untitled")
+        campaign_meta = {
+            rid: (len(names), names)
+            for rid, names in names_by_recipient.items()
+        }
+
     items = []
     emails = [cr.recipient.email for cr in rows]
     reasons = [cr.recipient.suppression_reason for cr in rows]
@@ -250,13 +380,121 @@ def get_campaign_recipients(
         response.recipient_name = cr.recipient.name
         response.recipient_email = cr.recipient.email
         response.recipient_company = cr.recipient.company
+        response.recipient_designation = cr.recipient.designation
+        response.recipient_industry = cr.recipient.industry
         response.is_suppressed = cr.recipient.is_suppressed
         response.suppression_reason = cr.recipient.suppression_reason
         response.email_verification_status = v_status
         response.email_verification_result = v_result
+        state, label = derive_follow_up_state(cr)
+        response.follow_up_state = state
+        response.follow_up_label = label
+        count, names = campaign_meta.get(cr.recipient_id, (1, []))
+        response.campaign_count = count
+        response.campaign_names = names
         items.append(response)
 
     return CampaignRecipientListResponse(items=items, total=len(items))
+
+
+@router.get("/campaign/{campaign_id}/recipients/stats", response_model=CampaignRecipientStatsResponse)
+def get_campaign_recipient_stats(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = campaign_service.get_by_id(db, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return CampaignRecipientStatsResponse(**campaign_service.recipient_stats(db, campaign_id))
+
+
+@router.post("/campaign/{campaign_id}/recipients/mark-replied", response_model=MarkRepliedResponse)
+def mark_campaign_recipients_replied(
+    campaign_id: int,
+    data: MarkRepliedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.mark_recipients_replied(db, campaign_id, data.recipient_ids)
+        return MarkRepliedResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/campaign/{campaign_id}/recipients/unmark-replied", response_model=MarkRepliedResponse)
+def unmark_campaign_recipients_replied(
+    campaign_id: int,
+    data: MarkRepliedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.unmark_recipients_replied(db, campaign_id, data.recipient_ids)
+        return MarkRepliedResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/campaign/{campaign_id}/recipients/undo-mark-replied", response_model=MarkRepliedResponse)
+def undo_mark_campaign_recipients_replied(
+    campaign_id: int,
+    data: UndoMarkRepliedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.undo_mark_recipients_replied(
+            db, campaign_id, [item.model_dump() for item in data.items]
+        )
+        return MarkRepliedResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/campaign/{campaign_id}/recipients/schedule-followup", response_model=ScheduleFollowUpResponse)
+def schedule_campaign_followup(
+    campaign_id: int,
+    data: ScheduleFollowUpRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.schedule_followups(
+            db,
+            campaign_id,
+            data.scheduled_at,
+            recipient_ids=data.recipient_ids,
+            all_non_replied=data.all_non_replied,
+            sender_user_id=current_user.id,
+        )
+        return ScheduleFollowUpResponse(**result)
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail)
+
+
+@router.post("/campaign/{campaign_id}/recipients/cancel-followup", response_model=CancelFollowUpResponse)
+def cancel_campaign_followup(
+    campaign_id: int,
+    data: CancelFollowUpRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = campaign_service.cancel_followups(
+            db,
+            campaign_id,
+            recipient_ids=data.recipient_ids,
+            all_scheduled=data.all_scheduled,
+        )
+        return CancelFollowUpResponse(**result)
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail)
 
 
 @router.get("/campaign/{campaign_id}/lists", response_model=list[CampaignListSummaryResponse])
@@ -265,8 +503,8 @@ def list_campaign_lists(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     return campaign_service.list_campaign_lists(db, campaign_id)
-
 
 @router.get("/campaign/{campaign_id}/lists/{group_id}/recipients", response_model=list[CampaignListMemberResponse])
 def get_campaign_list_members(
@@ -275,6 +513,7 @@ def get_campaign_list_members(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     rows = campaign_service.get_list_members(db, campaign_id, group_id)
     emails = [recipient.email for _, recipient in rows]
     reasons = [recipient.suppression_reason for _, recipient in rows]
@@ -306,6 +545,7 @@ def retag_campaign_list(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _campaign_or_404(db, campaign_id, current_user)
     updated = campaign_service.retag_list(db, campaign_id, group_id, data.template_id)
     return MessageResponse(message=f"Re-tagged {updated} prospect(s)")
 
@@ -318,9 +558,7 @@ def schedule_campaign_list(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    _campaign_or_404(db, campaign_id, current_user)
 
     scheduled_at = data.scheduled_at
     if scheduled_at.tzinfo is None:

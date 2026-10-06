@@ -13,7 +13,8 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB.as_posix()}"
 os.environ["USE_SQLITE_FALLBACK"] = "true"
 os.environ["SKIP_BULK_RESUME"] = "1"
 os.environ.setdefault("BULK_RETRY_BASE_DELAY_SECONDS", "0")
-os.environ.setdefault("APIFY_MAX_RETRIES", "5")
+os.environ.setdefault("APIFY_MAX_RETRIES", "2")
+os.environ.setdefault("APIFY_ENABLE_COST_GUARD", "true")
 os.environ.setdefault("USE_MOCK_SES", "true")
 os.environ.setdefault("USE_MOCK_GROQ", "true")
 os.environ.setdefault("USE_MOCK_S3", "true")
@@ -38,7 +39,8 @@ def client(monkeypatch):
     get_settings.cache_clear()
 
     from app import main as main_module
-    from app.middleware.auth import get_current_user
+    from app.middleware.auth import get_current_user, get_optional_user
+    from app.middleware.pat_auth import OfferingAuth, get_offering_auth
     from app.models import User
     from fastapi.testclient import TestClient
 
@@ -48,7 +50,12 @@ def client(monkeypatch):
     async def _override_current_user():
         return User(id=1, name="Test User", email="test@example.com", department="Test")
 
+    def _override_offering_auth():
+        return OfferingAuth(pat=None, user=User(id=1, name="Test User", email="test@example.com", department="Test"))
+
     main_module.app.dependency_overrides[get_current_user] = _override_current_user
+    main_module.app.dependency_overrides[get_optional_user] = _override_current_user
+    main_module.app.dependency_overrides[get_offering_auth] = _override_offering_auth
     from app.linkedin.rate_limit import bulk_extract_limiter, profile_extract_limiter
 
     bulk_extract_limiter._hits.clear()

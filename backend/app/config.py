@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
+    # Outbound bounce-rate alerts. Empty topic ARN disables publishing.
+    # Region falls back to AWS_REGION. Credentials use the standard AWS chain
+    # (explicit keys, then the instance role) — never hardcoded.
+    sns_topic_arn: str = Field("", validation_alias="SNS_TOPIC_ARN")
+    sns_region: str = Field("", validation_alias="SNS_REGION")
     # S3 file storage (binaries). Leave USE_MOCK_S3=true for local/dev without AWS.
     # Production: set S3_BUCKET_NAME + USE_MOCK_S3=false; prefer IAM role over long-lived keys.
     s3_bucket_name: str = Field("", validation_alias="S3_BUCKET_NAME")
@@ -56,6 +61,31 @@ class Settings(BaseSettings):
     ses_aws_access_key_id: str = ""
     ses_aws_secret_access_key: str = ""
     ses_region: str = ""
+
+    # Optional SES Configuration Set name (tags / event destinations). Leave
+    # blank to keep outbound send identical to today.
+    ses_configuration_set: str = Field("", validation_alias="SES_CONFIGURATION_SET")
+    # When true, Reply-To is set to the personalized SES From address so
+    # automatic OOO replies land on the SES-receivable sending domain.
+    # Default false preserves existing behavior (Reply-To = rep corporate email).
+    ses_use_sending_domain_reply_to: bool = Field(
+        False, validation_alias="SES_USE_SENDING_DOMAIN_REPLY_TO"
+    )
+    # When true, MIME From / SES Source uses the full Reply-To address
+    # (rep's real mailbox, e.g. vijay.rayapati@feuji.com) so Outlook/Exchange
+    # automatic replies land in that inbox. Default false keeps From on
+    # AWS_SES_SENDING_DOMAIN (e.g. @outreach.feuji.com) for reputation isolation.
+    # Requires that mailbox's domain to be SES-verified (domain identity).
+    ses_use_reply_to_as_from: bool = Field(
+        False, validation_alias="SES_USE_REPLY_TO_AS_FROM"
+    )
+    # S3 bucket used by the SES inbound receipt rule (raw MIME). May differ
+    # from S3_BUCKET_NAME (file uploads). Empty = inbound S3 fetch disabled.
+    ses_inbound_s3_bucket: str = Field("", validation_alias="SES_INBOUND_S3_BUCKET")
+    ses_inbound_s3_prefix: str = Field("inbound/", validation_alias="SES_INBOUND_S3_PREFIX")
+    # When true, out_of_office is treated as terminal (no further follow-ups).
+    # Default false: detect + status only (STEP 10).
+    ooo_stops_followups: bool = Field(False, validation_alias="OOO_STOPS_FOLLOWUPS")
 
     groq_api_key: str = ""
     use_mock_groq: bool = True
@@ -105,10 +135,12 @@ class Settings(BaseSettings):
     # Bulk LinkedIn extract: concurrent Apify batch processing
     max_concurrent_apify_runs: int = Field(10, validation_alias="MAX_CONCURRENT_APIFY_RUNS")
     max_concurrent_batches: int = Field(10, validation_alias="MAX_CONCURRENT_BATCHES")
-    apify_batch_size: int = Field(10, validation_alias="APIFY_BATCH_SIZE")
+    apify_batch_size: int = Field(50, validation_alias="APIFY_BATCH_SIZE")
     processing_window: int = Field(100, validation_alias="PROCESSING_WINDOW")
     # Max extraction attempts per URL (attempt 1 + retries). Success stops immediately.
-    apify_max_retries: int = Field(5, validation_alias="APIFY_MAX_RETRIES")
+    apify_max_retries: int = Field(2, validation_alias="APIFY_MAX_RETRIES")
+    # Final ICP / reuse / in-flight checks immediately before every Apify batch.
+    apify_enable_cost_guard: bool = Field(True, validation_alias="APIFY_ENABLE_COST_GUARD")
     max_bulk_urls: int = Field(5000, validation_alias="MAX_BULK_URLS")
     bulk_retry_base_delay_seconds: float = Field(5.0, validation_alias="BULK_RETRY_BASE_DELAY_SECONDS")
     bulk_retry_backoff_multiplier: float = Field(2.0, validation_alias="BULK_RETRY_BACKOFF_MULTIPLIER")
@@ -117,7 +149,8 @@ class Settings(BaseSettings):
     verify_review_threshold: int = Field(100, validation_alias="VERIFY_REVIEW_THRESHOLD")
     # Comma-separated substrings; matching errors skip further retries.
     bulk_non_retryable_errors: str = Field(
-        "invalid url,malformed,permanently unavailable,profile not found,not a linkedin",
+        "invalid url,malformed,permanently unavailable,profile not found,not a linkedin,"
+        "private profile,unavailable,does not exist,404",
         validation_alias="BULK_NON_RETRYABLE_ERRORS",
     )
 

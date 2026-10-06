@@ -1,11 +1,95 @@
 """SQLAlchemy ORM models."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
+
+
+class Organization(Base):
+    """Tenant organization. Each tenant has a unique org_id and integration_token."""
+
+    __tablename__ = "organizations"
+
+    org_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    org_type: Mapped[str] = mapped_column(String(50), nullable=False, default="TENANT")
+    client_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    integration_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="ACTIVE")
+    created_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    owner_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    users: Mapped[list["User"]] = relationship(
+        "User", back_populates="organization", foreign_keys="User.org_id"
+    )
+    tokens: Mapped[list["OrganizationToken"]] = relationship(
+        "OrganizationToken", back_populates="organization", cascade="all, delete-orphan"
+    )
+    leads: Mapped[list["Lead"]] = relationship(
+        "Lead", back_populates="organization", cascade="all, delete-orphan"
+    )
+
+
+class OrganizationToken(Base):
+    """Personal Access Token (PAT) bound to one organization — for SmartOps / integrations.
+
+    Store only token_hash long-term; raw token is shown once at creation.
+    """
+
+    __tablename__ = "organization_tokens"
+
+    token_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("organizations.org_id"), nullable=False, index=True
+    )
+    token_prefix: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    scopes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array as text
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="ACTIVE", index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="tokens")
+
+
+class Lead(Base):
+    """Org-scoped lead / work item for SmartOps pull/push. Isolation key is organization_id."""
+
+    __tablename__ = "leads"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("organizations.org_id"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="open", index=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    company: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="leads")
 
 
 class User(Base):
@@ -17,9 +101,50 @@ class User(Base):
     department: Mapped[str] = mapped_column(String(255), default="Sales")
     azure_oid: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    org_id: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
+    role: Mapped[str] = mapped_column(String(50), nullable=False, default="USER")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="ACTIVE")
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
+    organization: Mapped["Organization | None"] = relationship(
+        "Organization", back_populates="users", foreign_keys=[org_id]
+    )
     campaigns: Mapped[list["Campaign"]] = relationship("Campaign", back_populates="owner_user")
+
+
+class Invite(Base):
+    """Tenant membership invite — pending until accepted, cancelled, or expired."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=False, index=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(50), nullable=False, default="USER")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING", index=True)
+    invite_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    invited_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    role_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("roles.id"), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    invited_by: Mapped["User | None"] = relationship("User", foreign_keys=[invited_by_user_id])
 
 
 class Campaign(Base):
@@ -34,8 +159,13 @@ class Campaign(Base):
     target_audience: Mapped[str | None] = mapped_column(String(255), nullable=True)
     subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
+    # leadsense = sent from this app; external = recorded after mail left another client.
+    origin: Mapped[str] = mapped_column(String(20), default="leadsense", server_default="leadsense", nullable=False)
     emails_sent: Mapped[int] = mapped_column(Integer, default=0)
     user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # ── Scheduling ─────────────────────────────────────────────────────────
@@ -91,6 +221,9 @@ class Mailer(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     closing: Mapped[str | None] = mapped_column(Text, nullable=True)
     cta: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -100,6 +233,9 @@ class Recipient(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
     designation: Mapped[str | None] = mapped_column(String(255), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -168,8 +304,9 @@ class Recipient(Base):
 class EmailVerification(Base):
     """Cached MillionVerifier (or mock) result for an email address.
 
-    Checked immediately before SES send so invalid/risky addresses never
-    leave LeadSense. Rows expire after MILLIONVERIFIER_CACHE_DAYS."""
+    Checked immediately before SES send. Bad addresses never leave LeadSense.
+    Risky addresses are skipped unless the sender confirms that send.
+    Rows expire after MILLIONVERIFIER_CACHE_DAYS."""
 
     __tablename__ = "email_verifications"
 
@@ -214,10 +351,14 @@ class SuppressionEntry(Base):
 
 class RecipientGroup(Base):
     __tablename__ = "recipient_groups"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_recipient_groups_org_name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     members: Mapped[list["RecipientGroupMember"]] = relationship(
@@ -238,9 +379,13 @@ class RecipientGroupMember(Base):
 
 class Tag(Base):
     __tablename__ = "tags"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_tags_org_name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    org_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("organizations.org_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     recipient_links: Mapped[list["RecipientTag"]] = relationship(
@@ -320,6 +465,7 @@ class CampaignRecipient(Base):
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     bounced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ooo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Whoever queued this recipient's current send (via Send or the list
     # scheduler) — NOT the campaign's creator. Drives From/Reply-To at send
@@ -327,6 +473,13 @@ class CampaignRecipient(Base):
     # and their lists are shared/edited across the team. Carries forward
     # through follow-up stages (same row, not reset per stage).
     sender_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    # Reminder only. The scheduler reads next_send_at, never these columns.
+    manual_follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    manual_follow_up_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when the sender confirms "send all, including risky" for this queue.
+    # The pre-SES gate still blocks bad addresses. Follow-ups on this row keep
+    # the choice so a later stage does not blacklist someone the user opted in.
+    allow_risky_send: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="campaign_recipients")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="campaign_links")
@@ -412,7 +565,65 @@ class EmailLog(Base):
     # send — copied from CampaignRecipient.sender_user_id at send time, so it
     # stays accurate even if that row's sender later changes for its next stage.
     sender_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    # MIME Message-ID we set on outbound mail (used to match In-Reply-To / References).
+    message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # AWS SES MessageId from send_raw_email (distinct from MIME Message-ID).
+    ses_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # ses = sent by LeadSense; manual = recorded from mail sent outside the app.
+    source: Mapped[str] = mapped_column(String(20), default="ses", server_default="ses", nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="email_logs")
     recipient: Mapped["Recipient"] = relationship("Recipient", back_populates="email_logs")
     sender_user: Mapped["User | None"] = relationship("User", foreign_keys=[sender_user_id])
+
+
+class UserNotification(Base):
+    """In-app notice for the user who sent a message. Scoped by user_id only."""
+
+    __tablename__ = "user_notifications"
+    __table_args__ = (
+        UniqueConstraint("user_id", "dedupe_key", name="uq_user_notification_dedupe"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="bounce")
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    campaign_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=True)
+    recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bounce_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    emailed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+
+
+class InboundEmail(Base):
+    """Idempotent record of an inbound message processed for reply/OOO/bounce classification."""
+
+    __tablename__ = "inbound_emails"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # Unique key for de-dupe: inbound MIME Message-ID, else S3 key, else hash.
+    inbound_message_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    classification: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    from_email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    to_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    in_reply_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    references_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    s3_bucket: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    s3_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    campaign_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("campaigns.id"), nullable=True)
+    recipient_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("recipients.id"), nullable=True)
+    campaign_recipient_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("campaign_recipients.id"), nullable=True
+    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)

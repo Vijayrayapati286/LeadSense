@@ -1,8 +1,8 @@
 """Campaign CRUD business logic."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -10,20 +10,72 @@ from app.models import (
     CampaignRecipient,
     CampaignRecipientList,
     CampaignSequenceStage,
+    EmailLog,
     Recipient,
     RecipientGroup,
+    RecipientGroupMember,
     Template,
 )
-from app.schemas.schemas import CampaignCreate, CampaignSequenceStageCreate, CampaignUpdate
+from app.schemas.schemas import (
+    CampaignCreate,
+    CampaignSequenceStageCreate,
+    CampaignUpdate,
+    RecordManualActivityRequest,
+)
 from app.services.app_settings_service import AppSettingsService
-from app.utils.helpers import sanitize_html, sanitize_manual_body
+from app.utils.helpers import sanitize_html, sanitize_manual_body, utc_now
 
 
 app_settings_service = AppSettingsService()
 
+# Prospects recorded from mail sent outside LeadSense have no upload list.
+# They are tagged here so the campaign Prospects tab can show them.
+OUTSIDE_MAIL_LIST_NAME = "Outside mail"
+
+# Statuses that must never receive another automated follow-up.
+_TERMINAL_STATUSES = frozenset({"replied", "suppressed", "bounced", "invalid_email", "risky"})
+# Statuses that count as "initial email already went out".
+_SENT_STATUSES = frozenset({"sent", "delivered", "opened", "clicked", "out_of_office"})
+
+
+def _follow_up_due_at(stage: CampaignSequenceStage, last_sent_at: datetime | None) -> datetime:
+    """When this stage should send. Overdue delays send on the next scheduler pass."""
+    unit = stage.delay_unit
+    value = stage.delay_value
+    if unit == "minutes":
+        delta = timedelta(minutes=value)
+    elif unit == "hours":
+        delta = timedelta(hours=value)
+    else:
+        delta = timedelta(days=value)
+    now = utc_now()
+    if last_sent_at is not None:
+        sent = last_sent_at if last_sent_at.tzinfo else last_sent_at.replace(tzinfo=timezone.utc)
+        due = sent + delta
+        if due > now:
+            return due
+    return now
+
+
+def derive_follow_up_state(cr: CampaignRecipient) -> tuple[str, str]:
+    """Return (state, human_label) for UI without renaming stored status."""
+    if cr.status in {"replied", "bounced", "suppressed", "invalid_email", "risky"}:
+        if cr.replied_at or cr.status == "replied":
+            return "cancelled", "No follow-up"
+        return "cancelled", "Follow-up cancelled"
+    if cr.next_send_at is not None and cr.status not in _TERMINAL_STATUSES:
+        when = cr.next_send_at.strftime("%d %b %Y") if hasattr(cr.next_send_at, "strftime") else str(cr.next_send_at)
+        return "scheduled", f"Follow-up scheduled — {when}"
+    if cr.current_stage and cr.current_stage >= 1:
+        when = ""
+        if cr.last_sent_at:
+            when = f" — {cr.last_sent_at.strftime('%d %b %Y')}"
+        return "sent", f"Follow-up sent{when}"
+    return "none", "No follow-up"
+
 
 class CampaignService:
-    def create(self, db: Session, data: CampaignCreate, user_id: int | None = None) -> Campaign:
+    def create(self, db: Session, data: CampaignCreate, user_id: int | None = None, org_id: str | None = None) -> Campaign:
         existing = db.query(Campaign).filter(Campaign.campaign_id == data.campaign_id).first()
         if existing:
             raise ValueError(f"Campaign ID '{data.campaign_id}' already exists")
@@ -38,6 +90,7 @@ class CampaignService:
             subject=data.subject,
             status=data.status,
             user_id=user_id,
+            org_id=org_id,
             scheduled_at=data.scheduled_at,
             use_recipient_timezone=data.use_recipient_timezone,
         )
@@ -46,17 +99,190 @@ class CampaignService:
         db.refresh(campaign)
         return campaign
 
-    def get_all(self, db: Session, skip: int = 0, limit: int = 100) -> list[Campaign]:
+    def get_all(self, db: Session, skip: int = 0, limit: int = 100, org_id: str | None = None) -> list[Campaign]:
+        query = db.query(Campaign)
+        if org_id:
+            query = query.filter(Campaign.org_id == org_id)
         return (
-            db.query(Campaign)
+            query
             .order_by(Campaign.created_at.desc())
             .offset(skip)
             .limit(limit)
             .all()
         )
 
-    def get_by_id(self, db: Session, campaign_id: int) -> Campaign | None:
-        return db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    def get_by_id(self, db: Session, campaign_id: int, org_id: str | None = None) -> Campaign | None:
+        query = db.query(Campaign).filter(Campaign.id == campaign_id)
+        if org_id:
+            query = query.filter(Campaign.org_id == org_id)
+        return query.first()
+
+    def search_for_update(self, db: Session, q: str = "", limit: int = 100) -> list[Campaign]:
+        """Campaigns for the Update list picker — by name/ID or recipient email."""
+        term = (q or "").strip()
+        if not term:
+            return self.get_all(db, skip=0, limit=limit)
+
+        like = f"%{term}%"
+        by_name = (
+            db.query(Campaign)
+            .filter(
+                or_(
+                    Campaign.campaign_name.ilike(like),
+                    Campaign.campaign_id.ilike(like),
+                )
+            )
+            .all()
+        )
+        by_email = (
+            db.query(Campaign)
+            .join(CampaignRecipient, CampaignRecipient.campaign_id == Campaign.id)
+            .join(Recipient, Recipient.id == CampaignRecipient.recipient_id)
+            .filter(
+                or_(
+                    Recipient.email.ilike(like),
+                    Recipient.name.ilike(like),
+                )
+            )
+            .distinct()
+            .all()
+        )
+        by_id: dict[int, Campaign] = {}
+        for c in by_name + by_email:
+            by_id[c.id] = c
+        return sorted(
+            by_id.values(),
+            key=lambda c: c.created_at.timestamp() if c.created_at else 0,
+            reverse=True,
+        )[:limit]
+
+    def list_emails_for_update(self, db: Session, q: str = "", limit: int = 200) -> list[dict]:
+        """One card per email — lists every campaign that email was successfully sent in."""
+        visible = {"sent", "delivered", "opened", "clicked", "replied", "out_of_office"}
+        term = (q or "").strip()
+
+        query = (
+            db.query(CampaignRecipient, Recipient, Campaign)
+            .join(Recipient, Recipient.id == CampaignRecipient.recipient_id)
+            .join(Campaign, Campaign.id == CampaignRecipient.campaign_id)
+            .filter(CampaignRecipient.status.in_(visible))
+        )
+        if term:
+            like = f"%{term}%"
+            query = query.filter(
+                or_(
+                    Recipient.email.ilike(like),
+                    Recipient.name.ilike(like),
+                    Recipient.company.ilike(like),
+                    Campaign.campaign_name.ilike(like),
+                    Campaign.campaign_id.ilike(like),
+                )
+            )
+
+        rows = query.order_by(CampaignRecipient.last_sent_at.desc()).all()
+
+        by_email: dict[str, dict] = {}
+        for cr, recipient, campaign in rows:
+            key = (recipient.email or "").strip().lower()
+            if not key:
+                continue
+            card = by_email.get(key)
+            if not card:
+                card = {
+                    "recipient_id": recipient.id,
+                    "name": recipient.name,
+                    "email": recipient.email,
+                    "company": recipient.company,
+                    "designation": recipient.designation,
+                    "campaigns": [],
+                }
+                by_email[key] = card
+
+            _, follow_label = derive_follow_up_state(cr)
+            # Prefer the most recently used recipient row if duplicates exist
+            card["recipient_id"] = recipient.id
+            card["name"] = recipient.name or card["name"]
+            card["company"] = recipient.company or card["company"]
+            card["designation"] = recipient.designation or card["designation"]
+            # Skip duplicate campaign entries for same email
+            if any(m["campaign_id"] == campaign.id for m in card["campaigns"]):
+                continue
+            card["campaigns"].append(
+                {
+                    "campaign_id": campaign.id,
+                    "campaign_name": campaign.campaign_name,
+                    "campaign_code": campaign.campaign_id,
+                    "status": cr.status,
+                    "last_sent_at": cr.last_sent_at,
+                    "follow_up_label": follow_label,
+                    "current_stage": cr.current_stage or 0,
+                    "follow_up_sent": bool(cr.current_stage and cr.current_stage >= 1),
+                }
+            )
+
+        items: list[dict] = []
+        for card in by_email.values():
+            campaigns = card["campaigns"]
+            statuses = {m["status"] for m in campaigns}
+            if statuses == {"replied"}:
+                display_status = "replied"
+            elif "replied" in statuses and len(statuses) > 1:
+                display_status = "mixed"
+            else:
+                display_status = next(iter(statuses)) if len(statuses) == 1 else "sent"
+            unreplied = sum(1 for m in campaigns if m["status"] != "replied")
+            follow_up_sent_count = sum(1 for m in campaigns if m.get("follow_up_sent"))
+            marked_updated_count = sum(1 for m in campaigns if m["status"] == "replied")
+            items.append(
+                {
+                    **card,
+                    "campaign_count": len(campaigns),
+                    "follow_up_sent_count": follow_up_sent_count,
+                    "marked_updated_count": marked_updated_count,
+                    "display_status": display_status,
+                    "unreplied_campaign_count": unreplied,
+                }
+            )
+
+        items.sort(key=lambda c: c["campaign_count"], reverse=True)
+        return items[:limit]
+
+    def mark_email_replied(
+        self,
+        db: Session,
+        email: str,
+        campaign_ids: list[int] | None = None,
+    ) -> dict:
+        """Mark replied for this email across all (or selected) campaigns; cancel follow-ups."""
+        email_norm = (email or "").strip().lower()
+        if not email_norm:
+            raise ValueError("email is required")
+
+        query = (
+            db.query(CampaignRecipient)
+            .join(Recipient, Recipient.id == CampaignRecipient.recipient_id)
+            .filter(func.lower(Recipient.email) == email_norm)
+        )
+        if campaign_ids:
+            query = query.filter(CampaignRecipient.campaign_id.in_(campaign_ids))
+
+        rows = query.all()
+        if not rows:
+            raise ValueError("No campaign recipients found for this email")
+
+        now = utc_now()
+        updated = 0
+        skipped = 0
+        for cr in rows:
+            if cr.status == "replied":
+                skipped += 1
+                continue
+            cr.status = "replied"
+            cr.replied_at = now
+            cr.next_send_at = None
+            updated += 1
+        db.commit()
+        return {"updated": updated, "skipped": skipped}
 
     def get_template(self, db: Session, campaign_id: int) -> Template | None:
         """The campaign's primary template — the first one created. With
@@ -101,8 +327,8 @@ class CampaignService:
         db.refresh(template)
         return template
 
-    def update(self, db: Session, campaign_id: int, data: CampaignUpdate) -> Campaign:
-        campaign = self.get_by_id(db, campaign_id)
+    def update(self, db: Session, campaign_id: int, data: CampaignUpdate, org_id: str | None = None) -> Campaign:
+        campaign = self.get_by_id(db, campaign_id, org_id=org_id)
         if not campaign:
             raise ValueError("Campaign not found")
 
@@ -114,8 +340,8 @@ class CampaignService:
         db.refresh(campaign)
         return campaign
 
-    def delete(self, db: Session, campaign_id: int) -> None:
-        campaign = self.get_by_id(db, campaign_id)
+    def delete(self, db: Session, campaign_id: int, org_id: str | None = None) -> None:
+        campaign = self.get_by_id(db, campaign_id, org_id=org_id)
         if not campaign:
             raise ValueError("Campaign not found")
         db.delete(campaign)
@@ -211,6 +437,92 @@ class CampaignService:
             CampaignRecipientList.group_id == group_id,
         )
 
+    def _attach_unlisted_outside_mail(
+        self,
+        db: Session,
+        campaign_id: int,
+        recipient_ids: list[int],
+        org_id: str | None,
+    ) -> int:
+        """Tag campaign contacts that are not in any list yet under Outside mail.
+
+        Skips anyone already in a list for this campaign, so an upload list
+        is left as their only list. Does not commit.
+        """
+        unique_ids: list[int] = []
+        seen: set[int] = set()
+        for recipient_id in recipient_ids:
+            if recipient_id in seen:
+                continue
+            seen.add(recipient_id)
+            unique_ids.append(recipient_id)
+        if not unique_ids:
+            return 0
+
+        listed = {
+            recipient_id
+            for (recipient_id,) in db.query(CampaignRecipientList.recipient_id)
+            .filter(
+                CampaignRecipientList.campaign_id == campaign_id,
+                CampaignRecipientList.recipient_id.in_(unique_ids),
+            )
+            .all()
+        }
+        missing = [recipient_id for recipient_id in unique_ids if recipient_id not in listed]
+        if not missing:
+            return 0
+
+        group_query = db.query(RecipientGroup).filter(RecipientGroup.name == OUTSIDE_MAIL_LIST_NAME)
+        if org_id:
+            group_query = group_query.filter(RecipientGroup.org_id == org_id)
+        group = group_query.first()
+        if not group:
+            group = RecipientGroup(name=OUTSIDE_MAIL_LIST_NAME, org_id=org_id)
+            db.add(group)
+            db.flush()
+
+        existing_members = {
+            member.recipient_id
+            for member in db.query(RecipientGroupMember)
+            .filter(
+                RecipientGroupMember.group_id == group.id,
+                RecipientGroupMember.recipient_id.in_(missing),
+            )
+            .all()
+        }
+        for recipient_id in missing:
+            db.add(
+                CampaignRecipientList(
+                    campaign_id=campaign_id,
+                    recipient_id=recipient_id,
+                    group_id=group.id,
+                )
+            )
+            if recipient_id not in existing_members:
+                db.add(RecipientGroupMember(group_id=group.id, recipient_id=recipient_id))
+        return len(missing)
+
+    def _backfill_outside_mail_list(self, db: Session, campaign_id: int) -> None:
+        """Put already-recorded outside-mail contacts onto the Outside mail list.
+
+        Mail recorded before list tagging existed has a manual EmailLog and a
+        CampaignRecipient, but no CampaignRecipientList row, so Prospects
+        never showed it.
+        """
+        manual_ids = [
+            recipient_id
+            for (recipient_id,) in db.query(EmailLog.recipient_id)
+            .filter(EmailLog.campaign_id == campaign_id, EmailLog.source == "manual")
+            .distinct()
+            .all()
+        ]
+        if not manual_ids:
+            return
+        campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+        org_id = campaign.org_id if campaign else None
+        if self._attach_unlisted_outside_mail(db, campaign_id, manual_ids, org_id):
+            db.commit()
+
     def list_campaign_lists(self, db: Session, campaign_id: int) -> list[dict]:
         """Every list (RecipientGroup) this campaign's prospects were tagged
         under, with a total, sent count, and representative template — the
@@ -219,6 +531,7 @@ class CampaignService:
         campaign, so a recipient can show under more than one list here),
         while send state (status/template) is read off the recipient's one
         CampaignRecipient row for this campaign."""
+        self._backfill_outside_mail_list(db, campaign_id)
         rows = (
             db.query(
                 CampaignRecipientList.group_id,
@@ -328,6 +641,38 @@ class CampaignService:
         db.commit()
         return len(rows)
 
+    def _ensure_followup_stage(self, db: Session, campaign: Campaign) -> None:
+        """Give a campaign a first follow-up stage when Save and send is used.
+
+        The scheduler sends whatever stage matches the contact's progress.
+        Outside mail treats the recorded email as stage 0, so stage 1 has to
+        exist or the follow-up is skipped. Copy the primary template instead
+        of asking the user to build a stage first. Does not commit.
+        """
+        if self.list_sequence_stages(db, campaign.id):
+            return
+        template = (
+            db.query(Template)
+            .filter(Template.campaign_id == campaign.id)
+            .order_by(Template.id)
+            .first()
+        )
+        subject = ((template.subject if template else None) or campaign.subject or "Following up").strip()
+        body = ((template.body if template else None) or "Following up on my earlier note.").strip()
+        db.add(
+            CampaignSequenceStage(
+                campaign_id=campaign.id,
+                stage_order=1,
+                delay_value=1,
+                delay_unit="days",
+                subject=subject or "Following up",
+                body=body or "Following up on my earlier note.",
+                closing=template.closing if template else None,
+                cta=template.cta if template else None,
+            )
+        )
+        db.flush()
+
     def list_sequence_stages(self, db: Session, campaign_id: int) -> list[CampaignSequenceStage]:
         return (
             db.query(CampaignSequenceStage)
@@ -355,9 +700,31 @@ class CampaignService:
 
         stage = CampaignSequenceStage(campaign_id=campaign_id, **data.model_dump())
         db.add(stage)
+        db.flush()
+        # People already sent the previous stage never got a next_send_at when
+        # this stage did not exist yet. Queue them now so the follow-up appears.
+        self._queue_followups_for_new_stage(db, stage)
         db.commit()
         db.refresh(stage)
         return stage
+
+    def _queue_followups_for_new_stage(self, db: Session, stage: CampaignSequenceStage) -> int:
+        """Set next_send_at for sent recipients who are waiting on this stage."""
+        rows = (
+            db.query(CampaignRecipient)
+            .filter(
+                CampaignRecipient.campaign_id == stage.campaign_id,
+                CampaignRecipient.status.in_(_SENT_STATUSES),
+                CampaignRecipient.next_send_at.is_(None),
+                CampaignRecipient.current_stage == stage.stage_order - 1,
+            )
+            .all()
+        )
+        queued = 0
+        for cr in rows:
+            cr.next_send_at = _follow_up_due_at(stage, cr.last_sent_at)
+            queued += 1
+        return queued
 
     def update_sequence_stage(self, db: Session, stage_id: int, update_data: dict) -> CampaignSequenceStage:
         stage = db.query(CampaignSequenceStage).filter(CampaignSequenceStage.id == stage_id).first()
@@ -375,3 +742,488 @@ class CampaignService:
             raise ValueError("Sequence stage not found")
         db.delete(stage)
         db.commit()
+
+    def mark_recipients_replied(
+        self, db: Session, campaign_id: int, recipient_ids: list[int]
+    ) -> dict:
+        """Manually mark selected campaign recipients as replied; cancel pending follow-ups."""
+        if not self.get_by_id(db, campaign_id):
+            raise ValueError("Campaign not found")
+        if not recipient_ids:
+            return {"updated": 0, "skipped": 0, "undo_items": []}
+
+        rows = (
+            db.query(CampaignRecipient)
+            .filter(
+                CampaignRecipient.campaign_id == campaign_id,
+                CampaignRecipient.recipient_id.in_(recipient_ids),
+            )
+            .all()
+        )
+        now = utc_now()
+        updated = 0
+        undo_items: list[dict] = []
+        for cr in rows:
+            if cr.status == "replied":
+                continue
+            undo_items.append(
+                {
+                    "recipient_id": cr.recipient_id,
+                    "previous_status": cr.status,
+                    "previous_next_send_at": cr.next_send_at,
+                }
+            )
+            cr.status = "replied"
+            cr.replied_at = now
+            cr.next_send_at = None
+            updated += 1
+        db.commit()
+        skipped = len(recipient_ids) - updated
+        return {"updated": updated, "skipped": max(0, skipped), "undo_items": undo_items}
+
+    def unmark_recipients_replied(
+        self, db: Session, campaign_id: int, recipient_ids: list[int]
+    ) -> dict:
+        """Clear a manual replied mark so the contact can be followed up again."""
+        if not self.get_by_id(db, campaign_id):
+            raise ValueError("Campaign not found")
+        if not recipient_ids:
+            return {"updated": 0, "skipped": 0, "undo_items": []}
+
+        stages = self.list_sequence_stages(db, campaign_id)
+        stage_orders = {stage.stage_order: stage for stage in stages}
+        rows = (
+            db.query(CampaignRecipient)
+            .filter(
+                CampaignRecipient.campaign_id == campaign_id,
+                CampaignRecipient.recipient_id.in_(recipient_ids),
+            )
+            .all()
+        )
+        updated = 0
+        for cr in rows:
+            if cr.status != "replied":
+                continue
+            cr.status = "sent" if cr.last_sent_at else "not_contacted"
+            cr.replied_at = None
+            next_stage = stage_orders.get((cr.current_stage or 0) + 1)
+            if cr.status == "sent" and next_stage is not None and cr.next_send_at is None:
+                cr.next_send_at = _follow_up_due_at(next_stage, cr.last_sent_at)
+            updated += 1
+        db.commit()
+        skipped = len(recipient_ids) - updated
+        return {"updated": updated, "skipped": max(0, skipped), "undo_items": []}
+
+    def undo_mark_recipients_replied(
+        self, db: Session, campaign_id: int, items: list[dict]
+    ) -> dict:
+        """Restore recipients after a manual mark-replied, using captured previous state."""
+        if not self.get_by_id(db, campaign_id):
+            raise ValueError("Campaign not found")
+        if not items:
+            return {"updated": 0, "skipped": 0}
+
+        by_id = {item["recipient_id"]: item for item in items}
+        rows = (
+            db.query(CampaignRecipient)
+            .filter(
+                CampaignRecipient.campaign_id == campaign_id,
+                CampaignRecipient.recipient_id.in_(list(by_id.keys())),
+            )
+            .all()
+        )
+        restored = 0
+        skipped = 0
+        for cr in rows:
+            item = by_id.get(cr.recipient_id)
+            if not item:
+                continue
+            if cr.status != "replied":
+                skipped += 1
+                continue
+            cr.status = item.get("previous_status") or "sent"
+            cr.replied_at = None
+            cr.next_send_at = item.get("previous_next_send_at")
+            restored += 1
+        db.commit()
+        return {"updated": restored, "skipped": skipped}
+
+    def schedule_followups(
+        self,
+        db: Session,
+        campaign_id: int,
+        scheduled_at: datetime,
+        *,
+        recipient_ids: list[int] | None = None,
+        all_non_replied: bool = False,
+        sender_user_id: int | None = None,
+    ) -> dict:
+        """Set absolute next_send_at for eligible non-replied recipients.
+
+        Content is taken from the campaign's next sequence stage at send time
+        (existing process_due_followups). If the campaign has no follow-up
+        stage yet, the first one is copied from the campaign email so scheduling
+        only needs a send time.
+        """
+        campaign = self.get_by_id(db, campaign_id)
+        if not campaign:
+            raise ValueError("Campaign not found")
+
+        self._ensure_followup_stage(db, campaign)
+        stages = self.list_sequence_stages(db, campaign_id)
+
+        if scheduled_at.tzinfo is None:
+            raise ValueError("scheduled_at must include a timezone")
+        if scheduled_at <= utc_now():
+            raise ValueError("scheduled_at must be in the future")
+
+        if not all_non_replied and not recipient_ids:
+            raise ValueError("Provide recipient_ids or set all_non_replied=true")
+
+        query = db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign_id)
+        if all_non_replied:
+            query = query.filter(CampaignRecipient.status.notin_(_TERMINAL_STATUSES))
+            query = query.filter(CampaignRecipient.status.in_(_SENT_STATUSES))
+        else:
+            query = query.filter(CampaignRecipient.recipient_id.in_(recipient_ids or []))
+
+        rows = query.all()
+        scheduled = 0
+        skipped = 0
+        for cr in rows:
+            if cr.status in _TERMINAL_STATUSES:
+                skipped += 1
+                continue
+            if cr.status not in _SENT_STATUSES:
+                skipped += 1
+                continue
+            # Must have a next stage defined for their current progress.
+            next_order = cr.current_stage + 1
+            has_stage = any(s.stage_order == next_order for s in stages)
+            if not has_stage:
+                skipped += 1
+                continue
+            cr.next_send_at = scheduled_at
+            if sender_user_id is not None:
+                cr.sender_user_id = sender_user_id
+            scheduled += 1
+
+        db.commit()
+        return {"scheduled": scheduled, "skipped": skipped, "scheduled_at": scheduled_at}
+
+    def cancel_followups(
+        self,
+        db: Session,
+        campaign_id: int,
+        *,
+        recipient_ids: list[int] | None = None,
+        all_scheduled: bool = False,
+    ) -> dict:
+        """Clear next_send_at for scheduled follow-ups on this campaign only.
+
+        Does not change recipient status (e.g. leaves status as sent). Skips
+        terminal rows and rows with no pending next_send_at.
+        """
+        if not self.get_by_id(db, campaign_id):
+            raise ValueError("Campaign not found")
+
+        if not all_scheduled and not recipient_ids:
+            raise ValueError("Provide recipient_ids or set all_scheduled=true")
+
+        query = db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign_id)
+        if all_scheduled:
+            query = query.filter(
+                CampaignRecipient.next_send_at.isnot(None),
+                CampaignRecipient.status.notin_(_TERMINAL_STATUSES),
+            )
+        else:
+            query = query.filter(CampaignRecipient.recipient_id.in_(recipient_ids or []))
+
+        cancelled = 0
+        skipped = 0
+        for cr in query.all():
+            if cr.status in _TERMINAL_STATUSES:
+                skipped += 1
+                continue
+            if cr.next_send_at is None:
+                skipped += 1
+                continue
+            cr.next_send_at = None
+            cancelled += 1
+
+        db.commit()
+        return {"cancelled": cancelled, "skipped": skipped}
+
+    def recipient_stats(self, db: Session, campaign_id: int) -> dict:
+        rows = (
+            db.query(CampaignRecipient)
+            .filter(CampaignRecipient.campaign_id == campaign_id)
+            .all()
+        )
+        sent = 0
+        replied = 0
+        no_reply = 0
+        follow_up_scheduled = 0
+        follow_up_sent = 0
+        follow_up_cancelled = 0
+        bounced = 0
+        not_contacted = 0
+
+        for cr in rows:
+            if cr.status in {"not_contacted", "queued"}:
+                not_contacted += 1
+
+            contacted = cr.last_sent_at is not None or cr.status in (
+                _SENT_STATUSES | {"replied", "bounced", "suppressed", "invalid_email"}
+            )
+            if contacted:
+                sent += 1
+
+            if cr.status == "replied":
+                replied += 1
+                follow_up_cancelled += 1
+            elif cr.status in {"bounced", "suppressed", "invalid_email"}:
+                bounced += 1
+                follow_up_cancelled += 1
+            elif cr.next_send_at is not None and cr.status not in _TERMINAL_STATUSES:
+                follow_up_scheduled += 1
+                no_reply += 1
+            elif cr.current_stage >= 1:
+                follow_up_sent += 1
+                no_reply += 1
+            elif cr.status in _SENT_STATUSES:
+                no_reply += 1
+
+        return {
+            "total": len(rows),
+            "sent": sent,
+            "replied": replied,
+            "no_reply": no_reply,
+            "follow_up_scheduled": follow_up_scheduled,
+            "follow_up_sent": follow_up_sent,
+            "follow_up_cancelled": follow_up_cancelled,
+            "bounced": bounced,
+            "not_contacted": not_contacted,
+        }
+
+    def record_manual_activity(
+        self,
+        db: Session,
+        data: RecordManualActivityRequest,
+        *,
+        user_id: int | None,
+        user_name: str,
+        org_id: str | None,
+    ) -> dict:
+        """Record mail already sent outside LeadSense.
+
+        Writes an EmailLog and, when provided, a follow-up reminder on this
+        campaign's CampaignRecipient rows only. Contacts that are not already
+        in a list for this campaign are tagged under "Outside mail" so they
+        show on the Prospects tab. next_send_at is left alone unless
+        send_follow_up is set, in which case these contacts are queued for
+        the campaign's next sequence stage. If the campaign has no stage yet,
+        one is created from its primary template so the send can go out.
+        """
+        if data.send_follow_up and data.mode != "existing":
+            raise ValueError("Save and send follow-up is only available for an existing campaign")
+
+        sent_at = data.sent_at
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=timezone.utc)
+        follow_up_at = data.follow_up_at
+        if follow_up_at is not None and follow_up_at.tzinfo is None:
+            follow_up_at = follow_up_at.replace(tzinfo=timezone.utc)
+
+        subject = data.subject.strip()
+        body = data.body.strip()
+        if not subject or not body:
+            raise ValueError("Subject and email content are required")
+
+        created_campaign = False
+        if data.mode == "existing":
+            if not data.campaign_id:
+                raise ValueError("Select a campaign")
+            campaign = self.get_by_id(db, data.campaign_id, org_id=org_id)
+            if not campaign:
+                raise ValueError("Campaign not found")
+            if data.send_follow_up:
+                if (campaign.origin or "leadsense") == "external":
+                    raise ValueError("This campaign is tracked outside LeadSense and cannot send a follow-up")
+                if follow_up_at is None:
+                    raise ValueError("Choose a follow-up date")
+                if follow_up_at <= utc_now():
+                    raise ValueError("Follow-up date must be in the future")
+                self._ensure_followup_stage(db, campaign)
+        elif data.mode == "new":
+            name = (data.campaign_name or "").strip()
+            if not name:
+                raise ValueError("Campaign name is required")
+            code = (data.campaign_code or "").strip() or f"CMP-EXT-{int(utc_now().timestamp())}"
+            if db.query(Campaign).filter(Campaign.campaign_id == code).first():
+                raise ValueError(f"Campaign ID '{code}' already exists")
+            campaign = Campaign(
+                campaign_name=name,
+                campaign_id=code,
+                description=(data.description or "").strip() or None,
+                owner=(data.owner or "").strip() or user_name or "Unknown",
+                department=(data.department or "").strip() or None,
+                subject=subject,
+                status="active",
+                origin="external",
+                emails_sent=0,
+                user_id=user_id,
+                org_id=org_id,
+            )
+            db.add(campaign)
+            db.flush()
+            db.add(
+                Template(
+                    campaign_id=campaign.id,
+                    name="Outside mail",
+                    type="manual",
+                    subject=subject,
+                    body=body,
+                )
+            )
+            created_campaign = True
+        else:
+            raise ValueError("Choose an existing campaign or create a new one")
+
+        recipient_ids, created_contacts, reused_contacts = self._resolve_manual_recipients(
+            db, data, org_id=org_id
+        )
+        if not recipient_ids:
+            raise ValueError("Select at least one contact")
+
+        action = (data.follow_up_action or "").strip() or None
+        recorded = 0
+        for recipient_id in recipient_ids:
+            cr = (
+                db.query(CampaignRecipient)
+                .filter(
+                    CampaignRecipient.campaign_id == campaign.id,
+                    CampaignRecipient.recipient_id == recipient_id,
+                )
+                .first()
+            )
+            if not cr:
+                cr = CampaignRecipient(
+                    campaign_id=campaign.id,
+                    recipient_id=recipient_id,
+                    status="not_contacted",
+                )
+                db.add(cr)
+                db.flush()
+
+            if follow_up_at is not None:
+                cr.manual_follow_up_at = follow_up_at
+            if action is not None:
+                cr.manual_follow_up_action = action
+
+            # A plain save leaves an in-flight LeadSense send alone. Sending
+            # the follow-up treats the outside mail as the first touch, so a
+            # queued row on this campaign becomes sent and can take the next stage.
+            if data.send_follow_up and cr.status not in _TERMINAL_STATUSES:
+                if cr.status not in _SENT_STATUSES:
+                    cr.status = "sent"
+                    cr.current_stage = cr.current_stage or 0
+                if cr.last_sent_at is None or sent_at >= cr.last_sent_at:
+                    cr.last_sent_at = sent_at
+            elif cr.status in {None, "", "not_contacted"}:
+                cr.status = "sent"
+                cr.last_sent_at = sent_at
+                cr.current_stage = 0
+            elif cr.status in _SENT_STATUSES:
+                if cr.last_sent_at is None or sent_at >= cr.last_sent_at:
+                    cr.last_sent_at = sent_at
+
+            db.add(
+                EmailLog(
+                    campaign_id=campaign.id,
+                    recipient_id=recipient_id,
+                    status="sent",
+                    sent_at=sent_at,
+                    sender_user_id=user_id,
+                    source="manual",
+                    subject=subject,
+                    body=body,
+                )
+            )
+            recorded += 1
+
+        self._attach_unlisted_outside_mail(db, campaign.id, recipient_ids, org_id)
+
+        campaign.emails_sent = (campaign.emails_sent or 0) + recorded
+        db.commit()
+        db.refresh(campaign)
+
+        scheduled = 0
+        skipped = 0
+        if data.send_follow_up:
+            follow = self.schedule_followups(
+                db,
+                campaign.id,
+                follow_up_at,
+                recipient_ids=recipient_ids,
+                sender_user_id=user_id,
+            )
+            scheduled = follow["scheduled"]
+            skipped = follow["skipped"]
+
+        return {
+            "campaign_id": campaign.id,
+            "campaign_name": campaign.campaign_name,
+            "origin": campaign.origin or ("external" if created_campaign else "leadsense"),
+            "recorded": recorded,
+            "created_contacts": created_contacts,
+            "reused_contacts": reused_contacts,
+            "follow_ups_scheduled": scheduled,
+            "follow_ups_skipped": skipped,
+        }
+
+    def _resolve_manual_recipients(
+        self, db: Session, data: RecordManualActivityRequest, *, org_id: str | None
+    ) -> tuple[list[int], int, int]:
+        """Existing ids plus emails, reusing a recipient when the address already exists."""
+        ids: list[int] = []
+        seen: set[int] = set()
+        created = 0
+        reused = 0
+
+        if data.recipient_ids:
+            query = db.query(Recipient).filter(Recipient.id.in_(data.recipient_ids))
+            if org_id:
+                query = query.filter(Recipient.org_id == org_id)
+            for recipient in query.all():
+                if recipient.id not in seen:
+                    seen.add(recipient.id)
+                    ids.append(recipient.id)
+                    reused += 1
+
+        for contact in data.new_contacts:
+            email = contact.email.strip().lower()
+            if "@" not in email or email.startswith("@") or email.endswith("@"):
+                raise ValueError(f"Invalid email address: {contact.email}")
+            query = db.query(Recipient).filter(Recipient.email == email)
+            if org_id:
+                query = query.filter(Recipient.org_id == org_id)
+            existing = query.first()
+            if existing:
+                if existing.id not in seen:
+                    seen.add(existing.id)
+                    ids.append(existing.id)
+                    reused += 1
+                continue
+            recipient = Recipient(
+                name=contact.name.strip(),
+                email=email,
+                org_id=org_id,
+            )
+            db.add(recipient)
+            db.flush()
+            seen.add(recipient.id)
+            ids.append(recipient.id)
+            created += 1
+
+        return ids, created, reused

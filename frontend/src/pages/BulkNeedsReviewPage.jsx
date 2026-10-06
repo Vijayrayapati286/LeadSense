@@ -92,11 +92,7 @@ export default function BulkNeedsReviewPage() {
     setBusy(true);
     try {
       const result = await linkedinProfileService.resolveConflict(selectedJob, item.item_id, decisions);
-      if (result?.icp_synced) {
-        toast.success('Resolved and added to ICP Database');
-      } else {
-        toast.success('Record resolved');
-      }
+      toast.success('Record resolved');
       await loadItems(selectedJob);
       await loadJobs();
       const remaining = await linkedinProfileService.getBulkConflicts(selectedJob, {
@@ -161,7 +157,7 @@ export default function BulkNeedsReviewPage() {
             <option value="">Select a job…</option>
             {jobs.map((j) => (
               <option key={j.job_id} value={j.job_id}>
-                {(j.original_file_name || j.job_id).slice(0, 48)} ({j.needs_review} open)
+                {(j.original_file_name || 'Job').slice(0, 48)} ({j.needs_review} open)
               </option>
             ))}
           </select>

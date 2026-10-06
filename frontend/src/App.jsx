@@ -1,12 +1,17 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute from './components/ProtectedRoute';
+import ProtectedRoute, { RequirePermission, TenantProductRoute } from './components/ProtectedRoute';
 import MainLayout from './layouts/MainLayout';
 import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import DashboardPage from './pages/DashboardPage';
+import AdminDashboardPage from './pages/AdminDashboardPage';
+import UsersPage from './pages/UsersPage';
+import InvitesPage from './pages/InvitesPage';
 import CampaignsPage from './pages/CampaignsPage';
 import CreateCampaignPage from './pages/CreateCampaignPage';
 import CampaignDetailPage from './pages/CampaignDetailPage';
+import UpdateListPage from './pages/UpdateListPage';
+import RecordOutsideMailPage from './pages/RecordOutsideMailPage';
 import RecipientsPage from './pages/RecipientsPage';
 import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
@@ -22,18 +27,74 @@ import BulkBackupsPage from './pages/BulkBackupsPage';
 import OfferingsPage from './pages/OfferingsPage';
 import OfferingCreatePage from './pages/OfferingCreatePage';
 import OfferingDetailPage from './pages/OfferingDetailPage';
+import OrganizationsPage from './pages/OrganizationsPage';
+import RolesAccessPage from './pages/RolesAccessPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
+import { useAuth } from './hooks/useAuth';
+import { hasPermission } from './utils/permissions';
+
+function DashboardEntry() {
+  const { user } = useAuth();
+  if (hasPermission(user, 'members:read') || hasPermission(user, 'orgs:onboard')) {
+    return <AdminDashboardPage />;
+  }
+  return <DashboardPage />;
+}
 
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/auth/callback" element={<AuthCallbackPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage kind="owner" />} />
+      <Route path="/accept-invite" element={<VerifyEmailPage kind="invite" />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<MainLayout />}>
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<DashboardEntry />} />
+          <Route path="/admin-dashboard" element={<AdminDashboardPage />} />
+          <Route element={<RequirePermission permission="members:read" />}>
+            <Route path="/users" element={<UsersPage />} />
+          </Route>
+          <Route element={<RequirePermission permission="members:invite" />}>
+            <Route path="/invites" element={<InvitesPage />} />
+          </Route>
+          <Route element={<RequirePermission permission="orgs:onboard" />}>
+            <Route path="/organizations" element={<OrganizationsPage />} />
+          </Route>
+          <Route element={<RequirePermission permission="access:read" />}>
+            <Route path="/access" element={<RolesAccessPage />} />
+          </Route>
+          <Route element={<TenantProductRoute />}>
+            <Route path="/campaigns" element={<CampaignsPage />} />
+            <Route path="/campaigns/create" element={<CreateCampaignPage />} />
+            <Route path="/campaigns/record-external" element={<RecordOutsideMailPage />} />
+            <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
+            <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />
+            <Route path="/recipients" element={<RecipientsPage />} />
+            <Route path="/recipient-groups" element={<Navigate to="/recipients" replace />} />
+            <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
+            <Route path="/templates" element={<TemplatesPage />} />
+            <Route path="/logs" element={<EmailLogsPage />} />
+            <Route path="/blacklist" element={<BlacklistPage />} />
+            <Route path="/icp-accounts" element={<AccountsPage />} />
+            <Route path="/icp-contacts" element={<ContactsPage />} />
+            <Route path="/icp-database" element={<Navigate to="/icp-contacts" replace />} />
+            <Route path="/salesnav" element={<Navigate to="/linkedin-extractor" replace />} />
+            <Route path="/linkedin-extractor" element={<LinkedInProfileExtractorPage />} />
+            <Route path="/linkedin-history" element={<BulkHistoryPage />} />
+            <Route path="/linkedin-history/:jobId" element={<BulkJobDetailPage />} />
+            <Route path="/linkedin-needs-review" element={<BulkNeedsReviewPage />} />
+            <Route path="/linkedin-backups" element={<BulkBackupsPage />} />
+            <Route path="/offerings" element={<OfferingsPage />} />
+            <Route path="/offerings/new" element={<OfferingCreatePage />} />
+            <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />
+            <Route path="/offerings/:id" element={<OfferingDetailPage />} />
+          </Route>
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/create" element={<CreateCampaignPage />} />
+          <Route path="/campaigns/record-external" element={<RecordOutsideMailPage />} />
+          <Route path="/campaigns/update-list" element={<UpdateListPage />} />
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
           <Route path="/campaigns/:id/edit" element={<CreateCampaignPage />} />
           <Route path="/recipients" element={<RecipientsPage />} />
@@ -55,7 +116,9 @@ export default function App() {
           <Route path="/offerings/new" element={<OfferingCreatePage />} />
           <Route path="/offerings/:id/edit" element={<OfferingCreatePage />} />
           <Route path="/offerings/:id" element={<OfferingDetailPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route element={<RequirePermission permission="settings:read" />}>
+            <Route path="/settings" element={<SettingsPage />} />
+          </Route>
         </Route>
       </Route>
 

@@ -271,11 +271,44 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "embedding": json_type,
                 "embedding_model": "VARCHAR(100)",
                 "image": "TEXT",
+                "org_id": "VARCHAR(50)",
+                "department": "VARCHAR(255)",
+                "phone": "VARCHAR(100)",
+                "city": "VARCHAR(255)",
+                "state": "VARCHAR(255)",
+                "country": "VARCHAR(255)",
+                "country_code": "VARCHAR(16)",
+                "contact_state": "VARCHAR(255)",
+                "contact_country": "VARCHAR(255)",
+                "company_linkedin_url": "VARCHAR(500)",
+                "company_location": "VARCHAR(500)",
+                "company_city": "VARCHAR(255)",
+                "annual_revenue": "VARCHAR(100)",
+                "company_summary": "TEXT",
+                "account_linkedin_url": "VARCHAR(500)",
+                "account_city": "VARCHAR(255)",
+                "account_summary": "TEXT",
             }
             for name, ddl in icp_adds.items():
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE icp_records ADD COLUMN {name} {ddl}"))
                     logger.info("Added icp_records.%s", name)
+            # Backfill tenant from owning user when possible.
+            try:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE icp_records
+                        SET org_id = (
+                            SELECT users.org_id FROM users WHERE users.id = icp_records.user_id
+                        )
+                        WHERE (org_id IS NULL OR org_id = '')
+                          AND user_id IS NOT NULL
+                        """
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to backfill icp_records.org_id")
 
         if "offerings" in tables:
             cols = {c["name"] for c in inspector.get_columns("offerings")}
@@ -288,11 +321,18 @@ def _ensure_offerings_recommendation_schema() -> None:
                 "target_customer": "TEXT",
                 "target_company_size": json_type,
                 "selling_points": json_type,
+                "content": "TEXT",
             }
             for name, ddl in offering_adds.items():
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE offerings ADD COLUMN {name} {ddl}"))
                     logger.info("Added offerings.%s", name)
+
+        if "offering_documents" in tables:
+            doc_cols = {c["name"] for c in inspector.get_columns("offering_documents")}
+            if "content" not in doc_cols:
+                conn.execute(text("ALTER TABLE offering_documents ADD COLUMN content TEXT"))
+                logger.info("Added offering_documents.content")
 
         if "offering_matches" in tables:
             cols = {c["name"] for c in inspector.get_columns("offering_matches")}
@@ -343,25 +383,397 @@ def _ensure_app_settings_schema() -> None:
                 logger.info("Added app_settings.%s", name)
 
 
+def _ensure_manual_mail_schema() -> None:
+    """Columns for recording mail sent outside LeadSense. create_all does not ALTER."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    dialect = engine.dialect.name
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME"
+
+    with engine.begin() as conn:
+        if "campaigns" in tables:
+            cols = {c["name"] for c in inspector.get_columns("campaigns")}
+            if "origin" not in cols:
+                conn.execute(
+                    text("ALTER TABLE campaigns ADD COLUMN origin VARCHAR(20) DEFAULT 'leadsense'")
+                )
+                conn.execute(text("UPDATE campaigns SET origin = 'leadsense' WHERE origin IS NULL"))
+                logger.info("Added campaigns.origin")
+        if "email_logs" in tables:
+            cols = {c["name"] for c in inspector.get_columns("email_logs")}
+            adds = {
+                "source": "VARCHAR(20) DEFAULT 'ses'",
+                "subject": "VARCHAR(500)",
+                "body": "TEXT",
+            }
+            for name, ddl in adds.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE email_logs ADD COLUMN {name} {ddl}"))
+                    logger.info("Added email_logs.%s", name)
+            if "source" not in cols:
+                conn.execute(text("UPDATE email_logs SET source = 'ses' WHERE source IS NULL"))
+        if "campaign_recipients" in tables:
+            cols = {c["name"] for c in inspector.get_columns("campaign_recipients")}
+            if "manual_follow_up_at" not in cols:
+                conn.execute(text(f"ALTER TABLE campaign_recipients ADD COLUMN manual_follow_up_at {ts}"))
+                logger.info("Added campaign_recipients.manual_follow_up_at")
+            if "manual_follow_up_action" not in cols:
+                conn.execute(text("ALTER TABLE campaign_recipients ADD COLUMN manual_follow_up_action TEXT"))
+                logger.info("Added campaign_recipients.manual_follow_up_action")
+            if "allow_risky_send" not in cols:
+                risky_default = "FALSE" if dialect != "sqlite" else "0"
+                conn.execute(
+                    text(
+                        "ALTER TABLE campaign_recipients "
+                        f"ADD COLUMN allow_risky_send BOOLEAN NOT NULL DEFAULT {risky_default}"
+                    )
+                )
+                logger.info("Added campaign_recipients.allow_risky_send")
+
+
+def _ensure_ooo_inbound_schema() -> None:
+    """Add OOO / inbound tracking columns and table. create_all does not ALTER."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    dialect = engine.dialect.name
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME"
+
+    with engine.begin() as conn:
+        if "email_logs" in tables:
+            cols = {c["name"] for c in inspector.get_columns("email_logs")}
+            for name, ddl in {
+                "message_id": "VARCHAR(255)",
+                "ses_message_id": "VARCHAR(255)",
+            }.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE email_logs ADD COLUMN {name} {ddl}"))
+                    logger.info("Added email_logs.%s", name)
+
+        if "campaign_recipients" in tables:
+            cols = {c["name"] for c in inspector.get_columns("campaign_recipients")}
+            if "ooo_at" not in cols:
+                conn.execute(text(f"ALTER TABLE campaign_recipients ADD COLUMN ooo_at {ts}"))
+                logger.info("Added campaign_recipients.ooo_at")
+
+    # inbound_emails is a new table — create_all handles it when the model is imported.
+    # Re-inspect after possible create_all in init_db; this helper may run before or after.
+
+
+def _ensure_offerings_public_id() -> None:
+    """Add offerings.offering_id before create_all builds offering_documents.
+
+    create_all does not ALTER an existing offerings table. offering_documents
+    foreign-keys offerings.offering_id, so a database created before that
+    column existed crashes startup and the login proxy returns 502.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    if "offerings" not in set(inspector.get_table_names()):
+        return
+
+    cols = {c["name"] for c in inspector.get_columns("offerings")}
+    indexes = {ix["name"] for ix in inspector.get_indexes("offerings")}
+    adds = {
+        "offering_id": "VARCHAR(64)",
+        "organization_id": "VARCHAR(64)",
+        "smartops_offering_id": "VARCHAR(128)",
+        "file_format": "VARCHAR(16)",
+        "file_name": "VARCHAR(500)",
+        "file_url": "TEXT",
+        "doc_count": "INTEGER DEFAULT 0",
+    }
+    with engine.begin() as conn:
+        for name, ddl in adds.items():
+            if name not in cols:
+                conn.execute(text(f"ALTER TABLE offerings ADD COLUMN {name} {ddl}"))
+                logger.info("Added offerings.%s", name)
+        conn.execute(
+            text(
+                "UPDATE offerings SET offering_id = 'ls_off_' || CAST(id AS TEXT) "
+                "WHERE offering_id IS NULL OR offering_id = ''"
+            )
+        )
+        if "ix_offerings_offering_id" not in indexes:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_offerings_offering_id "
+                    "ON offerings (offering_id)"
+                )
+            )
+            logger.info("Added unique index ix_offerings_offering_id")
+
+
 def init_db() -> None:
     """Create all tables, seed dummy data if empty, and provision named users."""
-    from app.models import Campaign, EmailLog, Recipient, Template, User
+    from app.models import (  # noqa: F401
+        Campaign,
+        EmailLog,
+        Lead,
+        Organization,
+        OrganizationToken,
+        Permission,
+        Recipient,
+        Role,
+        Template,
+        User,
+        UserNotification,
+        UserRole,
+    )
     from app.profile_extractor import models as _profile_extractor_models  # noqa: F401
     from app.linkedin import bulk_models as _linkedin_bulk_models  # noqa: F401
     from app.icp import models as _icp_models  # noqa: F401
     from app.offerings import models as _offerings_models  # noqa: F401
     from app.storage import models as _storage_models  # noqa: F401
-    from app.services.seed_service import provision_core_users, seed_dummy_data
+    from app.services.seed_service import provision_core_users, provision_provider, provision_tenants, seed_dummy_data
 
+    _ensure_offerings_public_id()
     Base.metadata.create_all(bind=engine)
     _ensure_linkedin_bulk_schema()
     _ensure_offerings_recommendation_schema()
     _ensure_app_settings_schema()
+    _ensure_organizations_schema()
+    _ensure_rbac_schema()
+    _ensure_ooo_inbound_schema()
+    _ensure_manual_mail_schema()
 
     db = SessionLocal()
     try:
+        provision_tenants(db)
+        provision_provider(db)
+        from app.services.organization_token_service import migrate_legacy_integration_tokens
+        from app.services.rbac_service import provision_rbac
+
+        migrated = migrate_legacy_integration_tokens(db)
+        if migrated:
+            logger.info("Migrated %s legacy integration_token(s) into organization_tokens", migrated)
         if db.query(Campaign).count() == 0:
             seed_dummy_data(db)
         provision_core_users(db)
+        provision_rbac(db)
     finally:
         db.close()
+
+
+def _ensure_organizations_schema() -> None:
+    """Patch organizations + org_id columns when create_all cannot ALTER."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    dialect = engine.dialect.name
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME"
+
+    with engine.begin() as conn:
+        if "organizations" not in tables:
+            conn.execute(
+                text(
+                    f"""
+                    CREATE TABLE organizations (
+                        org_id VARCHAR(50) PRIMARY KEY,
+                        org_name VARCHAR(255) NOT NULL,
+                        org_type VARCHAR(50) NOT NULL,
+                        integration_token VARCHAR(255) NOT NULL UNIQUE,
+                        status VARCHAR(50) NOT NULL,
+                        created_at {ts} DEFAULT CURRENT_TIMESTAMP,
+                        updated_at {ts} DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            logger.info("Created organizations table")
+
+        user_cols = {c["name"] for c in inspector.get_columns("users")} if "users" in tables else set()
+        # Re-inspect after possible create
+        inspector = inspect(engine)
+        if "users" in set(inspector.get_table_names()):
+            user_cols = {c["name"] for c in inspector.get_columns("users")}
+            user_adds = {
+                "org_id": "VARCHAR(50)",
+                "role": "VARCHAR(50) DEFAULT 'USER'",
+                "status": "VARCHAR(50) DEFAULT 'ACTIVE'",
+                # SQLite rejects non-constant defaults on ALTER ADD COLUMN
+                "updated_at": "DATETIME" if dialect == "sqlite" else f"{ts} DEFAULT CURRENT_TIMESTAMP",
+            }
+            for name, ddl in user_adds.items():
+                if name not in user_cols:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {ddl}"))
+                    logger.info("Added users.%s", name)
+
+        for table in ("campaigns", "recipients", "mailers", "recipient_groups", "tags"):
+            if table not in set(inspector.get_table_names()):
+                continue
+            cols = {c["name"] for c in inspector.get_columns(table)}
+            if "org_id" not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN org_id VARCHAR(50)"))
+                logger.info("Added %s.org_id", table)
+
+        # Invites table (create_all covers new DBs; patch older SQLite/Postgres)
+        inspector = inspect(engine)
+        if "invites" not in set(inspector.get_table_names()):
+            ts_col = ts
+            conn.execute(
+                text(
+                    f"""
+                    CREATE TABLE invites (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        org_id VARCHAR(50) NOT NULL,
+                        email VARCHAR(255) NOT NULL,
+                        role VARCHAR(50) NOT NULL,
+                        status VARCHAR(50) NOT NULL,
+                        invite_token VARCHAR(64) NOT NULL UNIQUE,
+                        invited_by_user_id INTEGER,
+                        expires_at {ts_col} NOT NULL,
+                        resolved_at {ts_col},
+                        resolved_note VARCHAR(500),
+                        created_at {ts_col} DEFAULT CURRENT_TIMESTAMP,
+                        updated_at {ts_col} DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                    if dialect == "sqlite"
+                    else f"""
+                    CREATE TABLE invites (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(50) NOT NULL REFERENCES organizations(org_id),
+                        email VARCHAR(255) NOT NULL,
+                        role VARCHAR(50) NOT NULL,
+                        status VARCHAR(50) NOT NULL,
+                        invite_token VARCHAR(64) NOT NULL UNIQUE,
+                        invited_by_user_id INTEGER REFERENCES users(id),
+                        expires_at {ts_col} NOT NULL,
+                        resolved_at {ts_col},
+                        resolved_note VARCHAR(500),
+                        created_at {ts_col} DEFAULT CURRENT_TIMESTAMP,
+                        updated_at {ts_col} DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            logger.info("Created invites table")
+
+        # organization_tokens + organizations.created_by_user_id (SmartOps PATs)
+        inspector = inspect(engine)
+        org_tables = set(inspector.get_table_names())
+        if "organizations" in org_tables:
+            org_cols = {c["name"] for c in inspector.get_columns("organizations")}
+            if "created_by_user_id" not in org_cols:
+                conn.execute(text("ALTER TABLE organizations ADD COLUMN created_by_user_id INTEGER"))
+                logger.info("Added organizations.created_by_user_id")
+
+        if "organization_tokens" not in org_tables:
+            if dialect == "sqlite":
+                conn.execute(
+                    text(
+                        f"""
+                        CREATE TABLE organization_tokens (
+                            token_id VARCHAR(64) PRIMARY KEY,
+                            organization_id VARCHAR(64) NOT NULL,
+                            token_prefix VARCHAR(32) NOT NULL,
+                            token_hash VARCHAR(128) NOT NULL UNIQUE,
+                            name VARCHAR(255),
+                            scopes TEXT,
+                            status VARCHAR(50) NOT NULL,
+                            expires_at {ts},
+                            created_by_user_id INTEGER,
+                            created_at {ts} DEFAULT CURRENT_TIMESTAMP,
+                            last_used_at {ts},
+                            revoked_at {ts}
+                        )
+                        """
+                    )
+                )
+            else:
+                conn.execute(
+                    text(
+                        f"""
+                        CREATE TABLE organization_tokens (
+                            token_id VARCHAR(64) PRIMARY KEY,
+                            organization_id VARCHAR(64) NOT NULL REFERENCES organizations(org_id),
+                            token_prefix VARCHAR(32) NOT NULL,
+                            token_hash VARCHAR(128) NOT NULL UNIQUE,
+                            name VARCHAR(255),
+                            scopes TEXT,
+                            status VARCHAR(50) NOT NULL,
+                            expires_at {ts},
+                            created_by_user_id INTEGER REFERENCES users(id),
+                            created_at {ts} DEFAULT CURRENT_TIMESTAMP,
+                            last_used_at {ts},
+                            revoked_at {ts}
+                        )
+                        """
+                    )
+                )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_organization_tokens_organization_id "
+                    "ON organization_tokens (organization_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_organization_tokens_token_hash "
+                    "ON organization_tokens (token_hash)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_organization_tokens_status "
+                    "ON organization_tokens (status)"
+                )
+            )
+            logger.info("Created organization_tokens table")
+
+
+def _ensure_rbac_schema() -> None:
+    """Add RBAC / session columns when create_all cannot ALTER existing tables."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    dialect = engine.dialect.name
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME"
+    bool_true = "BOOLEAN DEFAULT 1" if dialect == "sqlite" else "BOOLEAN DEFAULT true"
+
+    with engine.begin() as conn:
+        if "organizations" in tables:
+            cols = {c["name"] for c in inspector.get_columns("organizations")}
+            org_adds = {
+                "owner_user_id": "INTEGER",
+                "is_active": bool_true,
+                "suspended_at": ts,
+                "suspended_by_user_id": "INTEGER",
+                "client_name": "VARCHAR(255)",
+            }
+            for name, ddl in org_adds.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE organizations ADD COLUMN {name} {ddl}"))
+                    logger.info("Added organizations.%s", name)
+
+        if "users" in tables:
+            cols = {c["name"] for c in inspector.get_columns("users")}
+            user_adds = {
+                "email_verified_at": ts,
+                "failed_login_attempts": "INTEGER DEFAULT 0",
+                "locked_until": ts,
+            }
+            for name, ddl in user_adds.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {ddl}"))
+                    logger.info("Added users.%s", name)
+
+        if "invites" in tables:
+            cols = {c["name"] for c in inspector.get_columns("invites")}
+            if "role_id" not in cols:
+                conn.execute(text("ALTER TABLE invites ADD COLUMN role_id VARCHAR(64)"))
+                logger.info("Added invites.role_id")
+
+        leftover = set(inspect(engine).get_table_names())
+        for extra in ("sectors", "manager_assignments"):
+            if extra in leftover:
+                conn.execute(text(f"DROP TABLE IF EXISTS {extra}"))
+                logger.info("Dropped unused table %s", extra)
+

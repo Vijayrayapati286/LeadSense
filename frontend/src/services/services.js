@@ -3,7 +3,10 @@ import api from './api';
 async function downloadViaMeta(metaEndpoint, fallbackFilename) {
   const meta = await api.get(metaEndpoint, { timeout: 120_000 }).then((r) => r.data);
   const filename = meta.filename || fallbackFilename;
-  if (meta.file_id && String(meta.download_url || '').includes('/api/files/')) {
+  // Prefer authenticated API proxy. Direct fetch of S3 presigned URLs fails in the
+  // browser when the bucket has no CORS Allow-Origin for this app origin (status 200,
+  // body blocked → "Failed to fetch").
+  if (meta.file_id) {
     const { data: blob } = await api.get(`/files/${meta.file_id}/content`, {
       responseType: 'blob',
       timeout: 120_000,
@@ -27,13 +30,59 @@ export const authService = {
   logout: () => api.post('/auth/logout'),
 };
 
+export const notificationService = {
+  list: () => api.get('/notifications'),
+  markRead: (id) => api.post(`/notifications/${id}/read`),
+  markAllRead: () => api.post('/notifications/read-all'),
+};
+
 export const dashboardService = {
   getStats: (params) => api.get('/dashboard/stats', { params }),
+  getAdminStats: () => api.get('/dashboard/admin'),
   exportReport: (params) => api.get('/dashboard/export-report', { params, responseType: 'blob' }),
 };
 
 export const userService = {
   getAll: () => api.get('/users'),
+  create: (data) => api.post('/users', data),
+  update: (id, data) => api.put(`/users/${id}`, data),
+  updateStatus: (id, status) => api.patch(`/users/${id}/status`, { status }),
+  resetPassword: (id, password) => api.post(`/users/${id}/reset-password`, { password }),
+  remove: (id) => api.delete(`/users/${id}`),
+};
+
+export const inviteService = {
+  list: (params) => api.get('/invites', { params }),
+  create: (data) => api.post('/invites', data),
+  cancel: (id) => api.post(`/invites/${id}/cancel`),
+  accept: (id, data) => api.post(`/invites/${id}/accept`, data),
+  resend: (id) => api.post(`/invites/${id}/resend`),
+  remove: (id) => api.delete(`/invites/${id}`),
+};
+
+export const onboardService = {
+  previewVerify: (token) => api.get(`/onboard/verify/${encodeURIComponent(token)}`),
+  completeVerify: (token, data) => api.post(`/onboard/verify/${encodeURIComponent(token)}`, data),
+  previewInvite: (token) => api.get(`/onboard/invite/${encodeURIComponent(token)}`),
+  completeInvite: (token, data) => api.post(`/onboard/invite/${encodeURIComponent(token)}`, data),
+};
+
+export const rbacService = {
+  listRoles: () => api.get('/rbac/roles'),
+  listPermissions: () => api.get('/rbac/permissions'),
+  listAssignments: () => api.get('/rbac/assignments'),
+  assignRole: (data) => api.post('/rbac/assignments', data),
+  removeAssignment: (id) => api.delete(`/rbac/assignments/${id}`),
+};
+
+export const organizationService = {
+  list: () => api.get('/organizations'),
+  getMe: () => api.get('/organizations/me'),
+  getById: (orgId) => api.get(`/organizations/${orgId}`),
+  create: (data) => api.post('/organizations', data),
+  listTokens: (orgId) => api.get(`/organizations/${orgId}/tokens`),
+  createToken: (orgId, data) => api.post(`/organizations/${orgId}/tokens`, data),
+  revokeToken: (orgId, tokenId) => api.post(`/organizations/${orgId}/tokens/${tokenId}/revoke`),
 };
 
 export const campaignService = {
@@ -51,6 +100,21 @@ export const campaignService = {
   getListMembers: (id, groupId) => api.get(`/campaign/${id}/lists/${groupId}/recipients`),
   retagList: (id, groupId, templateId) => api.put(`/campaign/${id}/lists/${groupId}/template`, { template_id: templateId }),
   scheduleList: (id, groupId, scheduledAt) => api.post(`/campaign/${id}/lists/${groupId}/schedule`, { scheduled_at: scheduledAt }),
+  getRecipients: (id) => api.get(`/campaign/${id}/recipients`),
+  getRecipientStats: (id) => api.get(`/campaign/${id}/recipients/stats`),
+  markReplied: (id, recipientIds) => api.post(`/campaign/${id}/recipients/mark-replied`, { recipient_ids: recipientIds }),
+  unmarkReplied: (id, recipientIds) => api.post(`/campaign/${id}/recipients/unmark-replied`, { recipient_ids: recipientIds }),
+  undoMarkReplied: (id, items) => api.post(`/campaign/${id}/recipients/undo-mark-replied`, { items }),
+  scheduleFollowUp: (id, data) => api.post(`/campaign/${id}/recipients/schedule-followup`, data),
+  cancelFollowUp: (id, data) => api.post(`/campaign/${id}/recipients/cancel-followup`, data),
+  searchForUpdate: (q = '') => api.get('/campaigns/for-update', { params: { q } }),
+  listEmailsForUpdate: (q = '') => api.get('/campaigns/update-emails', { params: { q } }),
+  markEmailReplied: (email, campaignIds = null) =>
+    api.post('/campaigns/update-emails/mark-replied', {
+      email,
+      campaign_ids: campaignIds,
+    }),
+  recordManualActivity: (data) => api.post('/campaigns/manual-activity', data),
 };
 
 export const sequenceService = {
@@ -129,6 +193,7 @@ export const customFieldService = {
 export const appSettingsService = {
   get: () => api.get('/settings/app'),
   update: (data) => api.put('/settings/app', data),
+  credits: () => api.get('/settings/credits'),
 };
 
 export const mailerService = {
@@ -151,8 +216,12 @@ export const linkedinProfileService = {
   },
   getBulkJob: (jobId) => api.get(`/linkedin/bulk-jobs/${jobId}`).then((r) => r.data),
   downloadBulkJob: (jobId) => downloadViaMeta(`/linkedin/bulk-jobs/${jobId}/download`, `bulk_${jobId}.xlsx`),
+  addBulkJobToIcp: (jobId) =>
+    api.post(`/linkedin/bulk-jobs/${jobId}/add-to-icp`, null, { timeout: 120_000 }).then((r) => r.data),
   listBulkJobs: (params = {}) =>
     api.get('/linkedin/bulk-jobs', { params }).then((r) => r.data),
+  listRecentDownloads: (params = {}) =>
+    api.get('/linkedin/recent-downloads', { params }).then((r) => r.data),
   listBulkJobItems: (jobId, params = {}) =>
     api.get(`/linkedin/bulk-jobs/${jobId}/items`, { params }).then((r) => r.data),
   getBulkConflicts: (jobId, params = {}) =>

@@ -39,13 +39,137 @@ COMPANY_SIZE_ALIASES = {
     "companysize",
     "company_size",
     "employees",
+    "employeecount",
+    "employee_count",
     "headcount",
     "size",
     "revenue_range",
+    "revenuerange",
 }
 WEBSITE_ALIASES = {"website", "companywebsite", "company_website", "companyurl", "web"}
 TAGS_ALIASES = {"tags", "tag", "labels"}
-EMAIL_ALIASES = {"email", "emailaddress", "email_address", "workemail", "work_email", "contactemail", "contact_email", "e_mail"}
+EMAIL_ALIASES = {
+    "email",
+    "emailaddress",
+    "email_address",
+    "workemail",
+    "work_email",
+    "contactemail",
+    "contact_email",
+    "e_mail",
+}
+FIRST_NAME_ALIASES = {"firstname", "first", "givenname"}
+LAST_NAME_ALIASES = {"lastname", "last", "surname", "familyname"}
+DEPARTMENT_ALIASES = {"department", "dept", "division"}
+PHONE_ALIASES = {"phone", "phoneno", "phonenumber", "mobile", "cellphone", "tel"}
+CITY_ALIASES = {"city"}
+STATE_ALIASES = {"state", "province", "contactstate"}
+COUNTRY_ALIASES = {"country", "contactcountry"}
+COUNTRY_CODE_ALIASES = {"countrycode", "countryiso", "iso"}
+COMPANY_LINKEDIN_ALIASES = {
+    "companylinkedin",
+    "companylinkedinurl",
+    "accountlinkedin",
+    "accountlinkedinurl",
+}
+COMPANY_CITY_ALIASES = {"companycity", "accountcity"}
+COMPANY_LOCATION_ALIASES = {
+    "companylocation",
+    "companyaddress",
+    "accountlocation",
+    "address",
+}
+ANNUAL_REVENUE_ALIASES = {"annualrevenue", "revenue", "companyrevenue"}
+COMPANY_SUMMARY_ALIASES = {"companysummary", "accountsummary", "companyabout"}
+CONTACT_SUMMARY_ALIASES = {"contactsummary", "summary", "bio"}
+
+COUNTRY_CODES = {
+    "united states": "US",
+    "united states of america": "US",
+    "usa": "US",
+    "us": "US",
+    "united kingdom": "GB",
+    "uk": "GB",
+    "england": "GB",
+    "india": "IN",
+    "canada": "CA",
+    "australia": "AU",
+    "germany": "DE",
+    "france": "FR",
+    "singapore": "SG",
+    "united arab emirates": "AE",
+    "uae": "AE",
+    "netherlands": "NL",
+    "ireland": "IE",
+}
+
+EXPORT_MAPPING_FIELDS = (
+    "department",
+    "phone",
+    "city",
+    "state",
+    "country",
+    "country_code",
+    "contact_state",
+    "contact_country",
+    "company_linkedin_url",
+    "company_location",
+    "company_city",
+    "annual_revenue",
+    "company_summary",
+    "account_linkedin_url",
+    "account_city",
+    "account_summary",
+)
+
+
+def resolve_org_id(
+    db: Session,
+    *,
+    user_id: int | None = None,
+    org_id: str | None = None,
+) -> str | None:
+    """Prefer explicit org_id; otherwise load the user's tenant."""
+    if org_id:
+        return str(org_id).strip() or None
+    if user_id is None:
+        return None
+    from app.models import User
+
+    row = db.query(User.org_id).filter(User.id == user_id).first()
+    if not row:
+        return None
+    value = row[0]
+    return str(value).strip() if value else None
+
+
+def _apply_tenant_scope(query, *, org_id: str | None, user_id: int | None):
+    """Scope ICP queries to the tenant when known; otherwise fall back to user."""
+    if org_id:
+        return query.filter(IcpRecordRow.org_id == org_id)
+    if user_id is not None:
+        return query.filter(IcpRecordRow.user_id == user_id)
+    return query
+
+
+def _apply_tenant_scope_with_legacy(
+    query, *, org_id: str | None, user_id: int | None
+):
+    """Org scope plus legacy rows (org_id NULL) owned by the same user."""
+    if org_id and user_id is not None:
+        return query.filter(
+            or_(
+                IcpRecordRow.org_id == org_id,
+                and_(IcpRecordRow.org_id.is_(None), IcpRecordRow.user_id == user_id),
+            )
+        )
+    return _apply_tenant_scope(query, org_id=org_id, user_id=user_id)
+
+
+def _org_member_user_ids(db: Session, org_id: str) -> list[int]:
+    from app.models import User
+
+    return [r[0] for r in db.query(User.id).filter(User.org_id == org_id).all()]
 
 
 def _pick_from_row(source: dict[str, Any] | None, aliases: set[str]) -> str | None:
@@ -66,6 +190,149 @@ def _clean(value: Any) -> str | None:
     if not text or text.lower() in {"none", "nan", "null", "n/a", "-"}:
         return None
     return text
+
+
+def _split_name(full_name: str | None) -> tuple[str | None, str | None]:
+    parts = [p for p in str(full_name or "").strip().split() if p]
+    if not parts:
+        return None, None
+    if len(parts) == 1:
+        return parts[0], None
+    return parts[0], " ".join(parts[1:])
+
+
+def _parse_location(location: str | None) -> dict[str, str | None]:
+    parts = [p.strip() for p in str(location or "").split(",") if p and p.strip()]
+    if not parts:
+        return {"city": None, "state": None, "country": None, "country_code": None}
+    if len(parts) == 1:
+        only = parts[0]
+        code = COUNTRY_CODES.get(only.lower())
+        if code:
+            return {"city": None, "state": None, "country": only, "country_code": code}
+        return {"city": only, "state": None, "country": None, "country_code": None}
+    if len(parts) == 2:
+        country = parts[1]
+        return {
+            "city": parts[0],
+            "state": None,
+            "country": country,
+            "country_code": COUNTRY_CODES.get(country.lower()),
+        }
+    country = parts[-1]
+    state = parts[-2]
+    city = ", ".join(parts[:-2])
+    return {
+        "city": city,
+        "state": state,
+        "country": country,
+        "country_code": COUNTRY_CODES.get(country.lower()),
+    }
+
+
+def _compose_name(first_name: str | None, last_name: str | None, fallback: str | None = None) -> str | None:
+    joined = " ".join(p for p in (_clean(first_name), _clean(last_name)) if p)
+    return joined or _clean(fallback)
+
+
+def _enrich_export_mapping_fields(
+    payload: dict[str, Any],
+    source_row: dict[str, Any] | None = None,
+    *,
+    bulk_item: BulkJobItemRow | None = None,
+) -> dict[str, Any]:
+    """Fill CRM export columns from sheet / LinkedIn payload without inventing values."""
+    source_row = source_row if isinstance(source_row, dict) else {}
+    originals = original_fields(source_row) if source_row else {}
+
+    # Sheet may send First/Last without a full name — compose name only (not stored separately).
+    sheet_first = _prefer(
+        payload.get("first_name"),
+        _pick_from_row(source_row, FIRST_NAME_ALIASES),
+    )
+    sheet_last = _prefer(
+        payload.get("last_name"),
+        _pick_from_row(source_row, LAST_NAME_ALIASES),
+    )
+    name = _prefer(payload.get("name"), _compose_name(sheet_first, sheet_last))
+
+    city = _prefer(payload.get("city"), _pick_from_row(source_row, CITY_ALIASES))
+    state = _prefer(payload.get("state"), _pick_from_row(source_row, STATE_ALIASES))
+    country = _prefer(payload.get("country"), _pick_from_row(source_row, COUNTRY_ALIASES))
+    country_code = _prefer(
+        payload.get("country_code"),
+        _pick_from_row(source_row, COUNTRY_CODE_ALIASES),
+    )
+
+    location = _prefer(payload.get("location"))
+    parsed = _parse_location(location)
+    city = city or parsed["city"]
+    state = state or parsed["state"]
+    country = country or parsed["country"]
+    country_code = country_code or parsed["country_code"]
+    if country and not country_code:
+        country_code = COUNTRY_CODES.get(country.lower())
+
+    # If sheet had city/state/country but no composed location, rebuild it.
+    if not location and any((city, state, country)):
+        location = ", ".join(p for p in (city, state, country) if p)
+
+    about = _prefer(payload.get("about"), _pick_from_row(source_row, CONTACT_SUMMARY_ALIASES))
+    department = _prefer(payload.get("department"), _pick_from_row(source_row, DEPARTMENT_ALIASES))
+    phone = _prefer(payload.get("phone"), _pick_from_row(source_row, PHONE_ALIASES))
+
+    company_location = _prefer(
+        payload.get("company_location"),
+        getattr(bulk_item, "resolved_company_location", None) if bulk_item else None,
+        originals.get("company_location"),
+        _pick_from_row(source_row, COMPANY_LOCATION_ALIASES),
+    )
+    company_city = _prefer(
+        payload.get("company_city"),
+        _pick_from_row(source_row, COMPANY_CITY_ALIASES),
+        _parse_location(company_location)["city"],
+        company_location,
+    )
+    company_linkedin_url = _prefer(
+        payload.get("company_linkedin_url"),
+        _pick_from_row(source_row, COMPANY_LINKEDIN_ALIASES),
+    )
+    annual_revenue = _prefer(
+        payload.get("annual_revenue"),
+        _pick_from_row(source_row, ANNUAL_REVENUE_ALIASES),
+    )
+    company_summary = _prefer(
+        payload.get("company_summary"),
+        _pick_from_row(source_row, COMPANY_SUMMARY_ALIASES),
+    )
+
+    payload.update(
+        {
+            "name": name,
+            "department": department,
+            "phone": phone,
+            "about": about,
+            "location": location,
+            "city": city,
+            "state": state,
+            "country": country,
+            "country_code": country_code,
+            "contact_state": state,
+            "contact_country": country,
+            "company_location": company_location,
+            "company_city": company_city,
+            "company_linkedin_url": company_linkedin_url,
+            "annual_revenue": annual_revenue,
+            "company_summary": company_summary,
+            "account_city": company_city,
+            "account_linkedin_url": company_linkedin_url,
+            "account_summary": company_summary,
+        }
+    )
+    # Do not persist transient sheet-only keys.
+    payload.pop("first_name", None)
+    payload.pop("last_name", None)
+    return payload
 
 
 def _normalize_linkedin(url: str | None) -> str | None:
@@ -159,9 +426,7 @@ def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] |
         tags = [t.strip() for t in tags_raw.replace(";", ",").split(",") if t.strip()]
 
     now = datetime.now(timezone.utc)
-    icp_status = resolve_icp_status(name=name)
-    complete = icp_status != ICP_STATUS_INCOMPLETE
-    return {
+    payload = {
         "name": name,
         "email": email,
         "company_name": company,
@@ -172,16 +437,21 @@ def build_sheet_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any] |
         "company_size": _clean(company_size),
         "location": location,
         "company_website": _clean(company_website),
-        "icp_status": icp_status,
         "icp_score": None,
         "tags": tags,
-        "verification_status": VERIFY_VERIFIED if complete else VERIFY_NOT_VERIFIED,
-        "verified_at": now if complete else None,
         "source": SOURCE_LINKEDIN_BULK,
         "source_record_id": item.id,
         "source_job_id": item.job_id,
-        "dedupe_key": _dedupe_key(name, company),
     }
+    payload = _enrich_export_mapping_fields(payload, source_row, bulk_item=item)
+    name = payload.get("name")
+    icp_status = resolve_icp_status(name=name)
+    complete = icp_status != ICP_STATUS_INCOMPLETE
+    payload["icp_status"] = icp_status
+    payload["verification_status"] = VERIFY_VERIFIED if complete else VERIFY_NOT_VERIFIED
+    payload["verified_at"] = now if complete else None
+    payload["dedupe_key"] = _dedupe_key(name, company)
+    return payload
 
 
 def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
@@ -227,7 +497,7 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
         # Extracted name is enough for a usable contact; keep bulk verify state separate.
         verified_at = None
 
-    return {
+    payload = {
         "name": name,
         "email": _clean(email),
         "company_name": company,
@@ -247,8 +517,10 @@ def build_payload_from_bulk_item(item: BulkJobItemRow) -> dict[str, Any]:
         "source": SOURCE_LINKEDIN_BULK,
         "source_record_id": item.id,
         "source_job_id": item.job_id,
-        "dedupe_key": _dedupe_key(name, company),
     }
+    payload = _enrich_export_mapping_fields(payload, source_row, bulk_item=item)
+    payload["dedupe_key"] = _dedupe_key(payload.get("name"), company)
+    return payload
 
 
 def item_eligible_for_icp(item: BulkJobItemRow) -> bool:
@@ -274,11 +546,13 @@ def _find_existing(
     linkedin_url: str | None,
     dedupe_key: str | None,
     source_record_id: int | None = None,
+    org_id: str | None = None,
 ) -> IcpRecordRow | None:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+
     if linkedin_url:
         q = db.query(IcpRecordRow).filter(IcpRecordRow.linkedin_url == linkedin_url)
-        if user_id is not None:
-            q = q.filter(IcpRecordRow.user_id == user_id)
+        q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
         found = q.first()
         if found:
             return found
@@ -288,8 +562,7 @@ def _find_existing(
             IcpRecordRow.source_record_id == source_record_id,
             IcpRecordRow.source == SOURCE_LINKEDIN_BULK,
         )
-        if user_id is not None:
-            q = q.filter(IcpRecordRow.user_id == user_id)
+        q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
         found = q.first()
         if found:
             return found
@@ -299,8 +572,7 @@ def _find_existing(
             IcpRecordRow.dedupe_key == dedupe_key,
             or_(IcpRecordRow.linkedin_url.is_(None), IcpRecordRow.linkedin_url == ""),
         )
-        if user_id is not None:
-            q = q.filter(IcpRecordRow.user_id == user_id)
+        q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
         return q.first()
 
     return None
@@ -331,15 +603,18 @@ def upsert_icp_sheet_fields_from_bulk_item(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    org_id: str | None = None,
 ) -> IcpRecordRow | None:
     """Upsert sheet-sourced fields (email, name, company, etc.) without waiting for LinkedIn extraction."""
     payload = build_sheet_payload_from_bulk_item(item)
     if not payload:
         return None
 
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     existing = _find_existing(
         db,
         user_id=user_id,
+        org_id=org_id,
         linkedin_url=payload.get("linkedin_url"),
         dedupe_key=payload.get("dedupe_key"),
         source_record_id=item.id,
@@ -350,19 +625,24 @@ def upsert_icp_sheet_fields_from_bulk_item(
         payload.pop("source_record_id", None)
         _apply_payload(existing, payload, create=False)
         existing.user_id = user_id if user_id is not None else existing.user_id
+        if org_id and not existing.org_id:
+            existing.org_id = org_id
         db.flush()
         logger.info("ICP sheet fields updated id=%s from bulk item=%s", existing.id, item.id)
         return existing
 
-    row = IcpRecordRow(user_id=user_id, **payload)
+    row = IcpRecordRow(user_id=user_id, org_id=org_id, **payload)
     db.add(row)
     db.flush()
     logger.info("ICP created from sheet id=%s bulk item=%s", row.id, item.id)
     return row
 
 
-def sync_sheet_fields_for_job(db: Session, job_id: str, *, user_id: int | None) -> int:
+def sync_sheet_fields_for_job(
+    db: Session, job_id: str, *, user_id: int | None, org_id: str | None = None
+) -> int:
     """Persist spreadsheet fields (especially email) for every row in a bulk upload job."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     items = (
         db.query(BulkJobItemRow)
         .filter(
@@ -373,7 +653,7 @@ def sync_sheet_fields_for_job(db: Session, job_id: str, *, user_id: int | None) 
     )
     synced = 0
     for item in items:
-        if upsert_icp_sheet_fields_from_bulk_item(db, item, user_id=user_id):
+        if upsert_icp_sheet_fields_from_bulk_item(db, item, user_id=user_id, org_id=org_id):
             synced += 1
     return synced
 
@@ -383,6 +663,7 @@ def upsert_icp_from_bulk_item(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     fill_empty_only: bool = False,
     require_verified: bool = True,
 ) -> IcpRecordRow:
@@ -406,9 +687,11 @@ def upsert_icp_from_bulk_item(
     if not has_contact_identity(name=payload.get("name")):
         raise ValueError(f"Item {item.id} has no contact name — skipping hollow ICP create")
 
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     existing = _find_existing(
         db,
         user_id=user_id,
+        org_id=org_id,
         linkedin_url=payload.get("linkedin_url"),
         dedupe_key=payload.get("dedupe_key"),
         source_record_id=item.id,
@@ -420,6 +703,8 @@ def upsert_icp_from_bulk_item(
         else:
             _apply_payload(existing, payload, create=False)
         existing.user_id = user_id if user_id is not None else existing.user_id
+        if org_id and not existing.org_id:
+            existing.org_id = org_id
         db.flush()
         logger.info(
             "ICP updated id=%s from bulk item=%s fill_empty_only=%s",
@@ -429,7 +714,7 @@ def upsert_icp_from_bulk_item(
         )
         return existing
 
-    row = IcpRecordRow(user_id=user_id, **payload)
+    row = IcpRecordRow(user_id=user_id, org_id=org_id, **payload)
     db.add(row)
     db.flush()
     logger.info("ICP created id=%s from bulk item=%s", row.id, item.id)
@@ -441,12 +726,13 @@ def sync_icp_if_eligible(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    org_id: str | None = None,
 ) -> IcpRecordRow | None:
     """Upsert when verified/resolved; return None when not eligible."""
     if not item_eligible_for_icp(item):
         return None
     try:
-        return upsert_icp_from_bulk_item(db, item, user_id=user_id)
+        return upsert_icp_from_bulk_item(db, item, user_id=user_id, org_id=org_id)
     except ValueError as exc:
         if "no contact name" in str(exc).lower():
             logger.info("ICP sync skipped item_id=%s: %s", item.id, exc)
@@ -459,6 +745,7 @@ def sync_icp_after_extraction(
     item: BulkJobItemRow,
     *,
     user_id: int | None,
+    org_id: str | None = None,
 ) -> IcpRecordRow | None:
     """Push extracted LinkedIn fields into Contacts after a successful extraction.
 
@@ -477,6 +764,7 @@ def sync_icp_after_extraction(
             db,
             item,
             user_id=user_id,
+            org_id=org_id,
             fill_empty_only=fill_empty_only,
             require_verified=False,
         )
@@ -492,17 +780,34 @@ def serialize_icp(row: IcpRecordRow) -> dict[str, Any]:
     return {
         "id": row.id,
         "user_id": row.user_id,
+        "org_id": getattr(row, "org_id", None),
         "name": row.name,
         "email": row.email,
         "company_name": row.company_name,
         "designation": row.designation,
+        "department": getattr(row, "department", None),
         "about": row.about,
         "linkedin_url": row.linkedin_url,
+        "phone": getattr(row, "phone", None),
         "image": getattr(row, "image", None),
         "industry": row.industry,
         "company_size": row.company_size,
         "location": row.location,
+        "city": getattr(row, "city", None),
+        "state": getattr(row, "state", None),
+        "country": getattr(row, "country", None),
+        "country_code": getattr(row, "country_code", None),
+        "contact_state": getattr(row, "contact_state", None),
+        "contact_country": getattr(row, "contact_country", None),
         "company_website": row.company_website,
+        "company_linkedin_url": getattr(row, "company_linkedin_url", None),
+        "company_location": getattr(row, "company_location", None),
+        "company_city": getattr(row, "company_city", None),
+        "annual_revenue": getattr(row, "annual_revenue", None),
+        "company_summary": getattr(row, "company_summary", None),
+        "account_linkedin_url": getattr(row, "account_linkedin_url", None),
+        "account_city": getattr(row, "account_city", None),
+        "account_summary": getattr(row, "account_summary", None),
         "icp_status": status,
         "icp_score": row.icp_score,
         "tags": row.tags or [],
@@ -528,30 +833,119 @@ def _has_name_filter():
     return and_(IcpRecordRow.name.isnot(None), IcpRecordRow.name != "")
 
 
-def purge_empty_icp_records(db: Session, *, user_id: int | None) -> int:
+def purge_empty_icp_records(
+    db: Session, *, user_id: int | None, org_id: str | None = None
+) -> int:
     """Delete ICP contacts that have no person name (hollow upload shells)."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = db.query(IcpRecordRow).filter(_missing_name_filter())
-    if user_id is not None:
-        q = q.filter(IcpRecordRow.user_id == user_id)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
     rows = q.all()
     deleted = len(rows)
     for row in rows:
         db.delete(row)
     if deleted:
         db.flush()
-        logger.info("Purged %s empty ICP contact(s) user_id=%s", deleted, user_id)
+        logger.info(
+            "Purged %s empty ICP contact(s) org_id=%s user_id=%s",
+            deleted,
+            org_id,
+            user_id,
+        )
     return deleted
+
+
+def backfill_icp_export_mapping_fields(
+    db: Session,
+    *,
+    user_id: int | None = None,
+    org_id: str | None = None,
+    limit: int | None = None,
+) -> int:
+    """Fill null CRM export columns from name/location and linked bulk source rows."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+    q = db.query(IcpRecordRow)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
+    q = q.order_by(IcpRecordRow.id.asc())
+    if limit is not None:
+        q = q.limit(max(int(limit), 1))
+
+    updated = 0
+    bulk_cache: dict[int, BulkJobItemRow | None] = {}
+    for row in q.all():
+        bulk_item = None
+        source_row = None
+        if row.source_record_id is not None:
+            if row.source_record_id not in bulk_cache:
+                bulk_cache[row.source_record_id] = (
+                    db.query(BulkJobItemRow)
+                    .filter(BulkJobItemRow.id == row.source_record_id)
+                    .first()
+                )
+            bulk_item = bulk_cache[row.source_record_id]
+            if bulk_item and isinstance(bulk_item.source_row_json, dict):
+                source_row = bulk_item.source_row_json
+
+        before = {key: getattr(row, key, None) for key in EXPORT_MAPPING_FIELDS}
+        enriched = _enrich_export_mapping_fields(
+            {
+                "name": row.name,
+                "location": row.location,
+                "city": row.city,
+                "state": row.state,
+                "country": row.country,
+                "country_code": row.country_code,
+                "about": row.about,
+                "department": row.department,
+                "phone": row.phone,
+                "company_location": row.company_location,
+                "company_city": row.company_city,
+                "company_linkedin_url": row.company_linkedin_url,
+                "annual_revenue": row.annual_revenue,
+                "company_summary": row.company_summary,
+            },
+            source_row,
+            bulk_item=bulk_item,
+        )
+
+        changed = False
+        for key in EXPORT_MAPPING_FIELDS:
+            new_val = enriched.get(key)
+            if _is_blank(before.get(key)) and not _is_blank(new_val):
+                setattr(row, key, new_val)
+                changed = True
+        if enriched.get("name") and _is_blank(row.name):
+            row.name = enriched["name"]
+            changed = True
+        if enriched.get("location") and _is_blank(row.location):
+            row.location = enriched["location"]
+            changed = True
+        if changed:
+            row.updated_at = datetime.now(timezone.utc)
+            updated += 1
+
+    if updated:
+        db.flush()
+        logger.info(
+            "ICP export-mapping backfill updated %s row(s) org_id=%s user_id=%s",
+            updated,
+            org_id,
+            user_id,
+        )
+    return updated
 
 
 def backfill_icp_from_extracted_items(
     db: Session,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     limit: int = 500,
 ) -> int:
     """Create/fill Contacts from SUCCESS bulk items that already have LinkedIn extraction data."""
     from app.linkedin.bulk_models import BulkExtractJobRow
 
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = (
         db.query(BulkJobItemRow)
         .join(BulkExtractJobRow, BulkExtractJobRow.id == BulkJobItemRow.job_id)
@@ -563,18 +957,38 @@ def backfill_icp_from_extracted_items(
         )
         .order_by(BulkJobItemRow.id.desc())
     )
-    if user_id is not None:
+    if org_id:
+        member_ids = _org_member_user_ids(db, org_id)
+        if member_ids:
+            q = q.filter(BulkExtractJobRow.user_id.in_(member_ids))
+        elif user_id is not None:
+            q = q.filter(BulkExtractJobRow.user_id == user_id)
+    elif user_id is not None:
         q = q.filter(BulkExtractJobRow.user_id == user_id)
 
     synced = 0
     for item in q.limit(max(int(limit), 1)).all():
         try:
-            if sync_icp_after_extraction(db, item, user_id=user_id):
+            owner_id = user_id
+            try:
+                from app.linkedin.bulk_models import BulkExtractJobRow as _Job
+
+                job_row = db.query(_Job.user_id).filter(_Job.id == item.job_id).first()
+                if job_row and job_row[0] is not None:
+                    owner_id = job_row[0]
+            except Exception:
+                pass
+            if sync_icp_after_extraction(db, item, user_id=owner_id, org_id=org_id):
                 synced += 1
         except Exception:
             logger.exception("ICP backfill failed for bulk item %s", item.id)
     if synced:
-        logger.info("ICP backfill synced %s contact(s) user_id=%s", synced, user_id)
+        logger.info(
+            "ICP backfill synced %s contact(s) org_id=%s user_id=%s",
+            synced,
+            org_id,
+            user_id,
+        )
     return synced
 
 
@@ -582,6 +996,7 @@ def list_icp_records(
     db: Session,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     search: str | None = None,
     industry: str | None = None,
     company: str | None = None,
@@ -600,9 +1015,9 @@ def list_icp_records(
     page: int = 1,
     page_size: int = 25,
 ) -> dict[str, Any]:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     query = db.query(IcpRecordRow)
-    if user_id is not None:
-        query = query.filter(IcpRecordRow.user_id == user_id)
+    query = _apply_tenant_scope(query, org_id=org_id, user_id=user_id)
 
     if require_name:
         query = query.filter(_has_name_filter())
@@ -683,10 +1098,16 @@ def list_icp_records(
     }
 
 
-def get_icp_record(db: Session, record_id: int, *, user_id: int | None) -> IcpRecordRow | None:
+def get_icp_record(
+    db: Session,
+    record_id: int,
+    *,
+    user_id: int | None,
+    org_id: str | None = None,
+) -> IcpRecordRow | None:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = db.query(IcpRecordRow).filter(IcpRecordRow.id == record_id)
-    if user_id is not None:
-        q = q.filter(IcpRecordRow.user_id == user_id)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
     return q.first()
 
 
@@ -695,54 +1116,72 @@ def create_icp_record(
     *,
     user_id: int | None,
     data: dict[str, Any],
+    org_id: str | None = None,
 ) -> IcpRecordRow:
-    name = _clean(data.get("name"))
     company = _clean(data.get("company_name") or data.get("company"))
     linkedin_url = _normalize_linkedin(data.get("linkedin_url"))
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+    payload = _enrich_export_mapping_fields(
+        {
+            "name": _clean(data.get("name")),
+            "email": _clean(data.get("email")),
+            "company_name": company,
+            "designation": _clean(data.get("designation")),
+            "department": _clean(data.get("department")),
+            "about": _clean(data.get("about")),
+            "linkedin_url": linkedin_url,
+            "phone": _clean(data.get("phone")),
+            "image": _clean(data.get("image")),
+            "industry": _clean(data.get("industry")),
+            "company_size": _clean(data.get("company_size")),
+            "location": _clean(data.get("location")),
+            "city": _clean(data.get("city")),
+            "state": _clean(data.get("state")),
+            "country": _clean(data.get("country")),
+            "country_code": _clean(data.get("country_code")),
+            "company_website": _clean(data.get("company_website")),
+            "company_linkedin_url": _clean(data.get("company_linkedin_url")),
+            "company_location": _clean(data.get("company_location")),
+            "company_city": _clean(data.get("company_city")),
+            "annual_revenue": _clean(data.get("annual_revenue")),
+            "company_summary": _clean(data.get("company_summary")),
+            "icp_score": data.get("icp_score"),
+            "tags": data.get("tags") if isinstance(data.get("tags"), list) else None,
+            "source": SOURCE_MANUAL,
+            "source_record_id": None,
+            "source_job_id": None,
+        }
+    )
+    name = payload.get("name")
     icp_status = resolve_icp_status(name=name, preferred=data.get("icp_status"))
-    payload = {
-        "name": name,
-        "email": _clean(data.get("email")),
-        "company_name": company,
-        "designation": _clean(data.get("designation")),
-        "about": _clean(data.get("about")),
-        "linkedin_url": linkedin_url,
-        "image": _clean(data.get("image")),
-        "industry": _clean(data.get("industry")),
-        "company_size": _clean(data.get("company_size")),
-        "location": _clean(data.get("location")),
-        "company_website": _clean(data.get("company_website")),
-        "icp_status": icp_status,
-        "icp_score": data.get("icp_score"),
-        "tags": data.get("tags") if isinstance(data.get("tags"), list) else None,
-        "verification_status": (
-            (_clean(data.get("verification_status")) or VERIFY_VERIFIED).upper()
-            if icp_status != ICP_STATUS_INCOMPLETE
-            else VERIFY_NOT_VERIFIED
-        ),
-        "verified_at": (
-            None
-            if icp_status == ICP_STATUS_INCOMPLETE
-            else (data.get("verified_at") or datetime.now(timezone.utc))
-        ),
-        "source": SOURCE_MANUAL,
-        "source_record_id": None,
-        "source_job_id": None,
-        "dedupe_key": _dedupe_key(name, company),
-    }
+    payload["icp_status"] = icp_status
+    payload["verification_status"] = (
+        (_clean(data.get("verification_status")) or VERIFY_VERIFIED).upper()
+        if icp_status != ICP_STATUS_INCOMPLETE
+        else VERIFY_NOT_VERIFIED
+    )
+    payload["verified_at"] = (
+        None
+        if icp_status == ICP_STATUS_INCOMPLETE
+        else (data.get("verified_at") or datetime.now(timezone.utc))
+    )
+    payload["dedupe_key"] = _dedupe_key(name, company)
 
     existing = _find_existing(
         db,
         user_id=user_id,
+        org_id=org_id,
         linkedin_url=linkedin_url,
         dedupe_key=payload["dedupe_key"],
     )
     if existing:
         _apply_payload(existing, payload, create=False)
+        if org_id and not existing.org_id:
+            existing.org_id = org_id
         db.flush()
         return existing
 
-    row = IcpRecordRow(user_id=user_id, **payload)
+    row = IcpRecordRow(user_id=user_id, org_id=org_id, **payload)
     db.add(row)
     db.flush()
     return row
@@ -758,12 +1197,23 @@ def update_icp_record(
         "email",
         "company_name",
         "designation",
+        "department",
         "about",
+        "phone",
         "image",
         "industry",
         "company_size",
         "location",
+        "city",
+        "state",
+        "country",
+        "country_code",
         "company_website",
+        "company_linkedin_url",
+        "company_location",
+        "company_city",
+        "annual_revenue",
+        "company_summary",
         "icp_status",
         "icp_score",
     )
@@ -776,6 +1226,32 @@ def update_icp_record(
         row.tags = data["tags"]
     if "company" in data and "company_name" not in data:
         row.company_name = _clean(data["company"])
+
+    enriched = _enrich_export_mapping_fields(
+        {
+            "name": row.name,
+            "location": row.location,
+            "city": row.city,
+            "state": row.state,
+            "country": row.country,
+            "country_code": row.country_code,
+            "about": row.about,
+            "department": row.department,
+            "phone": row.phone,
+            "company_location": row.company_location,
+            "company_city": row.company_city,
+            "company_linkedin_url": row.company_linkedin_url,
+            "annual_revenue": row.annual_revenue,
+            "company_summary": row.company_summary,
+        }
+    )
+    for key in EXPORT_MAPPING_FIELDS:
+        setattr(row, key, enriched.get(key))
+    if enriched.get("name"):
+        row.name = enriched["name"]
+    if enriched.get("location"):
+        row.location = enriched["location"]
+
     row.dedupe_key = _dedupe_key(row.name, row.company_name)
     row.icp_status = resolve_icp_status(name=row.name, preferred=row.icp_status)
     if row.icp_status == ICP_STATUS_INCOMPLETE:
@@ -798,12 +1274,13 @@ def count_icp_records(
     db: Session,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     without_company: bool = False,
     require_name: bool = True,
 ) -> int:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     q = db.query(func.count(IcpRecordRow.id))
-    if user_id is not None:
-        q = q.filter(IcpRecordRow.user_id == user_id)
+    q = _apply_tenant_scope(q, org_id=org_id, user_id=user_id)
     if require_name:
         q = q.filter(_has_name_filter())
     if without_company:
@@ -811,12 +1288,15 @@ def count_icp_records(
     return int(q.scalar() or 0)
 
 
-def icp_counts_summary(db: Session, *, user_id: int | None) -> dict[str, int]:
-    purged = purge_empty_icp_records(db, user_id=user_id)
+def icp_counts_summary(
+    db: Session, *, user_id: int | None, org_id: str | None = None
+) -> dict[str, int]:
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+    purged = purge_empty_icp_records(db, user_id=user_id, org_id=org_id)
     return {
-        "total": count_icp_records(db, user_id=user_id, require_name=True),
+        "total": count_icp_records(db, user_id=user_id, org_id=org_id, require_name=True),
         "without_account": count_icp_records(
-            db, user_id=user_id, without_company=True, require_name=True
+            db, user_id=user_id, org_id=org_id, without_company=True, require_name=True
         ),
         "purged_empty": purged,
     }
@@ -827,15 +1307,16 @@ def find_icp_by_linkedin_urls(
     *,
     user_id: int | None,
     urls: list[str],
+    org_id: str | None = None,
 ) -> dict[str, IcpRecordRow]:
     """Batch lookup of ICP records by normalized LinkedIn profile URL."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     normalized = [_normalize_linkedin(u) for u in urls if u]
     normalized = [u for u in normalized if u]
     if not normalized:
         return {}
     q = db.query(IcpRecordRow).filter(IcpRecordRow.linkedin_url.in_(normalized))
-    if user_id is not None:
-        q = q.filter(IcpRecordRow.user_id == user_id)
+    q = _apply_tenant_scope_with_legacy(q, org_id=org_id, user_id=user_id)
     return {row.linkedin_url: row for row in q.all() if row.linkedin_url}
 
 
@@ -857,13 +1338,15 @@ def _apply_icp_record_to_bulk_item(item: BulkJobItemRow, icp: IcpRecordRow, *, n
     item.completed_at = now
 
 
-def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | None) -> int:
+def skip_job_items_already_in_icp(
+    db: Session, job_id: str, *, user_id: int | None, org_id: str | None = None
+) -> int:
     """Skip extraction for canonical URLs already present in the ICP Database."""
     from app.linkedin.bulk_jobs import copy_canonical_results_to_duplicates, get_job_row, refresh_job_counters
     from app.linkedin.bulk_models import CLAIMABLE_ITEM_STATUSES, BulkJobItemRow
 
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     job = get_job_row(db, job_id)
-    job_created_at = getattr(job, "created_at", None) if job else None
 
     items = (
         db.query(BulkJobItemRow)
@@ -878,7 +1361,7 @@ def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | No
         return 0
 
     icp_map = find_icp_by_linkedin_urls(
-        db, user_id=user_id, urls=[item.normalized_url for item in items]
+        db, user_id=user_id, org_id=org_id, urls=[item.normalized_url for item in items]
     )
     if not icp_map:
         return 0
@@ -889,18 +1372,15 @@ def skip_job_items_already_in_icp(db: Session, job_id: str, *, user_id: int | No
         icp = icp_map.get(item.normalized_url)
         if not icp:
             continue
-        upsert_icp_sheet_fields_from_bulk_item(db, item, user_id=user_id)
-        # Only skip LinkedIn extraction when the profile was already in ICP before this upload.
-        if job_created_at and icp.created_at and icp.created_at < job_created_at:
-            _apply_icp_record_to_bulk_item(item, icp, now=now)
-            skipped += 1
-            logger.info(
-                "ICP skip job=%s item=%s url=%s icp_id=%s",
-                job_id,
-                item.id,
-                item.normalized_url,
-                icp.id,
-            )
+        _apply_icp_record_to_bulk_item(item, icp, now=now)
+        skipped += 1
+        logger.info(
+            "SKIP_APIFY reason=ALREADY_IN_ICP job_id=%s item_id=%s profile_url=%s icp_id=%s",
+            job_id,
+            item.id,
+            item.normalized_url,
+            icp.id,
+        )
 
     if skipped:
         copy_canonical_results_to_duplicates(db, job_id)
@@ -914,18 +1394,19 @@ def list_accounts_summary(
     db: Session,
     *,
     user_id: int | None,
+    org_id: str | None = None,
     search: str | None = None,
     industry: str | None = None,
     page: int = 1,
     page_size: int = 25,
 ) -> dict[str, Any]:
     """Group existing ICP contacts by company — no separate accounts table."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
     base = db.query(IcpRecordRow).filter(
         IcpRecordRow.company_name.isnot(None),
         IcpRecordRow.company_name != "",
     )
-    if user_id is not None:
-        base = base.filter(IcpRecordRow.user_id == user_id)
+    base = _apply_tenant_scope(base, org_id=org_id, user_id=user_id)
 
     if search and search.strip():
         like = f"%{search.strip()}%"
@@ -948,6 +1429,9 @@ def list_accounts_summary(
             func.max(IcpRecordRow.company_size).label("company_size"),
             func.max(IcpRecordRow.location).label("location"),
             func.max(IcpRecordRow.company_website).label("company_website"),
+            func.max(IcpRecordRow.company_location).label("company_location"),
+            func.max(IcpRecordRow.company_city).label("company_city"),
+            func.max(IcpRecordRow.account_city).label("account_city"),
         )
         .group_by(IcpRecordRow.company_name)
         .order_by(IcpRecordRow.company_name.asc())
@@ -967,6 +1451,9 @@ def list_accounts_summary(
             "company_size": row.company_size,
             "location": row.location,
             "company_website": row.company_website,
+            "company_location": row.company_location,
+            "company_city": row.company_city or row.account_city,
+            "account_city": row.account_city or row.company_city,
             "contact_count": int(row.contact_count or 0),
             "status": "active",
         }
@@ -978,4 +1465,81 @@ def list_accounts_summary(
         "total": int(total),
         "page": page,
         "page_size": page_size,
+    }
+
+
+def add_job_verified_items_to_icp(
+    db: Session,
+    job_id: str,
+    *,
+    user_id: int | None,
+    org_id: str | None = None,
+) -> dict[str, Any]:
+    """Upsert all VERIFIED / RESOLVED bulk items for a job into the tenant ICP pool."""
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+    items = (
+        db.query(BulkJobItemRow)
+        .filter(
+            BulkJobItemRow.job_id == job_id,
+            BulkJobItemRow.dedupe_of_id.is_(None),
+            BulkJobItemRow.status == ITEM_SUCCESS,
+            func.upper(BulkJobItemRow.verification_status).in_(
+                [VERIFY_VERIFIED, VERIFY_RESOLVED]
+            ),
+        )
+        .order_by(BulkJobItemRow.source_row_number.asc())
+        .all()
+    )
+
+    added = 0
+    updated = 0
+    skipped = 0
+    errors: list[dict[str, Any]] = []
+    record_ids: list[int] = []
+
+    for item in items:
+        try:
+            before = _find_existing(
+                db,
+                user_id=user_id,
+                org_id=org_id,
+                linkedin_url=_normalize_linkedin(
+                    getattr(item, "normalized_url", None) or getattr(item, "profile_url", None)
+                ),
+                dedupe_key=_dedupe_key(getattr(item, "name", None), getattr(item, "company", None)),
+                source_record_id=item.id,
+            )
+            row = upsert_icp_from_bulk_item(
+                db,
+                item,
+                user_id=user_id,
+                org_id=org_id,
+                fill_empty_only=False,
+                require_verified=True,
+            )
+            if row is None:
+                skipped += 1
+                continue
+            record_ids.append(row.id)
+            if before is not None and before.id == row.id:
+                updated += 1
+            else:
+                added += 1
+        except ValueError as exc:
+            skipped += 1
+            errors.append({"item_id": item.id, "error": str(exc)})
+        except Exception as exc:
+            logger.exception("Add-to-ICP failed job=%s item=%s", job_id, item.id)
+            errors.append({"item_id": item.id, "error": str(exc)})
+
+    db.flush()
+    return {
+        "job_id": job_id,
+        "eligible": len(items),
+        "added": added,
+        "updated": updated,
+        "skipped": skipped,
+        "icp_record_ids": record_ids,
+        "errors": errors[:25],
+        "org_id": org_id,
     }

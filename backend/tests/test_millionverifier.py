@@ -138,6 +138,42 @@ def test_api_invalid_result_blocks(monkeypatch):
         db.commit()
         row = db.query(EmailVerification).filter(EmailVerification.email == "bad@example.com").one()
         assert row.result == "invalid"
+        assert row.quality == "bad"
+    finally:
+        db.close()
+
+
+def test_api_risky_stays_risky_and_does_not_send(monkeypatch):
+    monkeypatch.setenv("USE_MOCK_MILLIONVERIFIER", "false")
+    monkeypatch.setenv("MILLIONVERIFIER_API_KEY", "test-key")
+    monkeypatch.setenv("MILLIONVERIFIER_ALLOWED_RESULTS", "ok")
+    get_settings.cache_clear()
+    svc = MillionVerifierService()
+
+    fake = {
+        "email": "risky@example.com",
+        "result": "catch_all",
+        "resultcode": 2,
+        "quality": "Risky",
+        "error": "",
+    }
+    db = SessionLocal()
+    try:
+        with patch.object(svc, "_call_api", return_value=fake):
+            gate = svc.verify_email(db, "risky@example.com")
+        assert gate.allowed is False
+        assert gate.definitive_reject is True
+        assert gate.result == "catch_all"
+        db.commit()
+        row = db.query(EmailVerification).filter(EmailVerification.email == "risky@example.com").one()
+        assert row.quality == "risky"
+        from app.services.millionverifier_service import resolve_verification_status
+
+        assert resolve_verification_status(
+            email=row.email,
+            suppression_reason="email_verification_failed",
+            cache_row=row,
+        ) == ("risky", "catch_all")
     finally:
         db.close()
 
@@ -314,6 +350,8 @@ def test_expired_cache_is_refreshed(monkeypatch):
 
 
 def test_resolve_verification_status_helpers():
+    from types import SimpleNamespace
+
     from app.services.millionverifier_service import resolve_verification_status
 
     assert resolve_verification_status(
@@ -324,7 +362,42 @@ def test_resolve_verification_status_helpers():
         email="a@b.com",
         suppression_reason="email_verification_failed",
         cache_row=None,
-    )[0] == "failed"
+    ) == ("bad", "invalid")
+
+    fresh = utc_now() + timedelta(days=1)
+
+    def row(result, quality):
+        return SimpleNamespace(result=result, quality=quality, expires_at=fresh)
+
+    assert resolve_verification_status(
+        email="good@example.com",
+        suppression_reason=None,
+        cache_row=row("ok", "good"),
+    ) == ("good", "ok")
+
+    assert resolve_verification_status(
+        email="risky@example.com",
+        suppression_reason="email_verification_failed",
+        cache_row=row("catch_all", "risky"),
+    ) == ("risky", "catch_all")
+
+    assert resolve_verification_status(
+        email="bad@example.com",
+        suppression_reason="email_verification_failed",
+        cache_row=row("invalid", "bad"),
+    ) == ("bad", "invalid")
+
+    assert resolve_verification_status(
+        email="legacy@example.com",
+        suppression_reason=None,
+        cache_row=row("catch_all", None),
+    ) == ("risky", "catch_all")
+
+    from app.services.millionverifier_service import rejection_status
+
+    assert rejection_status("risky", "catch_all") == "risky"
+    assert rejection_status("bad", "invalid") == "invalid_email"
+    assert rejection_status(None, "disposable") == "invalid_email"
 
 
 def test_apply_rejection_suppresses_recipient():
@@ -374,5 +447,132 @@ def test_apply_rejection_suppresses_recipient():
         assert recipient.suppression_reason == "email_verification_failed"
         assert cr.status == "invalid_email"
         assert cr.next_send_at is None
+    finally:
+        db.close()
+
+
+def _seed_campaign_with_emails(db, suffix: str):
+    user = User(name="Rep", email=f"rep-risky-{suffix}@example.com")
+    db.add(user)
+    db.flush()
+    campaign = Campaign(
+        campaign_name="Risky choice",
+        campaign_id=f"risky-choice-{suffix}",
+        owner="Rep",
+        user_id=user.id,
+        status="draft",
+    )
+    db.add(campaign)
+    db.flush()
+    good = Recipient(name="Good Lead", email=f"good-{suffix}@example.com", company="Acme")
+    risky = Recipient(name="Risky Lead", email=f"risky-{suffix}@example.com", company="Acme")
+    db.add_all([good, risky])
+    db.flush()
+    now = utc_now()
+    db.add(EmailVerification(
+        email=good.email,
+        result="ok",
+        quality="good",
+        source="millionverifier",
+        verified_at=now,
+        expires_at=now + timedelta(days=30),
+    ))
+    db.add(EmailVerification(
+        email=risky.email,
+        result="catch_all",
+        quality="risky",
+        source="millionverifier",
+        verified_at=now,
+        expires_at=now + timedelta(days=30),
+    ))
+    db.commit()
+    return user, campaign, good, risky
+
+
+def test_send_asks_before_queueing_risky_and_honors_the_choice():
+    from app.routers.email import send_emails
+    from app.schemas.schemas import SendEmailRequest
+
+    db = SessionLocal()
+    try:
+        user, campaign, good, risky = _seed_campaign_with_emails(db, "prompt")
+        payload = dict(
+            campaign_id=campaign.id,
+            subject="Hello",
+            body="Hi",
+            recipient_ids=[good.id, risky.id],
+        )
+
+        preview = send_emails(SendEmailRequest(**payload, preview_risky=True), db, user)
+        assert preview.queued == 0
+        assert preview.requires_risky_confirmation is True
+        assert preview.risky_count == 1
+        assert preview.good_count == 1
+        assert risky.email in preview.risky_emails
+        assert db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign.id).count() == 0
+
+        blocked = send_emails(SendEmailRequest(**payload), db, user)
+        assert blocked.requires_risky_confirmation is True
+        assert blocked.queued == 0
+
+        good_only = send_emails(SendEmailRequest(**payload, risky_choice="send_good_only"), db, user)
+        assert good_only.queued == 1
+        assert good_only.skipped_risky == 1
+        queued_ids = {
+            row.recipient_id
+            for row in db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign.id).all()
+        }
+        assert queued_ids == {good.id}
+
+        included = send_emails(SendEmailRequest(**payload, risky_choice="include_risky"), db, user)
+        assert included.queued == 2
+        assert included.skipped_risky == 0
+        risky_row = (
+            db.query(CampaignRecipient)
+            .filter(CampaignRecipient.campaign_id == campaign.id, CampaignRecipient.recipient_id == risky.id)
+            .one()
+        )
+        good_row = (
+            db.query(CampaignRecipient)
+            .filter(CampaignRecipient.campaign_id == campaign.id, CampaignRecipient.recipient_id == good.id)
+            .one()
+        )
+        assert risky_row.allow_risky_send is True
+        assert risky_row.status == "queued"
+        assert good_row.allow_risky_send is False
+    finally:
+        db.close()
+
+
+def test_gate_sends_risky_only_when_the_sender_confirmed():
+    from app.services.scheduler_service import _gate_before_ses
+
+    db = SessionLocal()
+    try:
+        user, campaign, _good, risky = _seed_campaign_with_emails(db, "gate")
+        blocked = CampaignRecipient(
+            campaign_id=campaign.id,
+            recipient_id=risky.id,
+            status="queued",
+            allow_risky_send=False,
+        )
+        db.add(blocked)
+        db.commit()
+
+        assert _gate_before_ses(db, blocked, risky, user) is False
+        db.refresh(risky)
+        db.refresh(blocked)
+        assert risky.is_suppressed is True
+        assert blocked.status == "risky"
+
+        risky.is_suppressed = False
+        risky.suppression_reason = None
+        blocked.allow_risky_send = True
+        blocked.status = "queued"
+        db.commit()
+
+        assert _gate_before_ses(db, blocked, risky, user) is True
+        db.refresh(risky)
+        assert risky.is_suppressed is False
     finally:
         db.close()

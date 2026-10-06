@@ -1,7 +1,15 @@
 import { useEffect, useId, useRef } from 'react';
 import { FiX } from 'react-icons/fi';
 
-export default function Modal({ isOpen, onClose, title, children, size = 'md' }) {
+export default function Modal({
+  isOpen,
+  onClose,
+  title,
+  children,
+  size = 'md',
+  hideHeader = false,
+  level = 'base',
+}) {
   const titleId = useId();
   const dialogRef = useRef(null);
 
@@ -36,27 +44,32 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+    <div className={`fixed inset-0 ${level === 'top' ? 'z-[80]' : 'z-50'} flex items-center justify-center p-4`}>
+      {/* Backdrop sits under the sidebar (z-60), so only main content looks blurred */}
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-md" onClick={onClose} />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={titleId}
+        aria-labelledby={title ? titleId : undefined}
         tabIndex={-1}
-        className={`relative bg-white rounded-2xl shadow-2xl w-full ${sizes[size]} animate-rise-in max-h-[90vh] overflow-y-auto outline-none`}
+        className={`relative w-full ${sizes[size]} max-h-[90vh] overflow-y-auto rounded-3xl bg-white shadow-2xl outline-none animate-rise-in [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden`}
       >
-        <div className="flex items-center justify-between p-6 border-b border-gray-100">
-          <h2 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
-            aria-label="Close dialog"
-          >
-            <FiX size={20} />
-          </button>
-        </div>
-        <div className="p-6">{children}</div>
+        {!hideHeader && (
+          <div className="flex items-center justify-between border-b border-gray-100 p-6">
+            <h2 id={titleId} className="text-lg font-semibold text-gray-900">
+              {title}
+            </h2>
+            <button
+              onClick={onClose}
+              className="rounded-lg p-1 text-gray-500 transition-colors hover:bg-gray-100"
+              aria-label="Close dialog"
+            >
+              <FiX size={20} />
+            </button>
+          </div>
+        )}
+        <div className={hideHeader ? '' : 'p-6'}>{children}</div>
       </div>
     </div>
   );

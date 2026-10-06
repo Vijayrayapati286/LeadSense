@@ -25,10 +25,12 @@ import {
 } from 'recharts';
 import { campaignService, dashboardService, userService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
+import { hasPermission } from '../utils/permissions';
 import { useToast } from '../hooks/useToast';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import StatusBadge from '../components/ui/StatusBadge';
 import Button from '../components/ui/Button';
+import NotificationBell from '../components/NotificationBell';
 import PageShell from '../components/ui/PageShell';
 import PageHeader from '../components/ui/PageHeader';
 import SurfaceCard from '../components/ui/SurfaceCard';
@@ -36,6 +38,7 @@ import MetricCard from '../components/ui/MetricCard';
 import PanelHeader from '../components/ui/PanelHeader';
 import FilterBar, { FilterField } from '../components/ui/FilterBar';
 import { CHART_COLORS } from '../design-tokens';
+import { useTheme } from '../hooks/useTheme';
 import { formatDate } from '../utils/helpers';
 
 const EMPTY_FILTERS = { userId: '', campaignId: '', dateFrom: '', dateTo: '' };
@@ -57,12 +60,15 @@ export default function DashboardPage() {
   const [campaigns, setCampaigns] = useState([]);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const { user } = useAuth();
+  const { chartAccent } = useTheme();
   const toast = useToast();
 
   useEffect(() => {
-    userService.getAll().then(({ data: result }) => setUsers(result)).catch(() => {});
+    if (hasPermission(user, 'members:read')) {
+      userService.getAll().then(({ data: result }) => setUsers(result)).catch(() => {});
+    }
     campaignService.getAll().then(({ data: result }) => setCampaigns(result)).catch(() => {});
-  }, []);
+  }, [user]);
 
   const buildParams = () => ({
     user_id: filters.userId || undefined,
@@ -144,9 +150,12 @@ export default function DashboardPage() {
         title={<>Welcome back, {firstName}! <span aria-hidden="true">👋</span></>}
         subtitle="Here's what's happening with your campaigns today."
         actions={
-          <Button icon={FiDownload} loading={exporting} onClick={handleExportReport}>
-            Export report
-          </Button>
+          <>
+            <NotificationBell />
+            <Button icon={FiDownload} loading={exporting} onClick={handleExportReport}>
+              Export report
+            </Button>
+          </>
         }
       />
 
@@ -207,15 +216,15 @@ export default function DashboardPage() {
               <AreaChart data={emailsPerDay} margin={{ top: 10, right: 8, left: -24, bottom: 0 }}>
                 <defs>
                   <linearGradient id="emailArea" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#3578f6" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#3578f6" stopOpacity={0.01} />
+                    <stop offset="0%" stopColor={chartAccent} stopOpacity={0.28} />
+                    <stop offset="100%" stopColor={chartAccent} stopOpacity={0.01} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid vertical={false} stroke="#eef2f7" />
                 <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} dy={8} />
                 <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
                 <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', boxShadow: '0 8px 24px rgba(15,23,42,.08)', fontSize: 12 }} />
-                <Area type="monotone" dataKey="count" stroke="#3578f6" strokeWidth={2.5} fill="url(#emailArea)" activeDot={{ r: 5, fill: '#3578f6', stroke: '#fff', strokeWidth: 2 }} />
+                <Area type="monotone" dataKey="count" stroke={chartAccent} strokeWidth={2.5} fill="url(#emailArea)" activeDot={{ r: 5, fill: chartAccent, stroke: '#fff', strokeWidth: 2 }} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -302,7 +311,7 @@ export default function DashboardPage() {
         </SurfaceCard>
       </section>
 
-      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-violet-700 via-indigo-600 to-blue-500 px-6 py-7 text-white shadow-xl shadow-indigo-600/15">
+      <section className="ai-outreach-banner relative overflow-hidden rounded-2xl px-6 py-7 text-white">
         <div className="absolute -right-12 -top-20 h-52 w-52 rounded-full border-[26px] border-white/10" />
         <div className="absolute bottom-3 right-36 h-2 w-2 rotate-45 bg-white/70" />
         <div className="absolute right-20 top-8 h-3 w-3 rotate-45 bg-white/50" />
@@ -311,8 +320,8 @@ export default function DashboardPage() {
             <h2 className="text-lg font-bold">Boost your outreach with AI</h2>
             <FiZap className="text-amber-300" />
           </div>
-          <p className="mt-2 text-xs leading-5 text-indigo-100">Create personalized email campaigns in seconds and reach the right prospects with smarter messaging.</p>
-          <Link to="/campaigns/create" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-bold text-indigo-700 shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl">
+          <p className="ai-outreach-sub mt-2 text-xs leading-5">Create personalized email campaigns in seconds and reach the right prospects with smarter messaging.</p>
+          <Link to="/campaigns/create" className="ai-outreach-cta mt-5 inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-bold shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl">
             Create AI campaign <FiArrowRight size={14} />
           </Link>
         </div>

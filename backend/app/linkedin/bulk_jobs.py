@@ -294,12 +294,7 @@ def create_job_with_items(
                 first_by_url[normalized] = item
 
         refresh_job_counters(db, job)
-        try:
-            from app.icp.service import sync_sheet_fields_for_job
-
-            sync_sheet_fields_for_job(db, job.id, user_id=user_id)
-        except Exception:
-            logger.exception("Sheet field sync failed for job=%s", job.id)
+        # Sheet fields stay on bulk items until the user clicks "Add to ICP".
         db.commit()
         db.refresh(job)
         return job
@@ -406,15 +401,7 @@ def copy_canonical_results_to_duplicates(db: Session, job_id: str) -> int:
             match_threshold=int(getattr(get_settings(), "verify_match_threshold", 100)),
             review_threshold=int(getattr(get_settings(), "verify_review_threshold", 75)),
         )
-        try:
-            from app.icp.service import sync_icp_after_extraction
-
-            job = get_job_row(db, item.job_id) if hasattr(item, "job_id") else None
-            sync_icp_after_extraction(
-                db, item, user_id=getattr(job, "user_id", None) if job else None
-            )
-        except Exception:
-            logger.exception("ICP sync failed for duplicate item %s (extraction kept)", item.id)
+        # ICP is added only via explicit "Add to ICP" after verification.
         copied += 1
     return copied
 
@@ -660,6 +647,45 @@ def list_jobs(
             "page_size": page_size,
             "items": [job_row_to_snapshot(r) for r in rows],
         }
+    finally:
+        db.close()
+
+
+def list_recent_downloads(*, user_id: int | None, limit: int = 30) -> list[dict[str, Any]]:
+    """Jobs with a downloadable Excel — no Apify, stored results only."""
+    db = SessionLocal()
+    try:
+        query = db.query(BulkExtractJobRow).filter(
+            BulkExtractJobRow.excel_finalized.is_(True),
+            BulkExtractJobRow.success_count > 0,
+        )
+        if user_id is not None:
+            query = query.filter(BulkExtractJobRow.user_id == user_id)
+        rows = (
+            query.order_by(
+                BulkExtractJobRow.completed_at.desc(),
+                BulkExtractJobRow.created_at.desc(),
+            )
+            .limit(min(max(int(limit), 1), 100))
+            .all()
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            completed = row.completed_at or row.updated_at or row.created_at
+            name = row.original_file_name or f"LinkedIn_{row.id[:8]}.xlsx"
+            if not str(name).lower().endswith((".xlsx", ".xls", ".csv")):
+                name = f"{name}.xlsx"
+            out.append(
+                {
+                    "job_id": row.id,
+                    "filename": name,
+                    "record_count": int(row.success_count or 0),
+                    "total_urls": int(row.total_urls or 0),
+                    "completed_at": completed.isoformat() if completed else None,
+                    "download_ready": bool(row.excel_finalized),
+                }
+            )
+        return out
     finally:
         db.close()
 
