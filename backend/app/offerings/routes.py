@@ -50,6 +50,7 @@ from app.offerings.service import (
     update_offering,
 )
 from app.offerings.sync_service import (
+    delete_synced_offering,
     get_by_public_id,
     list_sync_offerings,
     serialize_sync_offering,
@@ -371,16 +372,37 @@ def update_offering_route(
 
 @router.delete("/{offering_id}")
 def delete_offering_route(
-    offering_id: int,
+    offering_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    auth: OfferingAuth = Depends(get_offering_auth),
 ):
-    row = get_offering(db, offering_id, user_id=getattr(current_user, "id", None))
+    """Delete offering — JWT uses numeric id; SmartOps PAT uses ``ls_off_…`` public id."""
+    if auth.pat:
+        pat_org = auth.pat.organization_id
+        removed = delete_synced_offering(
+            db, organization_id=pat_org, offering_id=offering_id
+        )
+        if not removed:
+            # Idempotent: already gone is success for SmartOps cascade delete
+            return {"ok": True, "offering_id": offering_id, "deleted": False}
+        db.commit()
+        return {"ok": True, "offering_id": offering_id, "deleted": True}
+
+    if not auth.user:
+        raise _unauthorized()
+    try:
+        numeric_id = int(offering_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="offering_id must be numeric for JWT delete",
+        ) from exc
+    row = get_offering(db, numeric_id, user_id=getattr(auth.user, "id", None))
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offering not found")
     delete_offering(db, row)
     db.commit()
-    return {"ok": True, "id": offering_id}
+    return {"ok": True, "id": numeric_id}
 
 
 @router.post("/{offering_id}/generate-icp", response_model=GeneratedIcpPayload)

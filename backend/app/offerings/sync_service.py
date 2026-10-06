@@ -88,6 +88,21 @@ def get_by_public_id(db: Session, organization_id: str, offering_id: str) -> Off
     )
 
 
+def delete_synced_offering(
+    db: Session,
+    *,
+    organization_id: str,
+    offering_id: str,
+) -> bool:
+    """Hard-delete a SmartOps-synced offering (docs cascade). Returns True if removed."""
+    row = get_by_public_id(db, organization_id, offering_id)
+    if not row:
+        return False
+    db.delete(row)
+    db.flush()
+    return True
+
+
 def list_sync_offerings(db: Session, organization_id: str) -> list[dict[str, Any]]:
     rows = (
         db.query(OfferingRow)
