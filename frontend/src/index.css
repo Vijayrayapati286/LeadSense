@@ -114,7 +114,40 @@
   }
 
   .metric-card {
-    @apply flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover;
+    @apply flex h-full min-h-[6.75rem] items-center gap-3 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover;
+  }
+
+  /* Interactive metrics keep their own outline, matching the history filters. */
+  .metric-card-btn {
+    @apply cursor-pointer text-left focus:outline-none focus:ring-4 active:scale-[.99];
+  }
+  .metric-card-btn-gold {
+    @apply border-amber-300 bg-amber-50/70 hover:border-amber-400 focus:ring-amber-100;
+  }
+  .metric-card-btn-amber {
+    @apply border-amber-300 bg-amber-50/70 hover:border-amber-400 focus:ring-amber-100;
+  }
+  .metric-card-btn-green {
+    @apply border-emerald-300 bg-emerald-50/80 hover:border-emerald-400 focus:ring-emerald-100;
+  }
+  .metric-card-btn-blue {
+    @apply border-sky-300 bg-sky-50/80 hover:border-sky-400 focus:ring-sky-100;
+  }
+  .metric-card-btn-red {
+    @apply border-rose-300 bg-rose-50/80 hover:border-rose-400 focus:ring-rose-100;
+  }
+  .metric-card-btn-active.metric-card-btn-gold,
+  .metric-card-btn-active.metric-card-btn-amber {
+    @apply border-amber-400 bg-amber-50 ring-2 ring-amber-200;
+  }
+  .metric-card-btn-active.metric-card-btn-green {
+    @apply border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200;
+  }
+  .metric-card-btn-active.metric-card-btn-blue {
+    @apply border-sky-400 bg-sky-50 ring-2 ring-sky-200;
+  }
+  .metric-card-btn-active.metric-card-btn-red {
+    @apply border-rose-400 bg-rose-50 ring-2 ring-rose-200;
   }
 
   .metric-icon {
@@ -122,6 +155,8 @@
   }
 
   .metric-icon-blue { @apply bg-primary-50 text-primary-700; }
+  .metric-icon-sky { @apply bg-sky-100 text-sky-700; }
+  .metric-icon-gold { @apply bg-amber-100 text-amber-600; }
   .metric-icon-green { @apply bg-emerald-50 text-emerald-700; }
   .metric-icon-amber { @apply bg-amber-50 text-amber-700; }
   .metric-icon-red { @apply bg-rose-50 text-rose-700; }

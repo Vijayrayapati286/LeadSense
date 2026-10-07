@@ -129,26 +129,44 @@ export function ExtractorNav() {
   );
 }
 
+const METRIC_BUTTON_TONE = {
+  gold: 'metric-card-btn-gold',
+  amber: 'metric-card-btn-amber',
+  green: 'metric-card-btn-green',
+  blue: 'metric-card-btn-blue',
+  sky: 'metric-card-btn-blue',
+  red: 'metric-card-btn-red',
+};
+
+function metricIconTone(tone, interactive) {
+  if (tone === 'gold') return 'gold';
+  if (interactive && (tone === 'blue' || tone === 'sky')) return 'sky';
+  return tone;
+}
+
 /** Renders as a button/link when `onClick`/`to` is supplied so a metric can
  * double as the filter shortcut users instinctively click it for. */
 export function MetricCard({ label, value, hint, tone = 'blue', icon: Icon, onClick, to, active = false }) {
   const interactive = Boolean(onClick || to);
+  const buttonTone = METRIC_BUTTON_TONE[tone] || METRIC_BUTTON_TONE.blue;
   const body = (
     <>
       <div className="min-w-0 text-left">
         <p className="truncate text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
         <p className="mt-1 text-2xl font-bold tracking-tight text-slate-950">{value}</p>
-        {hint ? <p className="mt-0.5 text-xs text-slate-500">{hint}</p> : null}
+        <p className="mt-0.5 h-4 truncate text-xs leading-4 text-slate-500" title={hint || undefined}>
+          {hint || '\u00a0'}
+        </p>
       </div>
-      <div className={`metric-icon metric-icon-${tone} ml-auto transition-transform duration-200 group-hover:scale-110`}>
+      <div className={`metric-icon metric-icon-${metricIconTone(tone, interactive)} ml-auto transition-transform duration-200 group-hover:scale-110`}>
         {Icon ? <Icon size={18} /> : <FiDatabase size={18} />}
       </div>
     </>
   );
 
   const className = `metric-card group w-full ${
-    interactive ? 'cursor-pointer active:scale-[.99] focus:outline-none focus:ring-4 focus:ring-primary-100' : ''
-  } ${active ? 'border-primary-300 ring-2 ring-primary-100' : ''}`;
+    interactive ? `metric-card-btn ${buttonTone}${active ? ' metric-card-btn-active' : ''}` : ''
+  }`;
 
   if (to) {
     return (
