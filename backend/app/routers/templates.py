@@ -20,39 +20,42 @@ from app.utils.helpers import add_known_field_case_aliases, extract_placeholders
 router = APIRouter(prefix="/templates", tags=["Templates"])
 ai_service = AIService()
 
-# Fallback when no offering is selected
+# Fallback when no offering is selected (plain strings — use {{Field}}, not f-string braces)
 PLACEHOLDER_TEMPLATES = [
     {
         "id": 1,
         "name": "Introduction Outreach",
-        "subject": "Quick introduction — {{Company}} & Our Solution",
+        "subject": "Quick intro — helping {{Company}} scale AI operations",
         "body": (
-            "Hello {{Name}},\n\n"
-            "I came across {{Company}} and was impressed by your work in the {{Industry}} space. "
-            "As {{Designation}}, I thought you might be interested in how we've helped similar companies.\n\n"
-            "Would you be open to a brief chat?"
+            "Hi {{Name}},\n\n"
+            "I reached out because {{Designation}}s in {{Industry}} often need a clearer path "
+            "from pilots to production.\n\n"
+            "We help teams standardize and govern AI/RAG workloads so experiments become durable operations.\n\n"
+            "Would you be open to a brief conversation about {{Company}}?\n\n"
+            "Regards,\n{{FromName}}\nLead Generation"
         ),
     },
     {
         "id": 2,
         "name": "Product Demo Invite",
-        "subject": "Exclusive demo for {{Company}} — Limited slots",
+        "subject": "15-min walkthrough for {{Company}}",
         "body": (
             "Hi {{Name}},\n\n"
-            "We're offering select {{Industry}} leaders an exclusive product demo. "
-            "Given your role as {{Designation}} at {{Company}}, I believe this could be valuable.\n\n"
-            "Can I reserve a slot for you this week?"
+            "Given your role at {{Company}}, a short walkthrough may be useful.\n\n"
+            "We can cover how teams in {{Industry}} move from fragmented tooling to a governed production setup.\n\n"
+            "Would a 15-minute demo this week work?\n\n"
+            "Regards,\n{{FromName}}\nLead Generation"
         ),
     },
     {
         "id": 3,
         "name": "Follow-up Email",
-        "subject": "Following up — {{Name}}",
+        "subject": "Following up — {{Company}}",
         "body": (
-            "Dear {{Name}},\n\n"
-            "I wanted to follow up on my previous email. I understand you're busy as {{Designation}} "
-            "at {{Company}}, but I believe our solution could significantly benefit your team.\n\n"
-            "Would a 10-minute call work for you?"
+            "Hi {{Name}},\n\n"
+            "Just following up in case this is still relevant for {{Company}}.\n\n"
+            "Happy to keep it to 10 minutes if a quick call would help.\n\n"
+            "Regards,\n{{FromName}}\nLead Generation"
         ),
     },
 ]
@@ -122,13 +125,25 @@ def _templates_from_offering(row: OfferingRow) -> list[dict]:
             }
         )
 
+    # Prefer grounded Intro/Demo/Follow-up over a raw uploaded brochure paste.
+    # Only keep the stored email_template when it already looks like a short outreach email.
     email_template = getattr(row, "email_template", None) or {}
-    if email_template.get("subject") and email_template.get("body") and templates:
+    stored_subject = str(email_template.get("subject") or "").strip()
+    stored_body = str(email_template.get("body") or "").strip()
+    if (
+        templates
+        and stored_subject
+        and stored_body
+        and _is_usable_outreach_email(stored_subject, stored_body)
+    ):
+        normalized_body = OfferingAIService._ensure_regards_signature(stored_body)
+        if "{{Name}}" not in normalized_body and "{{name}}" not in normalized_body:
+            normalized_body = f"Hi {{{{Name}}}},\n\n{normalized_body}"
         templates[0] = {
             "id": f"offering-{oid}-intro",
             "name": "Introduction Outreach",
-            "subject": email_template["subject"],
-            "body": email_template["body"],
+            "subject": stored_subject,
+            "body": normalized_body,
             "source": "offering",
             "template_source": email_template.get("source") or "upload",
             "source_filename": email_template.get("source_filename"),
@@ -139,6 +154,19 @@ def _templates_from_offering(row: OfferingRow) -> list[dict]:
             ),
         }
     return templates
+
+
+def _is_usable_outreach_email(subject: str, body: str) -> bool:
+    """Reject long brochure dumps / incomplete drafts as campaign Intro templates."""
+    text = (body or "").strip()
+    if not (subject or "").strip() or not text:
+        return False
+    if len(text) > 1400:
+        return False
+    lower = text.lower()
+    if "{{name}}" not in lower and "hi {{" not in lower:
+        return False
+    return True
 
 
 @router.get("/placeholder-templates")
