@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   FiAlertTriangle,
   FiCheck,
@@ -367,8 +368,11 @@ export default function ReviewCompareModal({
     hasValue(value),
   );
 
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-3 sm:p-6">
+  return createPortal(
+    <div
+      className="fixed inset-y-0 right-0 z-[55] flex items-center justify-center p-3 transition-[left] duration-300 sm:p-6"
+      style={{ left: 'var(--app-sidebar, 16rem)' }}
+    >
       <div
         className={`absolute inset-0 bg-slate-900/50 backdrop-blur-[3px] transition-opacity duration-300 ${
           visible ? 'opacity-100' : 'opacity-0'
@@ -769,6 +773,7 @@ export default function ReviewCompareModal({
           ) : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
