@@ -37,7 +37,30 @@ KNOWN_MERGE_FIELDS: dict[str, str] = {
     "Status": "status",
 }
 
-_KNOWN_MERGE_FIELDS_LOWER: set[str] = {k.lower() for k in KNOWN_MERGE_FIELDS}
+# Sender-side tokens (not recipient columns). Injected at send / preview time.
+SENDER_MERGE_FIELDS: frozenset[str] = frozenset({"FromName"})
+
+_KNOWN_MERGE_FIELDS_LOWER: set[str] = {k.lower() for k in KNOWN_MERGE_FIELDS} | {
+    k.lower() for k in SENDER_MERGE_FIELDS
+}
+
+
+def name_from_email(email: str | None) -> str:
+    """Best-effort display name from the local part of an email address.
+
+    john.doe@acme.com → John Doe;  jdoe → Jdoe
+    """
+    raw = (email or "").strip()
+    if "@" not in raw:
+        return ""
+    local = raw.split("@", 1)[0].strip()
+    if not local:
+        return ""
+    parts = re.split(r"[._+\-]+", local)
+    words = [p for p in parts if p and p.isalpha()]
+    if not words:
+        return local[:1].upper() + local[1:] if local else ""
+    return " ".join(w[:1].upper() + w[1:].lower() for w in words)
 
 
 def build_recipient_context(recipient) -> dict[str, str]:
@@ -45,6 +68,8 @@ def build_recipient_context(recipient) -> dict[str, str]:
     real Recipient row — every known merge field, plus any approved custom
     fields (RecipientCustomValue) this recipient has a value for."""
     context = {key: (getattr(recipient, field, None) or "") for key, field in KNOWN_MERGE_FIELDS.items()}
+    if not str(context.get("Name") or "").strip():
+        context["Name"] = name_from_email(context.get("Email") or getattr(recipient, "email", None))
     for cv in getattr(recipient, "custom_values", []) or []:
         context[cv.custom_field.name] = cv.value or ""
     add_known_field_case_aliases(context)
@@ -59,7 +84,7 @@ def add_known_field_case_aliases(context: dict[str, str]) -> dict[str, str]:
     instead of rendering literally or being flagged as a missing custom
     field (see is_known_merge_field). Never overwrites a real custom field
     that happens to already occupy the lowercase name."""
-    for key in KNOWN_MERGE_FIELDS:
+    for key in list(KNOWN_MERGE_FIELDS) + list(SENDER_MERGE_FIELDS):
         lower = key.lower()
         if lower not in context and key in context:
             context[lower] = context[key]
@@ -67,9 +92,7 @@ def add_known_field_case_aliases(context: dict[str, str]) -> dict[str, str]:
 
 
 def is_known_merge_field(field: str) -> bool:
-    """Case-insensitive membership check against KNOWN_MERGE_FIELDS, so
-    {{name}} is recognized as the same merge field as {{Name}} instead of
-    being treated as an undefined custom field."""
+    """Case-insensitive membership check against recipient + sender merge fields."""
     return field.lower() in _KNOWN_MERGE_FIELDS_LOWER
 
 

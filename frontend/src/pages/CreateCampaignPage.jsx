@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { FiArrowLeft, FiArrowRight, FiCheck, FiFileText, FiSave, FiBookOpen, FiTarget } from 'react-icons/fi';
+import { FiArrowLeft, FiArrowRight, FiCheck, FiSave, FiBookOpen } from 'react-icons/fi';
 import { campaignService, offeringsService, templateService, mailerService, customFieldService, userService } from '../services/services';
 import { getWorkspaceDefaults } from '../utils/workspaceDefaults';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import { hasPermission } from '../utils/permissions';
-import { generateCampaignId, extractPlaceholders, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
+import { generateCampaignId, isTemplateBodyEmpty, ensureManualBodyIsHtml } from '../utils/helpers';
 import { buildSamplePreviewContext, getUnknownPlaceholders } from '../utils/mergeFields';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import TemplateEditor from '../components/TemplateEditor';
@@ -32,12 +32,21 @@ function buildDefaultForm(user) {
 }
 
 function buildOfferingEmailDraft(offeringName, offeringDescription) {
-  const desc = offeringDescription?.trim() || 'our solution';
+  const desc = (offeringDescription || '').trim();
+  const blurb =
+    desc.length > 220
+      ? `${desc.slice(0, 217).replace(/\s+\S*$/, '')}…`
+      : desc || `${offeringName} helps teams move from pilots to production with clearer governance.`;
   return {
-    subject: `Introducing ${offeringName}`,
-    body: `<p>Hi {{Name}},</p><p>I wanted to reach out about <strong>${offeringName}</strong>.</p><p>${desc}</p><p>Would you be open to a quick conversation to see if this is a fit for {{Company}}?</p>`,
-    closing: 'Best regards,',
-    cta: 'Book a call',
+    subject: `${offeringName} for {{Company}} — quick intro`,
+    body:
+      `Hi {{Name}},\n\n` +
+      `I wanted to share a brief note on ${offeringName} for {{Company}}.\n\n` +
+      `${blurb}\n\n` +
+      `Would you be open to a short conversation to see if this is a fit?\n\n` +
+      `Regards,\n{{FromName}}\nLead Generation`,
+    closing: '',
+    cta: '',
   };
 }
 
@@ -277,11 +286,15 @@ export default function CreateCampaignPage() {
 
   const handleSelectPlaceholderTemplate = (template) => {
     setSelectedTemplate(template);
-    const placeholders = extractPlaceholders(template.subject + ' ' + template.body);
-    const values = {};
-    placeholders.forEach((p) => { values[p] = ''; });
-    setPlaceholderValues(values);
-    setEmailContent({ subject: template.subject, body: template.body, closing: '', cta: '' });
+    // Only keep sender FromName editable — recipient {{Name}} merges at send time
+    setPlaceholderValues({ FromName: user?.name || '' });
+    let body = (template.body || '').trim();
+    if (!/\{\{\s*FromName\s*\}\}/i.test(body)) {
+      body = `${body}\n\nRegards,\n{{FromName}}\nLead Generation`;
+    } else if (!/Lead Generation\s*$/i.test(body)) {
+      body = `${body}\nLead Generation`;
+    }
+    setEmailContent({ subject: template.subject, body, closing: '', cta: '' });
   };
 
   const handleGenerateAI = async () => {
@@ -520,23 +533,12 @@ export default function CreateCampaignPage() {
         </div>
       ) : null}
 
-      <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-6 sm:p-8 shadow-card">
-        <div className="pointer-events-none absolute -right-8 -top-8 hidden sm:block">
-          <div className="flex h-32 w-32 items-center justify-center rounded-2xl border border-slate-100 bg-slate-50/80 rotate-12">
-            <FiTarget size={48} className="text-primary-200" />
-          </div>
-        </div>
-
+      <div className="rounded-2xl border border-slate-200/80 bg-white p-6 sm:p-8 shadow-card">
         {activeTab === 'campaign' && (
-          <div className="relative space-y-6">
-            <div className="flex items-start gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-100 text-primary-600">
-                <FiTarget size={22} />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">Campaign Information</h2>
-                <p className="text-sm text-slate-500 mt-0.5">Provide the basic details about your campaign.</p>
-              </div>
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Campaign details</h2>
+              <p className="mt-0.5 text-sm text-slate-500">Name the campaign and choose an offering if you have one.</p>
             </div>
 
             <CampaignFormFields
@@ -558,16 +560,13 @@ export default function CreateCampaignPage() {
         )}
 
         {activeTab === 'template' && (
-          <div className="relative space-y-6">
+          <div className="space-y-6">
             <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div className="flex items-start gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600">
-                  <FiFileText size={22} />
-                </div>
-                <div>
-                  <h2 className="text-xl font-bold text-slate-900">Email Template</h2>
-                  <p className="text-sm text-slate-500 mt-0.5">Compose or load the email your prospects will receive.</p>
-                </div>
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Email template</h2>
+                <p className="mt-0.5 text-sm text-slate-500">
+                  Use Offering Email for personalized outreach — {'{{Name}}'} from the contact, {'{{FromName}}'} after Regards.
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <select
@@ -575,7 +574,7 @@ export default function CreateCampaignPage() {
                   value=""
                   onChange={(e) => e.target.value && handleSelectMailer(e.target.value)}
                 >
-                  <option value="">From Saved Mailer...</option>
+                  <option value="">Load mailer…</option>
                   {mailers.map((m) => (
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
@@ -585,7 +584,7 @@ export default function CreateCampaignPage() {
                   disabled={!emailContent.subject.trim() || isTemplateBodyEmpty(emailContent.body, templateType)}
                   className="btn-secondary text-sm flex items-center gap-1"
                 >
-                  <FiSave size={14} /> Save as Mailer
+                  <FiSave size={14} /> Save mailer
                 </button>
               </div>
             </div>
@@ -605,6 +604,7 @@ export default function CreateCampaignPage() {
               onGenerateAI={handleGenerateAI}
               aiLoading={aiLoading}
               previewContext={previewContext}
+              senderName={user?.name || ''}
             />
           </div>
         )}

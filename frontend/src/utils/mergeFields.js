@@ -5,7 +5,7 @@ import { extractPlaceholders } from './helpers';
  * backend/app/utils/helpers.py's KNOWN_MERGE_FIELDS — mirrored here since
  * preview rendering happens client-side. */
 export const KNOWN_MERGE_FIELDS = [
-  { key: 'Name', label: 'Name', field: 'name' },
+  { key: 'Name', label: 'Recipient name', field: 'name' },
   { key: 'Email', label: 'Email', field: 'email' },
   { key: 'Company', label: 'Company', field: 'company' },
   { key: 'Designation', label: 'Designation', field: 'designation' },
@@ -22,7 +22,17 @@ export const KNOWN_MERGE_FIELDS = [
   { key: 'Status', label: 'Status', field: 'status' },
 ];
 
-const KNOWN_KEYS_LOWER = new Set(KNOWN_MERGE_FIELDS.map((f) => f.key.toLowerCase()));
+/** Primary tags shown on Offering Email compose — keep the UI clean. */
+export const OFFERING_EMAIL_MERGE_FIELDS = [
+  { key: 'Name', label: 'Recipient (contact name, or from email)' },
+  { key: 'Company', label: 'Company' },
+  { key: 'FromName', label: 'Your name (after Regards)' },
+];
+
+const KNOWN_KEYS_LOWER = new Set([
+  ...KNOWN_MERGE_FIELDS.map((f) => f.key.toLowerCase()),
+  'fromname',
+]);
 
 /** Case-insensitive check mirroring backend/app/utils/helpers.py's
  * is_known_merge_field — {{name}} is the same merge field as {{Name}},
@@ -35,18 +45,19 @@ const SAMPLE_MERGE_VALUES = {
   Name: 'John Doe',
   Email: 'john@acme.com',
   Company: 'Acme Corp',
-  Designation: 'CEO',
+  Designation: 'VP Engineering',
   DesignationLevel: 'Executive',
   Industry: 'Technology',
-  Department: 'Sales',
+  Department: 'Engineering',
   Country: 'United States',
   State: 'California',
   City: 'San Francisco',
   CompanySize: '201-500',
   YearsOfExperience: '10+',
   Skills: 'Leadership',
-  Source: 'Website',
+  Source: 'LinkedIn',
   Status: 'Active',
+  FromName: 'Your Name',
 };
 
 /** Sample context for the template editor's live preview, before any real
@@ -57,6 +68,7 @@ export function buildSamplePreviewContext(placeholderValues = {}) {
   KNOWN_MERGE_FIELDS.forEach(({ key }) => {
     context[key] = placeholderValues[key] || SAMPLE_MERGE_VALUES[key];
   });
+  context.FromName = placeholderValues.FromName || SAMPLE_MERGE_VALUES.FromName;
   return context;
 }
 
@@ -66,14 +78,25 @@ export function buildSamplePreviewContext(placeholderValues = {}) {
 export function buildRecipientContext(recipient) {
   const context = {};
   KNOWN_MERGE_FIELDS.forEach(({ key, field }) => {
-    const value = recipient[field] || '—';
+    let value = recipient[field] || '';
+    if (key === 'Name' && !String(value).trim()) {
+      value = nameFromEmail(recipient.email) || '—';
+    }
+    if (!value) value = '—';
     context[key] = value;
-    // Also merge a lowercase {{name}}-style tag — AI-generated offering
-    // email copy doesn't always come back in the PascalCase the template
-    // editor's picker inserts, despite the prompt asking for it.
     context[key.toLowerCase()] = value;
   });
   return context;
+}
+
+export function nameFromEmail(email) {
+  const raw = String(email || '').trim();
+  if (!raw.includes('@')) return '';
+  const local = raw.split('@')[0].trim();
+  if (!local) return '';
+  const parts = local.split(/[._+\-]+/).filter((p) => p && /^[a-zA-Z]+$/.test(p));
+  if (!parts.length) return local.charAt(0).toUpperCase() + local.slice(1);
+  return parts.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 }
 
 /** Every {{Field}} used across the given template text blocks that isn't a

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from pydantic import ValidationError
@@ -243,86 +244,132 @@ class OfferingAIService:
 
     def _campaign_type_prompt(self, offering_name: str, content: str) -> str:
         clipped = (content or "").strip()[:6000] or "(no document content — invent carefully from the name only)"
-        return f"""Write exactly 3 campaign emails for this offering.
+        return f"""Write exactly 3 B2B cold outreach emails a lead-gen team would send.
 
 Offering name: {offering_name}
 
-Offering document content (source of truth — extract high-level points, do not dump raw text):
+Offering document content (source of truth — summarize into 1–2 short sentences per email; NEVER paste long raw brochure text):
 ---
 {clipped}
 ---
 
 Return JSON with key "templates" — an array of exactly 3 objects in this order:
 1) type: "introduction", name: "Introduction Outreach"
-   Warm first touch; highlight who it's for and the core problem solved.
 2) type: "demo", name: "Product Demo Invite"
-   Invite to a short demo; emphasize proof points / differentiators from the docs.
 3) type: "follow_up", name: "Follow-up Email"
-   Polite follow-up; remind of one concrete outcome and ask for a short call.
 
-Each object fields:
-- type, name, subject (under 90 chars), body (plain text, under ~160 words)
-Body must start with a greeting using {{{{Name}}}}, mention {{{{Company}}}} / {{{{Designation}}}} / {{{{Industry}}}} where natural.
-Each body must use DIFFERENT high-level points from the offering content (not the same paragraph)."""
+Rules for each object:
+- subject: under 70 chars, specific to this offering + angle (not generic fluff)
+- body: plain text, 80–130 words, professional lead-gen tone
+- body MUST use this exact structure:
+  Hi {{{{Name}}}},
+
+  <1 short personalization line mentioning {{{{Company}}}} / {{{{Designation}}}} / {{{{Industry}}}} when natural>
+
+  <1–2 sentences of high-level offering value — different point per email type>
+
+  <1 soft CTA question>
+
+  Regards,
+  {{{{FromName}}}}
+  Lead Generation
+- Start with "Hi {{{{Name}}}}," (recipient name is merged from the contact / email local-part when missing)
+- End with "Regards," then {{{{FromName}}}} on the next line, then "Lead Generation"
+- Do NOT invent fake metrics. Prefer concrete capability language from the docs.
+- Keep bodies short (cold-email length). Never paste raw brochure / PDF text.
+- Each body must use DIFFERENT high-level points (intro = problem/fit, demo = proof, follow-up = reminder + ask)."""
 
     @staticmethod
-    def _content_slices(content: str, size: int = 280) -> tuple[str, str, str]:
-        cleaned = " ".join((content or "").split())
-        if not cleaned:
-            return ("", "", "")
-        if len(cleaned) <= size:
-            return (cleaned, cleaned, cleaned)
-        mid = max(size, len(cleaned) // 2)
-        end = max(size, (len(cleaned) * 2) // 3)
-        a = cleaned[:size].rsplit(" ", 1)[0] + "…"
-        b = cleaned[mid : mid + size].rsplit(" ", 1)[0] + "…"
-        c = cleaned[end : end + size].rsplit(" ", 1)[0] + "…"
-        return (a, b, c)
+    def _high_level_points(content: str, limit: int = 3) -> list[str]:
+        """Pull a few short, readable sentences from offering content (not mid-string dumps)."""
+        text = (content or "").replace("\r", "\n")
+        # Drop markdown headings noise
+        lines = []
+        for line in text.split("\n"):
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            lines.append(s)
+        joined = " ".join(lines)
+        joined = re.sub(r"\s+", " ", joined).strip()
+        if not joined:
+            return []
+        parts = re.split(r"(?<=[.!?])\s+", joined)
+        points: list[str] = []
+        for part in parts:
+            clean = part.strip()
+            if len(clean) < 40:
+                continue
+            if len(clean) > 180:
+                clean = clean[:177].rsplit(" ", 1)[0] + "…"
+            points.append(clean)
+            if len(points) >= limit:
+                break
+        if not points and joined:
+            points.append(joined[:160].rsplit(" ", 1)[0] + ("…" if len(joined) > 160 else ""))
+        return points
+
+    @staticmethod
+    def _ensure_regards_signature(body: str) -> str:
+        text = (body or "").rstrip()
+        if re.search(
+            r"(?i)\bregards,?\s*\n\s*\{\{\s*FromName\s*\}\}(\s*\n\s*Lead Generation)?\s*$",
+            text,
+        ):
+            if not re.search(r"(?i)Lead Generation\s*$", text):
+                return f"{text}\nLead Generation"
+            return text
+        # Strip trailing incomplete sign-offs then append our standard close
+        text = re.sub(r"(?is)\n*(thanks|best|regards|sincerely)[,!]?\s*$", "", text).rstrip()
+        text = re.sub(r"(?is)\n*Lead Generation\s*$", "", text).rstrip()
+        return f"{text}\n\nRegards,\n{{{{FromName}}}}\nLead Generation"
 
     def _mock_campaign_type_templates(
         self, offering_name: str, content: str
     ) -> list[dict[str, str]]:
-        intro_blurb, demo_blurb, follow_blurb = self._content_slices(content)
-        if not intro_blurb:
-            intro_blurb = f"{offering_name} helps teams like {{{{Company}}}} improve outcomes."
-            demo_blurb = f"See how {offering_name} works in a short walkthrough tailored to {{{{Industry}}}}."
-            follow_blurb = f"A quick follow-up on {offering_name} for {{{{Company}}}}."
+        points = self._high_level_points(content, limit=3)
+        while len(points) < 3:
+            points.append(
+                f"{offering_name} helps teams like {{{{Company}}}} move from pilots to production with clearer governance."
+            )
+        intro_blurb, demo_blurb, follow_blurb = points[0], points[1], points[2]
         return [
             {
                 "name": "Introduction Outreach",
-                "subject": f"Quick introduction — {{{{Company}}}} & {offering_name}",
+                "subject": f"{offering_name} for {{{{Company}}}} — quick intro",
                 "body": (
-                    f"Hello {{{{Name}}}},\n\n"
-                    f"I came across {{{{Company}}}} and was impressed by your work in the "
-                    f"{{{{Industry}}}} space. As {{{{Designation}}}}, I thought you might be "
-                    f"interested in {offering_name}.\n\n"
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"I reached out because {{{{Designation}}}}s in {{{{Industry}}}} "
+                    f"often need a clearer path from AI experiments to production.\n\n"
                     f"{intro_blurb}\n\n"
-                    f"Would you be open to a brief chat?"
+                    f"Would you be open to a brief conversation about how this could help {{{{Company}}}}?\n\n"
+                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
                 ),
                 "template_source": "offering_ai",
             },
             {
                 "name": "Product Demo Invite",
-                "subject": f"Exclusive demo of {offering_name} for {{{{Company}}}}",
+                "subject": f"15-min walkthrough of {offering_name}",
                 "body": (
                     f"Hi {{{{Name}}}},\n\n"
-                    f"We're offering select {{{{Industry}}}} leaders a short demo of "
-                    f"{offering_name}. Given your role as {{{{Designation}}}} at "
-                    f"{{{{Company}}}}, these proof points may matter:\n\n"
+                    f"Given your role at {{{{Company}}}}, I thought a short demo of "
+                    f"{offering_name} might be useful.\n\n"
                     f"{demo_blurb}\n\n"
-                    f"Can I reserve a slot for you this week?"
+                    f"Would a 15-minute walkthrough this week work for you?\n\n"
+                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
                 ),
                 "template_source": "offering_ai",
             },
             {
                 "name": "Follow-up Email",
-                "subject": f"Following up — {{{{Name}}}} / {offering_name}",
+                "subject": f"Following up — {offering_name} for {{{{Company}}}}",
                 "body": (
-                    f"Dear {{{{Name}}}},\n\n"
-                    f"I wanted to follow up on {offering_name} for {{{{Company}}}}. "
-                    f"I know you're busy as {{{{Designation}}}}, but one outcome stood out:\n\n"
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"Just following up on {offering_name} for {{{{Company}}}} — "
+                    f"happy to keep this brief.\n\n"
                     f"{follow_blurb}\n\n"
-                    f"Would a 10-minute call work for you?"
+                    f"Open to a 10-minute call if useful?\n\n"
+                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
                 ),
                 "template_source": "offering_ai",
             },
@@ -343,9 +390,11 @@ Each body must use DIFFERENT high-level points from the offering content (not th
         for idx, (etype, ename) in enumerate(expected):
             item = items[idx] if isinstance(items[idx], dict) else {}
             subject = str(item.get("subject") or "").strip()
-            body = str(item.get("body") or "").strip()
+            body = self._ensure_regards_signature(str(item.get("body") or "").strip())
             if not subject or not body:
                 raise ValueError(f"AI template missing subject/body for {ename}")
+            if "{{Name}}" not in body and "{{name}}" not in body:
+                body = f"Hi {{{{Name}}}},\n\n{body}"
             out.append(
                 {
                     "name": ename,
@@ -357,7 +406,6 @@ Each body must use DIFFERENT high-level points from the offering content (not th
             )
         bodies = {t["body"] for t in out}
         if len(bodies) < 2:
-            # Model repeated the same blurb — fall back to mock distinct slices
             return self._mock_campaign_type_templates(offering_name, content)
         return out
 
