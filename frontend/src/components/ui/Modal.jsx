@@ -44,9 +44,12 @@ export default function Modal({
   };
 
   return (
-    <div className={`fixed inset-0 ${level === 'top' ? 'z-[80]' : 'z-50'} flex items-center justify-center p-4`}>
-      {/* Backdrop sits under the sidebar (z-60), so only main content looks blurred */}
-      <div className="fixed inset-0 bg-black/40 backdrop-blur-md" onClick={onClose} />
+    <div
+      className={`fixed inset-y-0 right-0 ${level === 'top' ? 'z-[80]' : 'z-50'} flex items-center justify-center p-4 transition-[left] duration-300`}
+      style={{ left: 'var(--app-sidebar, 16rem)' }}
+    >
+      {/* Cover only the area beside the sidebar so the card centers there. */}
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-md" onClick={onClose} />
       <div
         ref={dialogRef}
         role="dialog"

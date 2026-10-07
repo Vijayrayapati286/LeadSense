@@ -25,33 +25,33 @@ PLACEHOLDER_TEMPLATES = [
     {
         "id": 1,
         "name": "Introduction Outreach",
-        "subject": "Quick introduction — {{{{Company}}}} & Our Solution",
+        "subject": "Quick introduction — {{Company}} & Our Solution",
         "body": (
-            "Hello {{{{Name}}}},\n\n"
-            "I came across {{{{Company}}}} and was impressed by your work in the {{{{Industry}}}} space. "
-            "As {{{{Designation}}}}, I thought you might be interested in how we've helped similar companies.\n\n"
+            "Hello {{Name}},\n\n"
+            "I came across {{Company}} and was impressed by your work in the {{Industry}} space. "
+            "As {{Designation}}, I thought you might be interested in how we've helped similar companies.\n\n"
             "Would you be open to a brief chat?"
         ),
     },
     {
         "id": 2,
         "name": "Product Demo Invite",
-        "subject": "Exclusive demo for {{{{Company}}}} — Limited slots",
+        "subject": "Exclusive demo for {{Company}} — Limited slots",
         "body": (
-            "Hi {{{{Name}}}},\n\n"
-            "We're offering select {{{{Industry}}}} leaders an exclusive product demo. "
-            "Given your role as {{{{Designation}}}} at {{{{Company}}}}, I believe this could be valuable.\n\n"
+            "Hi {{Name}},\n\n"
+            "We're offering select {{Industry}} leaders an exclusive product demo. "
+            "Given your role as {{Designation}} at {{Company}}, I believe this could be valuable.\n\n"
             "Can I reserve a slot for you this week?"
         ),
     },
     {
         "id": 3,
         "name": "Follow-up Email",
-        "subject": "Following up — {{{{Name}}}}",
+        "subject": "Following up — {{Name}}",
         "body": (
-            "Dear {{{{Name}}}},\n\n"
-            "I wanted to follow up on my previous email. I understand you're busy as {{{{Designation}}}} "
-            "at {{{{Company}}}}, but I believe our solution could significantly benefit your team.\n\n"
+            "Dear {{Name}},\n\n"
+            "I wanted to follow up on my previous email. I understand you're busy as {{Designation}} "
+            "at {{Company}}, but I believe our solution could significantly benefit your team.\n\n"
             "Would a 10-minute call work for you?"
         ),
     },

@@ -1,10 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { FiZap, FiEdit3, FiFileText } from 'react-icons/fi';
 import LoadingSpinner from './ui/LoadingSpinner';
 import RichTextEditor from './RichTextEditor';
-import { renderTemplate, renderMarkdownLite, isTemplateBodyEmpty } from '../utils/helpers';
+import { renderTemplate, renderMarkdownLite } from '../utils/helpers';
 import { KNOWN_MERGE_FIELDS } from '../utils/mergeFields';
-import { buildDefaultSignature } from '../utils/emailSignature';
+import { withDefaultSignature } from '../utils/emailSignature';
 
 /** Compact reference list of every supported {{Field}} merge tag, so users
  * don't have to guess which prospect fields a template can pull in. */
@@ -56,20 +56,29 @@ export default function TemplateEditor({
   aiLoading = false,
   previewContext,
 }) {
-  const updateContent = (field, value) => onEmailContentChange((p) => ({ ...p, [field]: value }));
+  // Last body written by this editor (or by the signature restore below).
+  // A parent load that replaces the body will differ from this, which is
+  // how a saved mailer gets the footer back without fighting keystrokes.
+  const emittedBody = useRef(undefined);
 
-  // The Feuji footer is mandatory on every Manual Compose email — pre-fill
-  // it the moment Manual is opened with an empty body (fresh compose),
-  // rather than requiring it to be pasted in by hand each time. Only fires
-  // when the body is actually empty, so it never clobbers an existing
-  // draft/saved template, and only re-fires on a type switch (not on every
-  // keystroke) so deliberately clearing it doesn't cause it to reappear.
+  const updateContent = (field, value) => {
+    if (field === 'body') emittedBody.current = value;
+    onEmailContentChange((p) => ({ ...p, [field]: value }));
+  };
+
+  // The Feuji footer is mandatory on every Manual Compose email. Put it
+  // back when Manual is opened, or when a saved draft/mailer is loaded
+  // without it. Keystrokes update emittedBody first, so deleting the
+  // footer while typing does not make it snap back.
   useEffect(() => {
-    if (templateType === 'manual' && isTemplateBodyEmpty(emailContent.body, 'manual')) {
-      onEmailContentChange((p) => ({ ...p, body: buildDefaultSignature() }));
-    }
+    if (templateType !== 'manual') return;
+    if (emailContent.body === emittedBody.current) return;
+    const next = withDefaultSignature(emailContent.body);
+    emittedBody.current = next;
+    if (next === emailContent.body) return;
+    onEmailContentChange((p) => (p.body === emailContent.body ? { ...p, body: next } : p));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateType]);
+  }, [templateType, emailContent.body]);
 
   return (
     <div className="space-y-6">
