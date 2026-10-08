@@ -50,18 +50,22 @@ def _user_response(user: User, db: Session | None = None) -> UserResponse:
 
 
 @router.get("/login")
-def login():
+def login(login_hint: str | None = Query(None)):
     """Get Microsoft SSO login URL."""
-    return auth_service.get_login_url()
+    return auth_service.get_login_url(login_hint=login_hint)
 
 
 @router.get("/callback")
 def callback(
-    code: str = Query(...),
-    state: str = Query(...),
+    code: str | None = Query(None),
+    state: str | None = Query(None),
+    error: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """Handle Microsoft OAuth callback and redirect to frontend."""
+    if error or not code or not state:
+        logger.error("Auth callback failed: %s", error or "missing code")
+        return RedirectResponse(url=f"{settings.frontend_url}/login?error=auth_failed")
     try:
         result = auth_service.handle_callback(code, state, db)
         redirect_url = (
@@ -69,6 +73,10 @@ def callback(
             f"?token={result['access_token']}"
         )
         return RedirectResponse(url=redirect_url)
+    except ValueError as exc:
+        logger.error("Auth callback failed: %s", exc)
+        error_code = "not_authorized" if "not authorized" in str(exc) else "auth_failed"
+        return RedirectResponse(url=f"{settings.frontend_url}/login?error={error_code}")
     except Exception as exc:
         logger.error("Auth callback failed: %s", exc)
         return RedirectResponse(
