@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from pydantic import ValidationError
@@ -40,6 +41,16 @@ EMAIL_SYSTEM = (
     "You are an elite B2B sales email copywriter. Write punchy, executive-level cold "
     "outreach emails with clear structure: short paragraphs, bold emphasis, and scannable "
     "bullet lists. Always respond with valid JSON only."
+)
+
+CAMPAIGN_TYPE_SYSTEM = (
+    "You are an elite B2B sales email copywriter. Given offering document content, "
+    "write three DISTINCT high-level outreach emails for campaign compose: "
+    "introduction, product demo invite, and follow-up. "
+    "Ground each email in different facets of the offering content "
+    "(value prop vs demo proof points vs reminder + next step). "
+    "Always respond with valid JSON only. Use placeholders {{Name}}, {{Company}}, "
+    "{{Designation}}, {{Industry}}."
 )
 
 
@@ -92,6 +103,36 @@ class OfferingAIService:
         payload = self._mock_generate(description)
         payload.is_mock = True
         return payload
+
+    def generate_campaign_type_templates(
+        self,
+        *,
+        offering_name: str,
+        content: str,
+    ) -> list[dict[str, str]]:
+        """Intro / Demo / Follow-up emails grounded in synced offering docs."""
+        name = (offering_name or "Our Solution").strip() or "Our Solution"
+        body = (content or "").strip()
+        if self.settings.use_mock_groq or not self.settings.groq_api_key:
+            return self._mock_campaign_type_templates(name, body)
+
+        last_err: Exception | None = None
+        for attempt in range(2):
+            try:
+                raw = self._groq_json(
+                    system=CAMPAIGN_TYPE_SYSTEM,
+                    user=self._campaign_type_prompt(name, body),
+                    temperature=0.6,
+                    max_tokens=2500,
+                )
+                return self._validate_campaign_type_templates(raw, name, body)
+            except Exception as exc:
+                last_err = exc
+                logger.warning(
+                    "Campaign type email generate attempt %s failed: %s", attempt + 1, exc
+                )
+        logger.warning("Falling back to mock campaign type templates: %s", last_err)
+        return self._mock_campaign_type_templates(name, body)
 
     def generate_email_templates(self, data: GenerateOfferingEmailRequest) -> dict:
         """Generate 2–3 distinct outreach email variants from offering context."""
@@ -200,6 +241,173 @@ class OfferingAIService:
 
     def _validate_semantic(self, raw: dict) -> SemanticMatchEvidence:
         return SemanticMatchEvidence.model_validate(raw)
+
+    def _campaign_type_prompt(self, offering_name: str, content: str) -> str:
+        clipped = (content or "").strip()[:6000] or "(no document content — invent carefully from the name only)"
+        return f"""Write exactly 3 B2B cold outreach emails a lead-gen team would send.
+
+Offering name: {offering_name}
+
+Offering document content (source of truth — summarize into 1–2 short sentences per email; NEVER paste long raw brochure text):
+---
+{clipped}
+---
+
+Return JSON with key "templates" — an array of exactly 3 objects in this order:
+1) type: "introduction", name: "Introduction Outreach"
+2) type: "demo", name: "Product Demo Invite"
+3) type: "follow_up", name: "Follow-up Email"
+
+Rules for each object:
+- subject: under 70 chars, specific to this offering + angle (not generic fluff)
+- body: plain text, 80–130 words, professional lead-gen tone
+- body MUST use this exact structure:
+  Hi {{{{Name}}}},
+
+  <1 short personalization line mentioning {{{{Company}}}} / {{{{Designation}}}} / {{{{Industry}}}} when natural>
+
+  <1–2 sentences of high-level offering value — different point per email type>
+
+  <1 soft CTA question>
+
+  Regards,
+  {{{{FromName}}}}
+  Lead Generation
+- Start with "Hi {{{{Name}}}}," (recipient name is merged from the contact / email local-part when missing)
+- End with "Regards," then {{{{FromName}}}} on the next line, then "Lead Generation"
+- Do NOT invent fake metrics. Prefer concrete capability language from the docs.
+- Keep bodies short (cold-email length). Never paste raw brochure / PDF text.
+- Each body must use DIFFERENT high-level points (intro = problem/fit, demo = proof, follow-up = reminder + ask)."""
+
+    @staticmethod
+    def _high_level_points(content: str, limit: int = 3) -> list[str]:
+        """Pull a few short, readable sentences from offering content (not mid-string dumps)."""
+        text = (content or "").replace("\r", "\n")
+        # Drop markdown headings noise
+        lines = []
+        for line in text.split("\n"):
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            lines.append(s)
+        joined = " ".join(lines)
+        joined = re.sub(r"\s+", " ", joined).strip()
+        if not joined:
+            return []
+        parts = re.split(r"(?<=[.!?])\s+", joined)
+        points: list[str] = []
+        for part in parts:
+            clean = part.strip()
+            if len(clean) < 40:
+                continue
+            if len(clean) > 180:
+                clean = clean[:177].rsplit(" ", 1)[0] + "…"
+            points.append(clean)
+            if len(points) >= limit:
+                break
+        if not points and joined:
+            points.append(joined[:160].rsplit(" ", 1)[0] + ("…" if len(joined) > 160 else ""))
+        return points
+
+    @staticmethod
+    def _ensure_regards_signature(body: str) -> str:
+        text = (body or "").rstrip()
+        if re.search(
+            r"(?i)\bregards,?\s*\n\s*\{\{\s*FromName\s*\}\}(\s*\n\s*Lead Generation)?\s*$",
+            text,
+        ):
+            if not re.search(r"(?i)Lead Generation\s*$", text):
+                return f"{text}\nLead Generation"
+            return text
+        # Strip trailing incomplete sign-offs then append our standard close
+        text = re.sub(r"(?is)\n*(thanks|best|regards|sincerely)[,!]?\s*$", "", text).rstrip()
+        text = re.sub(r"(?is)\n*Lead Generation\s*$", "", text).rstrip()
+        return f"{text}\n\nRegards,\n{{{{FromName}}}}\nLead Generation"
+
+    def _mock_campaign_type_templates(
+        self, offering_name: str, content: str
+    ) -> list[dict[str, str]]:
+        points = self._high_level_points(content, limit=3)
+        while len(points) < 3:
+            points.append(
+                f"{offering_name} helps teams like {{{{Company}}}} move from pilots to production with clearer governance."
+            )
+        intro_blurb, demo_blurb, follow_blurb = points[0], points[1], points[2]
+        return [
+            {
+                "name": "Introduction Outreach",
+                "subject": f"{offering_name} for {{{{Company}}}} — quick intro",
+                "body": (
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"I reached out because {{{{Designation}}}}s in {{{{Industry}}}} "
+                    f"often need a clearer path from AI experiments to production.\n\n"
+                    f"{intro_blurb}\n\n"
+                    f"Would you be open to a brief conversation about how this could help {{{{Company}}}}?\n\n"
+                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
+                ),
+                "template_source": "offering_ai",
+            },
+            {
+                "name": "Product Demo Invite",
+                "subject": f"15-min walkthrough of {offering_name}",
+                "body": (
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"Given your role at {{{{Company}}}}, I thought a short demo of "
+                    f"{offering_name} might be useful.\n\n"
+                    f"{demo_blurb}\n\n"
+                    f"Would a 15-minute walkthrough this week work for you?\n\n"
+                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
+                ),
+                "template_source": "offering_ai",
+            },
+            {
+                "name": "Follow-up Email",
+                "subject": f"Following up — {offering_name} for {{{{Company}}}}",
+                "body": (
+                    f"Hi {{{{Name}}}},\n\n"
+                    f"Just following up on {offering_name} for {{{{Company}}}} — "
+                    f"happy to keep this brief.\n\n"
+                    f"{follow_blurb}\n\n"
+                    f"Open to a 10-minute call if useful?\n\n"
+                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
+                ),
+                "template_source": "offering_ai",
+            },
+        ]
+
+    def _validate_campaign_type_templates(
+        self, raw: dict, offering_name: str, content: str
+    ) -> list[dict[str, str]]:
+        items = raw.get("templates") or raw.get("versions") or []
+        if not isinstance(items, list) or len(items) < 3:
+            raise ValueError("AI response missing 3 campaign templates")
+        expected = [
+            ("introduction", "Introduction Outreach"),
+            ("demo", "Product Demo Invite"),
+            ("follow_up", "Follow-up Email"),
+        ]
+        out: list[dict[str, str]] = []
+        for idx, (etype, ename) in enumerate(expected):
+            item = items[idx] if isinstance(items[idx], dict) else {}
+            subject = str(item.get("subject") or "").strip()
+            body = self._ensure_regards_signature(str(item.get("body") or "").strip())
+            if not subject or not body:
+                raise ValueError(f"AI template missing subject/body for {ename}")
+            if "{{Name}}" not in body and "{{name}}" not in body:
+                body = f"Hi {{{{Name}}}},\n\n{body}"
+            out.append(
+                {
+                    "name": ename,
+                    "subject": subject,
+                    "body": body,
+                    "template_source": "offering_ai",
+                    "type": str(item.get("type") or etype),
+                }
+            )
+        bodies = {t["body"] for t in out}
+        if len(bodies) < 2:
+            return self._mock_campaign_type_templates(offering_name, content)
+        return out
 
     def _email_prompt(self, data: GenerateOfferingEmailRequest) -> str:
         def join(items: list[str]) -> str:

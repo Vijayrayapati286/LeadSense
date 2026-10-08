@@ -165,7 +165,7 @@ export default function EmailLogsPage() {
         <MetricCard
           label="Verified emails"
           value={verifiedTotal}
-          hint={verifiedOnly ? 'Showing unique prospects — click to clear' : 'Click to view verified'}
+          hint={verifiedOnly ? 'Click to clear' : 'Click to view verified'}
           tone="green"
           icon={FiCheckCircle}
           onClick={toggleVerifiedOnly}

@@ -175,6 +175,7 @@ def apply_cost_guard_to_claimed_items(
         _apply_icp_record_to_bulk_item,
         find_icp_by_linkedin_urls,
         resolve_org_id,
+        sheet_agrees_with_icp,
     )
 
     result = CostGuardResult()
@@ -227,32 +228,44 @@ def apply_cost_guard_to_claimed_items(
         seen_urls.add(normalized)
 
         icp = icp_map.get(normalized)
+        sheet_differs = False
         if icp is not None:
-            _apply_icp_record_to_bulk_item(item, icp, now=now)
-            result.stats.skipped_icp += 1
-            _log_skip(
-                job_id=job_id, reason=REASON_ALREADY_IN_ICP, profile_url=normalized, item_id=item.id
+            source_row = item.source_row_json if isinstance(item.source_row_json, dict) else {}
+            if sheet_agrees_with_icp(source_row, icp):
+                _apply_icp_record_to_bulk_item(item, icp, now=now)
+                result.stats.skipped_icp += 1
+                _log_skip(
+                    job_id=job_id, reason=REASON_ALREADY_IN_ICP, profile_url=normalized, item_id=item.id
+                )
+                continue
+            sheet_differs = True
+            logger.info(
+                "ICP_URL_SHEET_DIFFERS job_id=%s item_id=%s profile_url=%s icp_id=%s",
+                job_id,
+                item.id,
+                normalized,
+                icp.id,
             )
-            continue
 
-        prior = find_prior_success(
-            db, normalized_url=normalized, exclude_job_id=job_id, exclude_item_id=item.id
-        )
-        if prior is not None:
-            _copy_extracted_fields(item, prior, now=now)
-            apply_verification(
-                item, match_threshold=match_threshold, review_threshold=review_threshold
+        if not sheet_differs:
+            prior = find_prior_success(
+                db, normalized_url=normalized, exclude_job_id=job_id, exclude_item_id=item.id
             )
-            if not item.verification_reason:
-                item.verification_reason = "Reused prior LinkedIn extraction (no Apify call)"
-            result.stats.skipped_reuse += 1
-            _log_skip(
-                job_id=job_id,
-                reason=REASON_REUSE_PRIOR_EXTRACTION,
-                profile_url=normalized,
-                item_id=item.id,
-            )
-            continue
+            if prior is not None:
+                _copy_extracted_fields(item, prior, now=now)
+                apply_verification(
+                    item, match_threshold=match_threshold, review_threshold=review_threshold
+                )
+                if not item.verification_reason:
+                    item.verification_reason = "Reused prior LinkedIn extraction (no Apify call)"
+                result.stats.skipped_reuse += 1
+                _log_skip(
+                    job_id=job_id,
+                    reason=REASON_REUSE_PRIOR_EXTRACTION,
+                    profile_url=normalized,
+                    item_id=item.id,
+                )
+                continue
 
         in_flight = find_in_flight(
             db, normalized_url=normalized, exclude_job_id=job_id, exclude_item_ids=exclude_ids

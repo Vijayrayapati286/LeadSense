@@ -187,12 +187,15 @@ def process_due_followups() -> None:
 
             recipient = cr.recipient
             context = build_recipient_context(recipient)
+            owner = _resolve_sender(cr)
+            if owner and getattr(owner, "name", None):
+                context["FromName"] = owner.name
+                context["fromname"] = owner.name
             subject = render_template(stage.subject, context)
             body = render_template(stage.body, context)
             if stage.closing:
                 body = f"{body}\n\n{render_template(stage.closing, context)}"
 
-            owner = _resolve_sender(cr)
             if not _gate_before_ses(db, cr, recipient, owner):
                 continue
 
@@ -316,6 +319,10 @@ def process_queued_initial_sends() -> None:
                 db.commit()
                 continue
             context = build_recipient_context(recipient)
+            owner = _resolve_sender(cr)
+            if owner and getattr(owner, "name", None):
+                context["FromName"] = owner.name
+                context["fromname"] = owner.name
             subject = render_template(template.subject, context)
             body_html, body_text = render_email_body(template.body, template.type, context)
             if template.closing:
@@ -327,7 +334,6 @@ def process_queued_initial_sends() -> None:
                 body_html = f"{body_html}<br><br>{html.escape(closing)}"
                 body_text = f"{body_text}\n\n{closing}"
 
-            owner = _resolve_sender(cr)
             if not _gate_before_ses(db, cr, recipient, owner):
                 continue
 

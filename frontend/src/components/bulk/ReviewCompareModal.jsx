@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   FiAlertTriangle,
   FiCheck,
@@ -37,34 +38,68 @@ function buildConflicts(item) {
 
 /** One cell in the side-by-side sheets. Both columns render every field in the
  * same order so each pair lines up on a shared grid row. */
-function FieldCell({ label, value, side, isDiff, selected, custom, onClick, disabled }) {
+function FieldCell({
+  label,
+  value,
+  side,
+  isDiff,
+  selected,
+  custom,
+  onClick,
+  disabled,
+  interactive = false,
+  showInput = false,
+  inputValue = '',
+  onInput,
+}) {
   const isSheet = side === 'sheet';
   const empty = !hasValue(value);
+  const canClick = interactive && !disabled && !showInput;
 
   let tone = 'border-transparent bg-slate-50/40';
-  if (isDiff && selected) {
+  if (showInput || (isDiff && (selected || custom)) || custom) {
     tone = isSheet
       ? 'border-slate-400 bg-white ring-2 ring-slate-200'
       : 'border-primary-400 bg-primary-50/60 ring-2 ring-primary-100';
   } else if (isDiff) {
     tone = 'border-amber-200 bg-amber-50/40 hover:border-amber-300 hover:bg-amber-50';
+  } else if (canClick) {
+    tone = 'border-slate-200 bg-white hover:border-primary-200';
+  }
+
+  if (showInput) {
+    return (
+      <div className={`flex h-full w-full flex-col rounded-lg border px-3 py-2.5 text-left ${tone}`}>
+        <span className="mb-1 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-400">
+          {label}
+        </span>
+        <input
+          type="text"
+          autoFocus
+          disabled={disabled}
+          value={inputValue}
+          onChange={(event) => onInput?.(event.target.value)}
+          className="w-full rounded-md border border-primary-300 bg-white px-2 py-1 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary-200"
+        />
+      </div>
+    );
   }
 
   return (
     <button
       type="button"
-      disabled={disabled || !isDiff}
+      disabled={!canClick}
       onClick={onClick}
-      aria-pressed={isDiff ? selected : undefined}
+      aria-pressed={isDiff ? selected || custom : undefined}
       className={`flex h-full w-full flex-col rounded-lg border px-3 py-2.5 text-left transition-all ${tone} ${
-        isDiff && !disabled ? 'cursor-pointer' : 'cursor-default'
+        canClick ? 'cursor-pointer' : 'cursor-default'
       } disabled:opacity-100`}
     >
       <span className="mb-1 flex items-center justify-between gap-2">
         <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-slate-400">
           {label}
         </span>
-        {isDiff && selected ? (
+        {isDiff && (selected || custom) ? (
           <span
             className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-white ${
               isSheet ? 'bg-slate-600' : 'bg-primary-600'
@@ -79,7 +114,7 @@ function FieldCell({ label, value, side, isDiff, selected, custom, onClick, disa
         className={`block break-words text-sm leading-5 ${
           empty
             ? 'italic text-slate-400'
-            : isDiff
+            : isDiff || custom
               ? 'font-medium text-slate-900'
               : 'text-slate-500'
         }`}
@@ -121,6 +156,7 @@ export default function ReviewCompareModal({
         resolution: preferSheet ? SHEET : LINKEDIN,
         edited_value: preferSheet ? item?.uploaded?.[f.key] || '' : extracted,
         editing: false,
+        baseSide: preferSheet ? 'sheet' : 'linkedin',
       };
     });
     return map;
@@ -129,9 +165,11 @@ export default function ReviewCompareModal({
 
   const [decisions, setDecisions] = useState(initial);
   const [saving, setSaving] = useState(false);
-  const [editField, setEditField] = useState(null);
+  const [editingAll, setEditingAll] = useState(false);
+  const [activeEdit, setActiveEdit] = useState(null);
   const [visible, setVisible] = useState(false);
   const dialogRef = useRef(null);
+  const editSnapshot = useRef(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -140,7 +178,9 @@ export default function ReviewCompareModal({
     }
     setDecisions(initial);
     setSaving(false);
-    setEditField(null);
+    setEditingAll(false);
+    setActiveEdit(null);
+    editSnapshot.current = null;
     const frame = requestAnimationFrame(() => setVisible(true));
     const focusFrame = requestAnimationFrame(() => dialogRef.current?.focus());
     document.body.style.overflow = 'hidden';
@@ -153,24 +193,58 @@ export default function ReviewCompareModal({
 
   const isBusy = busy || saving;
 
+  const payloadFields = useMemo(() => {
+    const keys = new Set(hasConflicts ? conflicts.map((c) => c.field) : FIELDS.map((f) => f.key));
+    FIELDS.forEach((f) => {
+      if (decisions[f.key]?.resolution === MANUAL) keys.add(f.key);
+    });
+    return FIELDS.filter((f) => keys.has(f.key));
+  }, [conflicts, decisions, hasConflicts]);
+
   const ready = useMemo(() => {
-    const fields = hasConflicts ? conflicts : FIELDS.map((f) => ({ field: f.key }));
-    return fields.every((c) => {
-      const d = decisions[c.field];
+    return payloadFields.every((f) => {
+      const d = decisions[f.key];
       if (!d) return false;
       if (d.resolution === MANUAL && !String(d.edited_value || '').trim()) return false;
       return Boolean(d.resolution);
     });
-  }, [conflicts, decisions, hasConflicts]);
+  }, [payloadFields, decisions]);
 
   function setField(field, patch) {
     setDecisions((prev) => ({ ...prev, [field]: { ...prev[field], ...patch } }));
   }
 
   function chooseSource(field, resolution) {
+    const side = resolution === SHEET ? 'sheet' : 'linkedin';
     const source = resolution === SHEET ? item?.uploaded?.[field] : item?.extracted?.[field];
-    setField(field, { resolution, editing: false, edited_value: source || '' });
-    if (editField === field) setEditField(null);
+    setField(field, { resolution, editing: false, edited_value: source || '', baseSide: side });
+  }
+
+  function openUniversalEdit() {
+    editSnapshot.current = decisions;
+    setActiveEdit(null);
+    setEditingAll(true);
+  }
+
+  function cancelUniversalEdit() {
+    if (editSnapshot.current) setDecisions(editSnapshot.current);
+    editSnapshot.current = null;
+    setActiveEdit(null);
+    setEditingAll(false);
+  }
+
+  function startCellEdit(field, side) {
+    const d = decisions[field] || {};
+    const source = side === 'sheet' ? item?.uploaded?.[field] : item?.extracted?.[field];
+    const keepCustom = d.resolution === MANUAL && d.baseSide === side;
+    setActiveEdit({ field, side });
+    if (keepCustom) return;
+    setField(field, {
+      resolution: side === 'sheet' ? SHEET : LINKEDIN,
+      editing: true,
+      edited_value: source || '',
+      baseSide: side,
+    });
   }
 
   function useAll(side) {
@@ -183,31 +257,28 @@ export default function ReviewCompareModal({
           resolution: LINKEDIN,
           editing: false,
           edited_value: item?.extracted?.[f.key] || '',
+          baseSide: 'linkedin',
         };
         return;
       }
       const value = resolution === SHEET ? item?.uploaded?.[f.key] : item?.extracted?.[f.key];
-      next[f.key] = { resolution, editing: false, edited_value: value || '' };
+      next[f.key] = {
+        resolution,
+        editing: false,
+        edited_value: value || '',
+        baseSide: side === 'sheet' ? 'sheet' : 'linkedin',
+      };
     });
     setDecisions(next);
-    setEditField(null);
-  }
-
-  function startEdit(field) {
-    const d = decisions[field] || {};
-    const seed =
-      d.edited_value ||
-      (d.resolution === SHEET ? item?.uploaded?.[field] : item?.extracted?.[field]) ||
-      '';
-    setField(field, { resolution: MANUAL, editing: true, edited_value: seed });
-    setEditField(field);
+    setEditingAll(false);
+    setActiveEdit(null);
+    editSnapshot.current = null;
   }
 
   function buildPayload() {
-    const fields = hasConflicts ? conflicts : FIELDS.map((f) => ({ field: f.key }));
-    return fields.map((c) => {
-      const d = decisions[c.field];
-      const row = { field: c.field, resolution: d.resolution };
+    return payloadFields.map((f) => {
+      const d = decisions[f.key];
+      const row = { field: f.key, resolution: d.resolution };
       if (d.resolution === MANUAL) row.edited_value = d.edited_value;
       return row;
     });
@@ -297,8 +368,11 @@ export default function ReviewCompareModal({
     hasValue(value),
   );
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6">
+  return createPortal(
+    <div
+      className="fixed inset-y-0 right-0 z-[55] flex items-center justify-center p-3 transition-[left] duration-300 sm:p-6"
+      style={{ left: 'var(--app-sidebar, 16rem)' }}
+    >
       <div
         className={`absolute inset-0 bg-slate-900/50 backdrop-blur-[3px] transition-opacity duration-300 ${
           visible ? 'opacity-100' : 'opacity-0'
@@ -373,9 +447,26 @@ export default function ReviewCompareModal({
         {/* Body */}
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-7">
           {hasConflicts ? (
-            <p className="text-sm text-slate-600">
-              Highlighted fields differ. Click a value to keep it, or use a whole sheet.
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-slate-600">
+                Highlighted fields differ. Click Edit, then click any field — including a match — to change it.
+              </p>
+              {canResolve ? (
+                <button
+                  type="button"
+                  disabled={isBusy || editingAll}
+                  onClick={openUniversalEdit}
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
+                    editingAll
+                      ? 'border-primary-600 bg-primary-600 text-white'
+                      : 'border-slate-300 bg-white text-slate-700 hover:border-primary-300 hover:text-primary-700'
+                  }`}
+                >
+                  <FiEdit2 size={13} />
+                  {editingAll ? 'Editing' : 'Edit'}
+                </button>
+              ) : null}
+            </div>
           ) : (
             <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5">
               <FiCheck className="shrink-0 text-emerald-600" size={18} />
@@ -440,28 +531,55 @@ export default function ReviewCompareModal({
             {FIELDS.map((f) => {
               const isDiff = conflictKeys.has(f.key);
               const decision = decisions[f.key];
-              const custom = isDiff && decision?.resolution === MANUAL;
+              const customSheet = decision?.resolution === MANUAL && decision?.baseSide === 'sheet';
+              const customLinkedIn = decision?.resolution === MANUAL && decision?.baseSide === 'linkedin';
+              const sheetInput = editingAll && activeEdit?.field === f.key && activeEdit?.side === 'sheet';
+              const linkedInInput = editingAll && activeEdit?.field === f.key && activeEdit?.side === 'linkedin';
               return (
                 <Fragment key={f.key}>
                   <FieldCell
                     label={f.label}
-                    value={item?.uploaded?.[f.key]}
+                    value={customSheet ? decision?.edited_value : item?.uploaded?.[f.key]}
                     side="sheet"
                     isDiff={isDiff}
                     selected={decision?.resolution === SHEET}
-                    custom={custom}
+                    custom={customSheet}
+                    interactive={isDiff || editingAll}
                     disabled={isBusy || !canResolve}
-                    onClick={() => chooseSource(f.key, SHEET)}
+                    showInput={sheetInput}
+                    inputValue={decision?.edited_value || ''}
+                    onInput={(value) =>
+                      setField(f.key, {
+                        edited_value: value,
+                        resolution: MANUAL,
+                        editing: true,
+                        baseSide: 'sheet',
+                      })
+                    }
+                    onClick={() => (editingAll ? startCellEdit(f.key, 'sheet') : chooseSource(f.key, SHEET))}
                   />
                   <FieldCell
                     label={f.label}
-                    value={item?.extracted?.[f.key]}
+                    value={customLinkedIn ? decision?.edited_value : item?.extracted?.[f.key]}
                     side="linkedin"
                     isDiff={isDiff}
                     selected={decision?.resolution === LINKEDIN}
-                    custom={custom}
+                    custom={customLinkedIn}
+                    interactive={isDiff || editingAll}
                     disabled={isBusy || !canResolve}
-                    onClick={() => chooseSource(f.key, LINKEDIN)}
+                    showInput={linkedInInput}
+                    inputValue={decision?.edited_value || ''}
+                    onInput={(value) =>
+                      setField(f.key, {
+                        edited_value: value,
+                        resolution: MANUAL,
+                        editing: true,
+                        baseSide: 'linkedin',
+                      })
+                    }
+                    onClick={() =>
+                      editingAll ? startCellEdit(f.key, 'linkedin') : chooseSource(f.key, LINKEDIN)
+                    }
                   />
                 </Fragment>
               );
@@ -474,83 +592,6 @@ export default function ReviewCompareModal({
               {clearedFields.map((f) => f.label).join(', ')} will be saved empty. Pick the other
               sheet or type a value to keep data.
             </p>
-          ) : null}
-
-          {/* Manual edit */}
-          {canResolve && hasConflicts ? (
-            <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/80 p-3.5">
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Or type your own value
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {conflicts.map((c) => {
-                  const f = FIELDS.find((x) => x.key === c.field);
-                  const active = editField === c.field;
-                  const isCustom = decisions[c.field]?.resolution === MANUAL;
-                  return (
-                    <button
-                      key={c.field}
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => startEdit(c.field)}
-                      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
-                        active || isCustom
-                          ? 'border-primary-300 bg-primary-50 text-primary-800'
-                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                      }`}
-                    >
-                      <FiEdit2 size={11} />
-                      {f?.label || c.field}
-                    </button>
-                  );
-                })}
-              </div>
-              {editField ? (
-                <div className="animate-slide-up-in space-y-2 pt-1">
-                  <textarea
-                    rows={2}
-                    autoFocus
-                    disabled={isBusy}
-                    className="w-full rounded-lg border border-primary-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary-200"
-                    value={decisions[editField]?.edited_value || ''}
-                    onChange={(e) =>
-                      setField(editField, {
-                        edited_value: e.target.value,
-                        resolution: MANUAL,
-                        editing: true,
-                      })
-                    }
-                    placeholder={`Custom ${FIELDS.find((f) => f.key === editField)?.label || 'value'}`}
-                  />
-                  <div className="flex gap-3">
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => {
-                        setField(editField, { editing: false });
-                        setEditField(null);
-                      }}
-                      className="text-xs font-semibold text-primary-700 hover:underline"
-                    >
-                      Done
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() =>
-                        chooseSource(
-                          editField,
-                          hasValue(item?.extracted?.[editField]) ? LINKEDIN : SHEET,
-                        )
-                      }
-                      className="text-xs text-slate-500 hover:text-slate-700"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
           ) : null}
 
           {resolvedFields.length ? (
@@ -687,19 +728,30 @@ export default function ReviewCompareModal({
           </div>
           {canResolve ? (
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={reject}
-                disabled={isBusy}
-                className="btn-secondary inline-flex items-center gap-2 px-5 py-2.5 text-rose-700 hover:bg-rose-50 hover:border-rose-200"
-              >
-                <FiX size={16} />
-                {isBusy
-                  ? 'Saving…'
-                  : autoAdvance && position?.total > 1
-                    ? 'Reject & next'
-                    : 'Reject'}
-              </button>
+              {editingAll ? (
+                <button
+                  type="button"
+                  onClick={cancelUniversalEdit}
+                  disabled={isBusy}
+                  className="btn-secondary px-5 py-2.5"
+                >
+                  Cancel
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={reject}
+                  disabled={isBusy}
+                  className="btn-secondary inline-flex items-center gap-2 px-5 py-2.5 text-rose-700 hover:bg-rose-50 hover:border-rose-200"
+                >
+                  <FiX size={16} />
+                  {isBusy
+                    ? 'Saving…'
+                    : autoAdvance && position?.total > 1
+                      ? 'Reject & next'
+                      : 'Reject'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={approve}
@@ -709,16 +761,19 @@ export default function ReviewCompareModal({
                 <FiCheck size={16} />
                 {isBusy
                   ? 'Saving…'
-                  : hasConflicts
-                    ? autoAdvance && position?.total > 1
-                      ? 'Approve & next'
-                      : 'Approve'
-                    : 'Verify'}
+                  : editingAll
+                    ? 'Save'
+                    : hasConflicts
+                      ? autoAdvance && position?.total > 1
+                        ? 'Approve & next'
+                        : 'Approve'
+                      : 'Verify'}
               </button>
             </div>
           ) : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

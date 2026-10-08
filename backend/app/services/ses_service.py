@@ -218,6 +218,12 @@ class SESService:
 
         for recipient in recipients:
             context = {key: recipient.get(field, "") for key, field in KNOWN_MERGE_FIELDS.items()}
+            if not str(context.get("Name") or "").strip():
+                from app.utils.helpers import name_from_email
+
+                context["Name"] = name_from_email(recipient.get("email") or context.get("Email"))
+            if from_name:
+                context["FromName"] = from_name
             add_known_field_case_aliases(context)
 
             rendered_subject = render_template(subject_template, context)

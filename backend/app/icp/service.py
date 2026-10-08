@@ -20,10 +20,12 @@ from app.icp.models import (
 from app.linkedin.bulk_models import BulkJobItemRow, ITEM_SUCCESS
 from app.linkedin.validator import is_linkedin_in_profile_url, normalize_profile_url
 from app.linkedin.verification import (
+    COMPARE_FIELDS,
     VERIFY_ALREADY_EXISTS,
     VERIFY_NOT_VERIFIED,
     VERIFY_RESOLVED,
     VERIFY_VERIFIED,
+    compare_field,
     normalize_company,
     normalize_name,
     original_fields,
@@ -1320,6 +1322,34 @@ def find_icp_by_linkedin_urls(
     return {row.linkedin_url: row for row in q.all() if row.linkedin_url}
 
 
+def sheet_agrees_with_icp(source_row: dict[str, Any] | None, icp: IcpRecordRow) -> bool:
+    """True when every filled sheet field agrees with the saved ICP record.
+
+    Blank sheet cells and blank saved fields are ignored. A real difference
+    (company, title, name, or location) means the profile should be extracted
+    again instead of being marked already exists.
+    """
+    row = source_row if isinstance(source_row, dict) else {}
+    originals = original_fields(row)
+    stored = {
+        "name": icp.name,
+        "designation": icp.designation,
+        "company": icp.company_name,
+        "location": icp.location,
+        "company_location": icp.company_location,
+    }
+    for field in COMPARE_FIELDS:
+        uploaded = originals.get(field)
+        saved = stored.get(field)
+        if not uploaded or not str(uploaded).strip():
+            continue
+        if not saved or not str(saved).strip():
+            continue
+        if compare_field(field, uploaded, saved, source_row=row) is False:
+            return False
+    return True
+
+
 def _apply_icp_record_to_bulk_item(item: BulkJobItemRow, icp: IcpRecordRow, *, now: datetime) -> None:
     """Mark a bulk job item as satisfied from an existing ICP record (no extraction)."""
     from app.linkedin.bulk_models import ITEM_SUCCESS
@@ -1341,7 +1371,12 @@ def _apply_icp_record_to_bulk_item(item: BulkJobItemRow, icp: IcpRecordRow, *, n
 def skip_job_items_already_in_icp(
     db: Session, job_id: str, *, user_id: int | None, org_id: str | None = None
 ) -> int:
-    """Skip extraction for canonical URLs already present in the ICP Database."""
+    """Skip extraction when the LinkedIn URL is already in ICP and the sheet agrees.
+
+    A URL hit is not enough. Filled sheet values are compared with the saved
+    record. Any real difference stays in the extract queue so LinkedIn can be
+    checked and conflicts shown.
+    """
     from app.linkedin.bulk_jobs import copy_canonical_results_to_duplicates, get_job_row, refresh_job_counters
     from app.linkedin.bulk_models import CLAIMABLE_ITEM_STATUSES, BulkJobItemRow
 
@@ -1371,6 +1406,16 @@ def skip_job_items_already_in_icp(
     for item in items:
         icp = icp_map.get(item.normalized_url)
         if not icp:
+            continue
+        source_row = item.source_row_json if isinstance(item.source_row_json, dict) else {}
+        if not sheet_agrees_with_icp(source_row, icp):
+            logger.info(
+                "ICP_URL_SHEET_DIFFERS job_id=%s item_id=%s profile_url=%s icp_id=%s",
+                job_id,
+                item.id,
+                item.normalized_url,
+                icp.id,
+            )
             continue
         _apply_icp_record_to_bulk_item(item, icp, now=now)
         skipped += 1

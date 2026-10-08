@@ -54,7 +54,7 @@ class AuthService:
             authority=self.settings.azure_authority,
         )
 
-    def get_login_url(self) -> dict:
+    def get_login_url(self, login_hint: str | None = None) -> dict:
         """Generate Microsoft login URL or dev-mode login info."""
         if not self.settings.is_azure_configured:
             return {
@@ -67,10 +67,19 @@ class AuthService:
         _auth_states[state] = datetime.now(timezone.utc) + timedelta(minutes=10)
 
         msal_app = self._get_msal_app()
+        if not msal_app:
+            return {
+                "login_url": None,
+                "dev_mode": True,
+                "message": "Azure AD not configured. Use dev login endpoint.",
+            }
+
+        hint = (login_hint or "").strip() or None
         auth_url = msal_app.get_authorization_request_url(
             scopes=self.settings.azure_scopes,
             redirect_uri=self.settings.azure_redirect_uri,
             state=state,
+            login_hint=hint,
         )
         return {"login_url": auth_url, "dev_mode": False, "state": state}
 

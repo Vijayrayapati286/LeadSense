@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
 from app.models import User
+from app.offerings.models import OfferingRow
 from app.offerings.service import get_offering
 from app.schemas.schemas import (
     AITemplateRequest,
@@ -19,39 +20,42 @@ from app.utils.helpers import add_known_field_case_aliases, extract_placeholders
 router = APIRouter(prefix="/templates", tags=["Templates"])
 ai_service = AIService()
 
-# Hardcoded placeholder templates
+# Fallback when no offering is selected (plain strings — use {{Field}}, not f-string braces)
 PLACEHOLDER_TEMPLATES = [
     {
         "id": 1,
         "name": "Introduction Outreach",
-        "subject": "Quick introduction — {{{{Company}}}} & Our Solution",
+        "subject": "Quick intro — helping {{Company}} scale AI operations",
         "body": (
-            "Hello {{{{Name}}}},\n\n"
-            "I came across {{{{Company}}}} and was impressed by your work in the {{{{Industry}}}} space. "
-            "As {{{{Designation}}}}, I thought you might be interested in how we've helped similar companies.\n\n"
-            "Would you be open to a brief chat?"
+            "Hi {{Name}},\n\n"
+            "I reached out because {{Designation}}s in {{Industry}} often need a clearer path "
+            "from pilots to production.\n\n"
+            "We help teams standardize and govern AI/RAG workloads so experiments become durable operations.\n\n"
+            "Would you be open to a brief conversation about {{Company}}?\n\n"
+            "Regards,\n{{FromName}}\nLead Generation"
         ),
     },
     {
         "id": 2,
         "name": "Product Demo Invite",
-        "subject": "Exclusive demo for {{{{Company}}}} — Limited slots",
+        "subject": "15-min walkthrough for {{Company}}",
         "body": (
-            "Hi {{{{Name}}}},\n\n"
-            "We're offering select {{{{Industry}}}} leaders an exclusive product demo. "
-            "Given your role as {{{{Designation}}}} at {{{{Company}}}}, I believe this could be valuable.\n\n"
-            "Can I reserve a slot for you this week?"
+            "Hi {{Name}},\n\n"
+            "Given your role at {{Company}}, a short walkthrough may be useful.\n\n"
+            "We can cover how teams in {{Industry}} move from fragmented tooling to a governed production setup.\n\n"
+            "Would a 15-minute demo this week work?\n\n"
+            "Regards,\n{{FromName}}\nLead Generation"
         ),
     },
     {
         "id": 3,
         "name": "Follow-up Email",
-        "subject": "Following up — {{{{Name}}}}",
+        "subject": "Following up — {{Company}}",
         "body": (
-            "Dear {{{{Name}}}},\n\n"
-            "I wanted to follow up on my previous email. I understand you're busy as {{{{Designation}}}} "
-            "at {{{{Company}}}}, but I believe our solution could significantly benefit your team.\n\n"
-            "Would a 10-minute call work for you?"
+            "Hi {{Name}},\n\n"
+            "Just following up in case this is still relevant for {{Company}}.\n\n"
+            "Happy to keep it to 10 minutes if a quick call would help.\n\n"
+            "Regards,\n{{FromName}}\nLead Generation"
         ),
     },
 ]
@@ -65,33 +69,120 @@ def _offering_template_display_name(offering_name: str | None, stored_name: str 
     return "Introduction Outreach"
 
 
+def _resolve_offering_for_templates(
+    db: Session,
+    offering_id: int,
+    current_user: User,
+) -> OfferingRow | None:
+    """Load offering for campaign templates (user-owned or same-org SmartOps sync)."""
+    user_id = getattr(current_user, "id", None)
+    org_id = getattr(current_user, "org_id", None)
+    row = get_offering(db, offering_id, user_id=user_id)
+    if row:
+        return row
+    row = get_offering(db, offering_id, user_id=None, organization_id=org_id)
+    if row:
+        return row
+    if org_id:
+        return (
+            db.query(OfferingRow)
+            .filter(OfferingRow.id == offering_id, OfferingRow.organization_id == org_id)
+            .first()
+        )
+    return None
+
+
+def _templates_from_offering(row: OfferingRow) -> list[dict]:
+    """Build Introduction / Product Demo / Follow-up from offering docs (AI-by-type)."""
+    from app.offerings.ai_service import OfferingAIService
+
+    offering_name = (row.name or "Our Solution").strip()
+    raw_content = (row.content or row.description or row.short_description or "").strip()
+    oid = row.id
+
+    generated = OfferingAIService().generate_campaign_type_templates(
+        offering_name=offering_name,
+        content=raw_content,
+    )
+    id_by_name = {
+        "Introduction Outreach": f"offering-{oid}-intro",
+        "Product Demo Invite": f"offering-{oid}-demo",
+        "Follow-up Email": f"offering-{oid}-followup",
+    }
+    templates = []
+    for item in generated:
+        name = item.get("name") or "Introduction Outreach"
+        templates.append(
+            {
+                "id": id_by_name.get(name, f"offering-{oid}-intro"),
+                "name": name,
+                "subject": item["subject"],
+                "body": item["body"],
+                "source": "offering",
+                "template_source": item.get("template_source") or "offering_ai",
+                "offering_id": oid,
+                "offering_name": offering_name,
+            }
+        )
+
+    # Prefer grounded Intro/Demo/Follow-up over a raw uploaded brochure paste.
+    # Only keep the stored email_template when it already looks like a short outreach email.
+    email_template = getattr(row, "email_template", None) or {}
+    stored_subject = str(email_template.get("subject") or "").strip()
+    stored_body = str(email_template.get("body") or "").strip()
+    if (
+        templates
+        and stored_subject
+        and stored_body
+        and _is_usable_outreach_email(stored_subject, stored_body)
+    ):
+        normalized_body = OfferingAIService._ensure_regards_signature(stored_body)
+        if "{{Name}}" not in normalized_body and "{{name}}" not in normalized_body:
+            normalized_body = f"Hi {{{{Name}}}},\n\n{normalized_body}"
+        templates[0] = {
+            "id": f"offering-{oid}-intro",
+            "name": "Introduction Outreach",
+            "subject": stored_subject,
+            "body": normalized_body,
+            "source": "offering",
+            "template_source": email_template.get("source") or "upload",
+            "source_filename": email_template.get("source_filename"),
+            "offering_id": oid,
+            "offering_name": offering_name,
+            "display_name": _offering_template_display_name(
+                offering_name, email_template.get("name")
+            ),
+        }
+    return templates
+
+
+def _is_usable_outreach_email(subject: str, body: str) -> bool:
+    """Reject long brochure dumps / incomplete drafts as campaign Intro templates."""
+    text = (body or "").strip()
+    if not (subject or "").strip() or not text:
+        return False
+    if len(text) > 1400:
+        return False
+    lower = text.lower()
+    if "{{name}}" not in lower and "hi {{" not in lower:
+        return False
+    return True
+
+
 @router.get("/placeholder-templates")
 def get_placeholder_templates(
     offering_id: int | None = Query(None, ge=1),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return email templates for campaign compose — offering email only when saved on offering."""
-    templates: list[dict] = []
+    """Return Offering Email templates for campaign compose.
+
+    When ``offering_id`` is set, Introduction / Product Demo / Follow-up are
+    grounded in that offering's synced SmartOps content.
+    """
     if offering_id is not None:
-        row = get_offering(db, offering_id, user_id=getattr(current_user, "id", None))
-        email_template = getattr(row, "email_template", None) if row else None
-        if email_template and email_template.get("subject") and email_template.get("body"):
-            offering_name = getattr(row, "name", None) if row else None
-            templates = [
-                {
-                    "id": f"offering-{offering_id}",
-                    "name": _offering_template_display_name(offering_name, email_template.get("name")),
-                    "subject": email_template["subject"],
-                    "body": email_template["body"],
-                    "source": "offering",
-                    "template_source": email_template.get("source"),
-                    "source_filename": email_template.get("source_filename"),
-                    "offering_name": offering_name,
-                },
-            ]
-        else:
-            templates = list(PLACEHOLDER_TEMPLATES)
+        row = _resolve_offering_for_templates(db, offering_id, current_user)
+        templates = _templates_from_offering(row) if row else list(PLACEHOLDER_TEMPLATES)
     else:
         templates = list(PLACEHOLDER_TEMPLATES)
     enriched = []

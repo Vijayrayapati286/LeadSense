@@ -9,9 +9,31 @@ from app.linkedin.verification import (
     normalize_company,
     normalize_country,
     normalize_location,
+    normalize_name,
     original_fields,
     values_equivalent,
 )
+
+
+def test_name_ignores_linkedin_credentials():
+    assert normalize_name("Harold Rogers, J.D.,SHRM-CP, GBA") == normalize_name("Harold Rogers")
+    result = compare_uploaded_vs_extracted(
+        {
+            "Name": "Harold Rogers",
+            "Designation": "Vice President, Human Resources",
+            "Company": "Blue Cross & Blue Shield of Mississippi",
+            "Location": "Flowood, Mississippi, United States",
+            "Company Location": "Flowood, Mississippi, United States",
+        },
+        extracted_name="Harold Rogers, J.D.,SHRM-CP, GBA",
+        extracted_designation="Vice President, Human Resources",
+        extracted_company="Blue Cross & Blue Shield of Mississippi",
+        extracted_location="Flowood, Mississippi, United States",
+    )
+    assert result.name_match is True
+    assert result.designation_match is True
+    assert result.company_match is True
+    assert result.status == VERIFY_VERIFIED
 
 
 def test_company_suffix_normalizes_to_same_core():

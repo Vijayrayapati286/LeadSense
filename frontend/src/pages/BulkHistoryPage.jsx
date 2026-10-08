@@ -295,6 +295,7 @@ export default function BulkHistoryPage() {
           label="All jobs"
           value={counts.all}
           hint="Across every status"
+          tone="gold"
           icon={FiLayers}
           onClick={() => applyParams('all', appliedQ)}
           active={filterKey === 'all'}
@@ -312,7 +313,7 @@ export default function BulkHistoryPage() {
           label="Needs review"
           value={counts.needs_review}
           hint="Waiting on a decision"
-          tone="amber"
+          tone="sky"
           icon={FiAlertCircle}
           onClick={() => applyParams('needs_review', appliedQ)}
           active={filterKey === 'needs_review'}
