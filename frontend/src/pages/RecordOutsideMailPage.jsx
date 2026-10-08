@@ -120,6 +120,7 @@ export default function RecordOutsideMailPage() {
   const toast = useToast();
   const { user } = useAuth();
   const bodyRef = useRef(null);
+  const subjectEdited = useRef(false);
 
   const [mode, setMode] = useState('existing');
   const [campaigns, setCampaigns] = useState([]);
@@ -133,6 +134,7 @@ export default function RecordOutsideMailPage() {
   const [selected, setSelected] = useState([]);
 
   const [subject, setSubject] = useState('');
+  const [subjectLocked, setSubjectLocked] = useState(true);
   const [body, setBody] = useState('');
   const [sentDate, setSentDate] = useState(todayInputValue);
   const [followUpOpen, setFollowUpOpen] = useState(false);
@@ -338,6 +340,7 @@ export default function RecordOutsideMailPage() {
 
       <form
         className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card"
+        autoComplete="off"
         onSubmit={(event) => {
           event.preventDefault();
           if (canSave) handleSave(false);
@@ -518,7 +521,10 @@ export default function RecordOutsideMailPage() {
                 ))}
                 <input
                   id="recipient-email"
+                  name="recipient-email"
                   type="text"
+                  inputMode="email"
+                  autoComplete="email"
                   className="min-w-[12rem] flex-1 bg-transparent px-1 py-1 text-sm text-slate-900 outline-none placeholder:text-slate-400"
                   value={contactEmail}
                   onChange={(e) => {
@@ -548,7 +554,7 @@ export default function RecordOutsideMailPage() {
 
           <div>
             <div className="flex items-end justify-between gap-3">
-              <FieldLabel htmlFor="email-subject" required>
+              <FieldLabel htmlFor="outside-mail-subject" required>
                 Email subject
               </FieldLabel>
               <span className={`mb-1.5 text-xs ${subject.length >= SUBJECT_LIMIT ? 'text-rose-500' : 'text-slate-400'}`}>
@@ -556,17 +562,38 @@ export default function RecordOutsideMailPage() {
               </span>
             </div>
             <input
-              id="email-subject"
+              id="outside-mail-subject"
+              name="outside-mail-subject"
               className="control"
               value={subject}
               maxLength={SUBJECT_LIMIT}
-              onChange={(e) => setSubject(e.target.value)}
+              autoComplete="off"
+              placeholder="Subject of the email you sent"
+              readOnly={subjectLocked}
+              onFocus={() => setSubjectLocked(false)}
+              onKeyDown={() => {
+                subjectEdited.current = true;
+              }}
+              onPaste={() => {
+                subjectEdited.current = true;
+              }}
+              onDrop={() => {
+                subjectEdited.current = true;
+              }}
+              onChange={(e) => {
+                // Ignore browser autofill, which copies the recipient address in without a keystroke.
+                if (!subjectEdited.current) {
+                  e.target.value = subject;
+                  return;
+                }
+                setSubject(e.target.value);
+              }}
             />
           </div>
 
           <div>
             <div className="flex items-end justify-between gap-3">
-              <FieldLabel htmlFor="email-body" required>
+              <FieldLabel htmlFor="outside-mail-body" required>
                 Email body
               </FieldLabel>
               <span className={`mb-1.5 text-xs ${body.length >= BODY_LIMIT ? 'text-rose-500' : 'text-slate-400'}`}>
@@ -575,11 +602,13 @@ export default function RecordOutsideMailPage() {
             </div>
             <p className="mb-1.5 text-xs text-slate-500">Paste the email you sent.</p>
             <textarea
-              id="email-body"
+              id="outside-mail-body"
+              name="outside-mail-body"
               ref={bodyRef}
               className="control min-h-[160px] resize-y py-2.5"
               value={body}
               maxLength={BODY_LIMIT}
+              autoComplete="off"
               onChange={(e) => setBody(e.target.value)}
             />
             <p className="mt-1.5 text-xs text-slate-400">Plain text only.</p>

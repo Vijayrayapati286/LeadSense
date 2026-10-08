@@ -156,7 +156,8 @@ class Settings(BaseSettings):
 
     @property
     def azure_authority(self) -> str:
-        return f"https://login.microsoftonline.com/{self.azure_tenant_id}"
+        tenant = self.azure_tenant_id if _azure_setting_present(self.azure_tenant_id) else "common"
+        return f"https://login.microsoftonline.com/{tenant}"
 
     @property
     def azure_scopes(self) -> list[str]:
@@ -164,7 +165,20 @@ class Settings(BaseSettings):
 
     @property
     def is_azure_configured(self) -> bool:
-        return bool(self.azure_client_id and self.azure_client_secret)
+        return _azure_setting_present(self.azure_client_id) and _azure_setting_present(
+            self.azure_client_secret
+        )
+
+
+def _azure_setting_present(value: str) -> bool:
+    """True only for a real Entra value. Placeholder .env.example text is not configured."""
+    text = (value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered.startswith("your-") or "change-me" in lowered or lowered in {"todo", "changeme", "xxx"}:
+        return False
+    return True
 
 
 @lru_cache

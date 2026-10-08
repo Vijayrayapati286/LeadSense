@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FiMail, FiLock } from 'react-icons/fi';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
@@ -11,9 +11,19 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
-  const { devLogin, passwordLogin } = useAuth();
+  const { passwordLogin } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    const error = searchParams.get('error');
+    if (error === 'not_authorized') {
+      toast.error('This Microsoft account is not allowed to sign in.');
+    } else if (error) {
+      toast.error('Microsoft sign-in failed. Try again.');
+    }
+  }, [searchParams, toast]);
 
   const handlePasswordLogin = async (e) => {
     e.preventDefault();
@@ -32,27 +42,16 @@ export default function LoginPage() {
   const handleMicrosoftLogin = async () => {
     setLoading(true);
     try {
-      const { data } = await authService.getLoginUrl();
+      const hint = email.trim();
+      const { data } = await authService.getLoginUrl(hint || undefined);
       if (data.dev_mode || !data.login_url) {
-        await handleDevLogin();
-      } else {
-        window.location.href = data.login_url;
+        toast.error('Microsoft sign-in is not configured.');
+        setLoading(false);
+        return;
       }
+      window.location.href = data.login_url;
     } catch {
-      toast.error('Failed to initiate login. Trying dev mode...');
-      await handleDevLogin();
-    }
-  };
-
-  const handleDevLogin = async () => {
-    setLoading(true);
-    try {
-      await devLogin();
-      toast.success('Logged in successfully');
-      navigate('/dashboard');
-    } catch {
-      toast.error('Login failed. Please try again.');
-    } finally {
+      toast.error('Could not start Microsoft sign-in.');
       setLoading(false);
     }
   };
@@ -95,7 +94,37 @@ export default function LoginPage() {
           </div>
 
           <div className="card">
-            <form onSubmit={handlePasswordLogin} className="space-y-3 mb-4">
+            <button
+              type="button"
+              onClick={handleMicrosoftLogin}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-3 bg-[#2F2F2F] text-white px-4 py-3 rounded-lg font-medium hover:bg-[#1F1F1F] transition-colors disabled:opacity-50"
+            >
+              {loading ? (
+                <LoadingSpinner size="sm" />
+              ) : (
+                <>
+                  <svg width="20" height="20" viewBox="0 0 21 21" fill="none">
+                    <rect x="1" y="1" width="9" height="9" fill="#F25022" />
+                    <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
+                    <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
+                    <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
+                  </svg>
+                  SSO login
+                </>
+              )}
+            </button>
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200" />
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="px-3 bg-white text-gray-500">or</span>
+              </div>
+            </div>
+
+            <form onSubmit={handlePasswordLogin} className="space-y-3">
               <div>
                 <label className="label">Email</label>
                 <input
@@ -131,36 +160,6 @@ export default function LoginPage() {
                 )}
               </button>
             </form>
-
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-200" />
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-3 bg-white text-gray-500">or</span>
-              </div>
-            </div>
-
-            <button
-              onClick={handleMicrosoftLogin}
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-3 bg-[#2F2F2F] text-white px-4 py-3 rounded-lg font-medium hover:bg-[#1F1F1F] transition-colors disabled:opacity-50"
-            >
-              {loading ? (
-                <LoadingSpinner size="sm" />
-              ) : (
-                <>
-                  <svg width="20" height="20" viewBox="0 0 21 21" fill="none">
-                    <rect x="1" y="1" width="9" height="9" fill="#F25022" />
-                    <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
-                    <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
-                    <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
-                  </svg>
-                  Sign in with Microsoft
-                </>
-              )}
-            </button>
-
           </div>
         </div>
       </div>

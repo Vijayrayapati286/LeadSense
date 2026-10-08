@@ -22,7 +22,8 @@ async function downloadViaMeta(metaEndpoint, fallbackFilename) {
 }
 
 export const authService = {
-  getLoginUrl: () => api.get('/auth/login'),
+  getLoginUrl: (loginHint) =>
+    api.get('/auth/login', { params: loginHint ? { login_hint: loginHint } : undefined }),
   devLogin: (data) => api.post('/auth/dev-login', data),
   passwordLogin: (email, password) => api.post('/auth/login', { email, password }),
   getMe: () => api.get('/auth/me'),
