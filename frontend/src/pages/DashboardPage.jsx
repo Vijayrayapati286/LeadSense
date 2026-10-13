@@ -12,8 +12,8 @@ import {
   FiZap,
 } from 'react-icons/fi';
 import {
-  Area,
-  AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   Cell,
   Pie,
@@ -38,7 +38,6 @@ import MetricCard from '../components/ui/MetricCard';
 import PanelHeader from '../components/ui/PanelHeader';
 import FilterBar, { FilterField } from '../components/ui/FilterBar';
 import { CHART_COLORS } from '../design-tokens';
-import { useTheme } from '../hooks/useTheme';
 import { formatDate } from '../utils/helpers';
 
 const EMPTY_FILTERS = { userId: '', campaignId: '', dateFrom: '', dateTo: '' };
@@ -60,7 +59,6 @@ export default function DashboardPage() {
   const [campaigns, setCampaigns] = useState([]);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const { user } = useAuth();
-  const { chartAccent } = useTheme();
   const toast = useToast();
 
   useEffect(() => {
@@ -142,6 +140,14 @@ export default function DashboardPage() {
   } = data;
   const campaignTotal = campaignStatus.reduce((sum, item) => sum + Number(item.count || 0), 0);
   const firstName = user?.name?.trim().split(/\s+/)[0] || 'there';
+  const performanceByDay = emailsPerDay.map((row) => {
+    const sent = Number(row.sent ?? row.count ?? 0);
+    return {
+      date: row.date,
+      sent,
+      delivered: Number(row.delivered ?? sent),
+    };
+  });
 
   return (
     <PageShell>
@@ -207,25 +213,29 @@ export default function DashboardPage() {
 
       <section className="grid gap-6 xl:grid-cols-[1.1fr_.9fr]">
         <SurfaceCard>
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-900">Emails sent per day</h2>
-            <span className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-micro text-slate-500">Current period</span>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-bold text-slate-900">Campaign Performance</h2>
+            <div className="flex items-center gap-4 text-xs text-slate-500">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-blue-500" />
+                Sent
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                Delivered
+              </span>
+            </div>
           </div>
           <div className="mt-5 h-[270px]">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={emailsPerDay} margin={{ top: 10, right: 8, left: -24, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="emailArea" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={chartAccent} stopOpacity={0.28} />
-                    <stop offset="100%" stopColor={chartAccent} stopOpacity={0.01} />
-                  </linearGradient>
-                </defs>
+              <BarChart data={performanceByDay} barGap={4} barCategoryGap="28%" margin={{ top: 10, right: 8, left: -24, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="#eef2f7" />
                 <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} dy={8} />
                 <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
                 <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', boxShadow: '0 8px 24px rgba(15,23,42,.08)', fontSize: 12 }} />
-                <Area type="monotone" dataKey="count" stroke={chartAccent} strokeWidth={2.5} fill="url(#emailArea)" activeDot={{ r: 5, fill: chartAccent, stroke: '#fff', strokeWidth: 2 }} />
-              </AreaChart>
+                <Bar dataKey="sent" name="Sent" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={18} />
+                <Bar dataKey="delivered" name="Delivered" fill="#22c55e" radius={[4, 4, 0, 0]} maxBarSize={18} />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </SurfaceCard>

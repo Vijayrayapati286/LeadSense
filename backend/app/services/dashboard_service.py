@@ -160,12 +160,19 @@ class DashboardService:
         results = []
         day = start_date
         while day <= end_date:
-            count = (
+            sent = (
                 self._log_query(db, user_id, campaign_id, None, None, org_id=org_id)
                 .filter(func.date(EmailLog.sent_at) == day, EmailLog.status == "sent")
                 .count()
             )
-            results.append({"date": day.strftime("%b %d"), "count": count})
+            # EmailLog records a successful send as "sent". Delivery is the
+            # same count until a distinct delivered status is stored.
+            results.append({
+                "date": day.strftime("%b %d"),
+                "count": sent,
+                "sent": sent,
+                "delivered": sent,
+            })
             day += timedelta(days=1)
 
         return results

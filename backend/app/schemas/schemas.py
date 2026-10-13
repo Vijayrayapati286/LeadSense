@@ -87,6 +87,8 @@ class DashboardStats(BaseModel):
 class DailyEmailStat(BaseModel):
     date: str
     count: int
+    sent: int = 0
+    delivered: int = 0
 
 
 class CampaignStatusStat(BaseModel):
