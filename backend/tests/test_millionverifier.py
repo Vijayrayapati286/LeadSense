@@ -671,6 +671,41 @@ def test_send_asks_before_queueing_risky_and_honors_the_choice():
         db.close()
 
 
+def test_include_mode_queues_risky_without_asking():
+    from app.models import AppSetting
+    from app.routers.email import send_emails
+    from app.schemas.schemas import SendEmailRequest
+    from app.services.app_settings_service import AppSettingsService
+
+    db = SessionLocal()
+    try:
+        row = AppSettingsService().get(db)
+        row.risky_send_mode = "include"
+        db.commit()
+        user, campaign, good, risky = _seed_campaign_with_emails(db, "include-mode")
+        payload = dict(
+            campaign_id=campaign.id,
+            subject="Hello",
+            body="Hi",
+            recipient_ids=[good.id, risky.id],
+        )
+        preview = send_emails(SendEmailRequest(**payload, preview_risky=True), db, user)
+        assert preview.requires_risky_confirmation is False
+        queued = send_emails(SendEmailRequest(**payload), db, user)
+        assert queued.queued == 2
+        assert queued.skipped_risky == 0
+        risky_row = (
+            db.query(CampaignRecipient)
+            .filter(CampaignRecipient.campaign_id == campaign.id, CampaignRecipient.recipient_id == risky.id)
+            .one()
+        )
+        assert risky_row.allow_risky_send is True
+    finally:
+        db.query(AppSetting).filter(AppSetting.id == 1).update({"risky_send_mode": "ask"})
+        db.commit()
+        db.close()
+
+
 def test_gate_sends_risky_only_when_the_sender_confirmed():
     from app.services.scheduler_service import _gate_before_ses
 

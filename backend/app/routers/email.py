@@ -164,18 +164,22 @@ def send_emails(
 
     safe_recipients, risky_recipients = partition_recipients_by_risk(db, recipients)
     risky_emails = [recipient.email for recipient in risky_recipients[:8]]
+    risky_mode = app_settings_service.risky_send_mode(db)
+    needs_ask = bool(risky_recipients) and risky_mode == "ask" and data.risky_choice is None
 
-    if data.preview_risky or (risky_recipients and data.risky_choice is None):
+    if data.preview_risky or needs_ask:
         return SendEmailResponse(
             queued=0,
             skipped_suppressed=skipped_suppressed,
-            requires_risky_confirmation=bool(risky_recipients),
+            requires_risky_confirmation=needs_ask,
             risky_count=len(risky_recipients),
             good_count=len(safe_recipients),
             risky_emails=risky_emails,
         )
 
-    include_risky = data.risky_choice == "include_risky"
+    include_risky = data.risky_choice == "include_risky" or (
+        data.risky_choice is None and risky_mode == "include"
+    )
     skipped_risky = 0 if include_risky else len(risky_recipients)
     recipients = recipients if include_risky else safe_recipients
     risky_ids = {recipient.id for recipient in risky_recipients} if include_risky else set()

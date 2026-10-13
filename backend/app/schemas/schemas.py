@@ -337,6 +337,7 @@ class AppSettingResponse(BaseModel):
     default_page_size: int
     default_ai_tone: str
     default_use_recipient_timezone: bool
+    risky_send_mode: str
 
 
 class AppSettingUpdate(BaseModel):
@@ -348,6 +349,7 @@ class AppSettingUpdate(BaseModel):
     default_page_size: int | None = Field(None, ge=5, le=100)
     default_ai_tone: str | None = None
     default_use_recipient_timezone: bool | None = None
+    risky_send_mode: Literal["ask", "include", "skip"] | None = None
 
 
 class AITemplateRequest(BaseModel):
