@@ -273,12 +273,12 @@ export default function SettingsPage() {
                 <label className="label">Send Interval (seconds)</label>
                 <input
                   type="number"
-                  min={1}
+                  min={8}
                   className="input-field"
                   value={appSettings.send_interval_seconds}
                   onChange={(e) => setAppSettings((p) => ({ ...p, send_interval_seconds: e.target.value }))}
                 />
-                <p className="text-xs text-gray-400 mt-1">Minimum gap enforced between each outgoing campaign email.</p>
+                <p className="text-xs text-gray-400 mt-1">Minimum gap between each outgoing campaign email (at least 8 seconds).</p>
               </div>
             </div>
 

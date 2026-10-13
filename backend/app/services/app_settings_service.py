@@ -8,6 +8,8 @@ from app.config import get_settings
 from app.models import AppSetting
 
 settings = get_settings()
+# Floor so bulk sends cannot fire faster than SES/reputation can absorb.
+MIN_SEND_INTERVAL_SECONDS = 8
 
 
 class AppSettingsService:
@@ -28,6 +30,10 @@ class AppSettingsService:
             db.add(row)
             db.commit()
             db.refresh(row)
+        if int(row.send_interval_seconds or 0) < MIN_SEND_INTERVAL_SECONDS:
+            row.send_interval_seconds = MIN_SEND_INTERVAL_SECONDS
+            db.commit()
+            db.refresh(row)
         return row
 
     def get_suppress_on_tags(self, db: Session) -> list[str]:
@@ -40,6 +46,8 @@ class AppSettingsService:
         for field, value in update_data.items():
             if value is not None:
                 setattr(row, field, value)
+        if int(row.send_interval_seconds or 0) < MIN_SEND_INTERVAL_SECONDS:
+            row.send_interval_seconds = MIN_SEND_INTERVAL_SECONDS
         db.commit()
         db.refresh(row)
         return row

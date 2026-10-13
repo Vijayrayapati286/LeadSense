@@ -197,6 +197,7 @@ def _send_notice(
         body_html=body_html,
         body_text=body_text,
         from_name="LeadSense",
+        add_unsubscribe=False,
     )
     if result.get("status") != "sent":
         raise RuntimeError(result.get("error") or "bounce notification email was not sent")

@@ -341,7 +341,7 @@ class AppSettingResponse(BaseModel):
 
 class AppSettingUpdate(BaseModel):
     soft_bounce_threshold: int | None = Field(None, ge=1)
-    send_interval_seconds: int | None = Field(None, ge=1)
+    send_interval_seconds: int | None = Field(None, ge=8)
     suppress_on_tags: list[str] | None = None
     business_hours_start: int | None = Field(None, ge=0, le=23)
     business_hours_end: int | None = Field(None, ge=1, le=24)

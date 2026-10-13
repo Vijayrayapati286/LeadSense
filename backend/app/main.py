@@ -37,6 +37,7 @@ from app.routers import (
     salesnav,
     tags,
     templates,
+    unsubscribe,
     users,
     webhooks,
 )
@@ -115,6 +116,7 @@ app.include_router(logs.router, prefix=API_PREFIX)
 app.include_router(notifications.router, prefix=API_PREFIX)
 app.include_router(blacklist.router, prefix=API_PREFIX)
 app.include_router(webhooks.router, prefix=API_PREFIX)
+app.include_router(unsubscribe.router, prefix=API_PREFIX)
 app.include_router(app_settings.router, prefix=API_PREFIX)
 app.include_router(custom_fields.router, prefix=API_PREFIX)
 app.include_router(users.router, prefix=API_PREFIX)

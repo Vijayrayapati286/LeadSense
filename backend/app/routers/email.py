@@ -21,7 +21,10 @@ from app.models import Campaign, CampaignRecipient, CustomField, EmailLog, Recip
 from app.schemas.schemas import IncompleteRecipientInfo, SendEmailRequest, SendEmailResponse
 from app.services.app_settings_service import AppSettingsService
 from app.services.campaign_service import CampaignService
-from app.services.millionverifier_service import partition_recipients_by_risk
+from app.services.millionverifier_service import (
+    lift_risky_verification_suppression,
+    partition_recipients_by_risk,
+)
 from app.services.ses_service import SESService
 from app.utils.helpers import extract_placeholders, is_known_merge_field, utc_now
 
@@ -110,6 +113,10 @@ def send_emails(
         recipients_all = db.query(Recipient).filter(Recipient.id.in_(data.recipient_ids)).all()
     else:
         recipients_all = db.query(Recipient).filter(Recipient.is_selected == True).all()
+
+    if recipients_all:
+        lift_risky_verification_suppression(db, recipients_all)
+        db.commit()
 
     skipped_suppressed = len([r for r in recipients_all if r.is_suppressed])
     recipients = [r for r in recipients_all if not r.is_suppressed]
