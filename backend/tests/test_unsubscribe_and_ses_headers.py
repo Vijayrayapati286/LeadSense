@@ -121,6 +121,14 @@ def test_public_unsubscribe_suppresses():
         db.close()
 
 
+def test_return_path_uses_custom_mail_from(monkeypatch):
+    monkeypatch.setenv("SES_MAIL_FROM_DOMAIN", "bounce.outreach.feuji.com")
+    svc = _aligned_svc(monkeypatch)
+    source = svc._build_source("Ada Lovelace", "ada@feuji.com")
+    raw = svc._build_raw_message(source, "lead@example.com", "Hi", "<p>Hi</p>", "Hi", None)
+    assert raw["Return-Path"] == "noreply@bounce.outreach.feuji.com"
+
+
 def test_invite_mail_skips_unsubscribe_headers(monkeypatch):
     svc = _aligned_svc(monkeypatch)
     source = svc._build_source("LeadSense", "ada@feuji.com")

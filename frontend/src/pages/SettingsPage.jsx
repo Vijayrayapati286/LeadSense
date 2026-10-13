@@ -282,6 +282,7 @@ export default function SettingsPage() {
               </select>
               <p className="text-xs text-gray-400 mt-1">
                 Risky means MillionVerifier catch-all or unknown. Invalid emails are still never sent.
+                This only controls who we send to — Inbox vs Junk is set by Feuji Exchange and the recipient’s mail filter.
               </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

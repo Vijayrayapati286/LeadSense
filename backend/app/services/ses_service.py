@@ -135,6 +135,16 @@ class SESService:
         _display, address = parseaddr(source)
         return address or reply_to
 
+    def _return_path_address(self) -> str | None:
+        """Envelope sender for custom MAIL FROM. Empty until IT configures SES+DNS."""
+        raw = (getattr(self.settings, "ses_mail_from_domain", None) or "").strip()
+        if not raw:
+            return None
+        if "@" in raw:
+            return raw
+        domain = raw.lstrip("@")
+        return f"noreply@{domain}" if domain else None
+
     def _append_unsubscribe(self, body_html: str, body_text: str | None, to_email: str) -> tuple[str, str | None]:
         marker = "unsubscribe here"
         html = body_html or ""
@@ -179,6 +189,9 @@ class SESService:
             msg_root["List-Unsubscribe"] = list_unsubscribe_value(to_email, address)
             msg_root["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
             msg_root["List-Id"] = f"LeadSense <campaigns.{sending_domain}>"
+        mail_from = self._return_path_address()
+        if mail_from:
+            msg_root["Return-Path"] = mail_from
         # Stable MIME Message-ID so inbound In-Reply-To / References can match
         # this send. Domain part follows the From address when available.
         msg_root["Message-ID"] = mime_message_id or make_msgid(domain=sending_domain)

@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # Optional SES Configuration Set name (tags / event destinations). Leave
     # blank to keep outbound send identical to today.
     ses_configuration_set: str = Field("", validation_alias="SES_CONFIGURATION_SET")
+    # SES custom MAIL FROM domain (envelope / Return-Path), e.g. bounce.outreach.feuji.com.
+    # Empty = SES default (often amazonses.com). Set only after IT creates the subdomain in SES+DNS.
+    ses_mail_from_domain: str = Field("", validation_alias="SES_MAIL_FROM_DOMAIN")
     # When true, Reply-To is the personalized SES From (sending domain).
     # Aligns From/Reply-To so filters are less likely to junk the mail; OOO
     # then lands on the SES-receivable sending domain. Set false to keep
