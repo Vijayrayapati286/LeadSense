@@ -43,8 +43,8 @@ function buildOfferingEmailDraft(offeringName, offeringDescription) {
       `Hi {{Name}},\n\n` +
       `I wanted to share a brief note on ${offeringName} for {{Company}}.\n\n` +
       `${blurb}\n\n` +
-      `Would you be open to a short conversation to see if this is a fit?\n\n` +
-      `Regards,\n{{FromName}}\nLead Generation`,
+      `If this is relevant for {{Company}}, I can share a short walkthrough.\n\n` +
+      `Regards,\n{{FromName}}`,
     closing: '',
     cta: '',
   };
@@ -290,9 +290,7 @@ export default function CreateCampaignPage() {
     setPlaceholderValues({ FromName: user?.name || '' });
     let body = (template.body || '').trim();
     if (!/\{\{\s*FromName\s*\}\}/i.test(body)) {
-      body = `${body}\n\nRegards,\n{{FromName}}\nLead Generation`;
-    } else if (!/Lead Generation\s*$/i.test(body)) {
-      body = `${body}\nLead Generation`;
+      body = `${body}\n\nRegards,\n{{FromName}}`;
     }
     setEmailContent({ subject: template.subject, body, closing: '', cta: '' });
   };

@@ -1167,7 +1167,7 @@ export default function CampaignDetailPage() {
     try {
       if (!riskyChoice) {
         const { data: preview } = await emailService.send({ ...sendPayload(), preview_risky: true });
-        if (preview.risky_count > 0) {
+        if (preview.requires_risky_confirmation) {
           setRiskyPrompt(preview);
           return;
         }

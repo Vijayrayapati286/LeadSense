@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key-change-in-production"
     frontend_url: str = "http://localhost:5180"
     backend_url: str = "http://localhost:8000"
+    # Public origin that browsers/Gmail can reach for /api/public/unsubscribe.
+    # Prefer the HTTPS site that proxies /api (e.g. https://uat.leadsense.feuji.com).
+    # Falls back to FRONTEND_URL, then BACKEND_URL.
+    public_api_url: str = Field("", validation_alias="PUBLIC_API_URL")
 
     database_url: str = "postgresql://postgres:postgres@localhost:5432/bulk_email_db"
     use_sqlite_fallback: bool = True
@@ -65,11 +69,15 @@ class Settings(BaseSettings):
     # Optional SES Configuration Set name (tags / event destinations). Leave
     # blank to keep outbound send identical to today.
     ses_configuration_set: str = Field("", validation_alias="SES_CONFIGURATION_SET")
-    # When true, Reply-To is set to the personalized SES From address so
-    # automatic OOO replies land on the SES-receivable sending domain.
-    # Default false preserves existing behavior (Reply-To = rep corporate email).
+    # SES custom MAIL FROM domain (envelope / Return-Path), e.g. bounce.outreach.feuji.com.
+    # Empty = SES default (often amazonses.com). Set only after IT creates the subdomain in SES+DNS.
+    ses_mail_from_domain: str = Field("", validation_alias="SES_MAIL_FROM_DOMAIN")
+    # When true, Reply-To is the personalized SES From (sending domain).
+    # Aligns From/Reply-To so filters are less likely to junk the mail; OOO
+    # then lands on the SES-receivable sending domain. Set false to keep
+    # Reply-To on the rep's corporate mailbox.
     ses_use_sending_domain_reply_to: bool = Field(
-        False, validation_alias="SES_USE_SENDING_DOMAIN_REPLY_TO"
+        True, validation_alias="SES_USE_SENDING_DOMAIN_REPLY_TO"
     )
     # When true, MIME From / SES Source uses the full Reply-To address
     # (rep's real mailbox, e.g. vijay.rayapati@feuji.com) so Outlook/Exchange

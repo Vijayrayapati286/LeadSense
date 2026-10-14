@@ -337,17 +337,19 @@ class AppSettingResponse(BaseModel):
     default_page_size: int
     default_ai_tone: str
     default_use_recipient_timezone: bool
+    risky_send_mode: str
 
 
 class AppSettingUpdate(BaseModel):
     soft_bounce_threshold: int | None = Field(None, ge=1)
-    send_interval_seconds: int | None = Field(None, ge=1)
+    send_interval_seconds: int | None = Field(None, ge=8)
     suppress_on_tags: list[str] | None = None
     business_hours_start: int | None = Field(None, ge=0, le=23)
     business_hours_end: int | None = Field(None, ge=1, le=24)
     default_page_size: int | None = Field(None, ge=5, le=100)
     default_ai_tone: str | None = None
     default_use_recipient_timezone: bool | None = None
+    risky_send_mode: Literal["ask", "include", "skip"] | None = None
 
 
 class AITemplateRequest(BaseModel):

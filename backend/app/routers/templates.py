@@ -31,20 +31,20 @@ PLACEHOLDER_TEMPLATES = [
             "I reached out because {{Designation}}s in {{Industry}} often need a clearer path "
             "from pilots to production.\n\n"
             "We help teams standardize and govern AI/RAG workloads so experiments become durable operations.\n\n"
-            "Would you be open to a brief conversation about {{Company}}?\n\n"
-            "Regards,\n{{FromName}}\nLead Generation"
+            "If this is relevant for {{Company}}, I can share a short walkthrough.\n\n"
+            "Regards,\n{{FromName}}"
         ),
     },
     {
         "id": 2,
         "name": "Product Demo Invite",
-        "subject": "15-min walkthrough for {{Company}}",
+        "subject": "Walkthrough for {{Company}}",
         "body": (
             "Hi {{Name}},\n\n"
             "Given your role at {{Company}}, a short walkthrough may be useful.\n\n"
             "We can cover how teams in {{Industry}} move from fragmented tooling to a governed production setup.\n\n"
-            "Would a 15-minute demo this week work?\n\n"
-            "Regards,\n{{FromName}}\nLead Generation"
+            "If useful, I can walk through this in a short call.\n\n"
+            "Regards,\n{{FromName}}"
         ),
     },
     {
@@ -54,8 +54,8 @@ PLACEHOLDER_TEMPLATES = [
         "body": (
             "Hi {{Name}},\n\n"
             "Just following up in case this is still relevant for {{Company}}.\n\n"
-            "Happy to keep it to 10 minutes if a quick call would help.\n\n"
-            "Regards,\n{{FromName}}\nLead Generation"
+            "Happy to keep it to 10 minutes if a short call would help.\n\n"
+            "Regards,\n{{FromName}}"
         ),
     },
 ]

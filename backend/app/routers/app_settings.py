@@ -26,6 +26,7 @@ def _to_response(row) -> AppSettingResponse:
         default_page_size=getattr(row, "default_page_size", 10),
         default_ai_tone=getattr(row, "default_ai_tone", "formal"),
         default_use_recipient_timezone=bool(getattr(row, "default_use_recipient_timezone", False)),
+        risky_send_mode=(getattr(row, "risky_send_mode", None) or "ask"),
     )
 
 

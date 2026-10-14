@@ -174,7 +174,7 @@ export default function TemplateEditor({
                   placeholder="Your name appears after Regards"
                 />
                 <p className="mt-1 text-xs text-slate-500">
-                  Appears after Regards (and before Lead Generation) in the sign-off.
+                  Appears after Regards in the sign-off.
                 </p>
               </div>
 
@@ -185,7 +185,7 @@ export default function TemplateEditor({
                   rows={12}
                   value={emailContent.body}
                   onChange={(e) => updateContent('body', e.target.value)}
-                  placeholder={'Hi {{Name}},\n\n...\n\nRegards,\n{{FromName}}\nLead Generation'}
+                  placeholder={'Hi {{Name}},\n\n...\n\nRegards,\n{{FromName}}'}
                 />
                 <p className="mt-2 text-xs text-slate-500">
                   Personalization tags

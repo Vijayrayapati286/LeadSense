@@ -377,6 +377,7 @@ def _ensure_app_settings_schema() -> None:
         "default_page_size": "INTEGER DEFAULT 10",
         "default_ai_tone": "VARCHAR(32) DEFAULT 'formal'",
         "default_use_recipient_timezone": bool_type,
+        "risky_send_mode": "VARCHAR(16) DEFAULT 'ask'",
     }
 
     with engine.begin() as conn:
