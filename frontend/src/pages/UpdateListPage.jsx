@@ -19,7 +19,47 @@ import SurfaceCard from '../components/ui/SurfaceCard';
 import CampaignCard from '../components/campaigns/CampaignCard';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
-import { debounce, formatDateTime } from '../utils/helpers';
+import { debounce, formatDateTime, renderTemplate } from '../utils/helpers';
+import { displayRecipientName } from '../utils/mergeFields';
+
+function stageMessage(stage) {
+  if (!stage) return '';
+  const body = (stage.body || '').trim();
+  const closing = (stage.closing || '').trim();
+  if (body && closing) return `${body}\n\n${closing}`;
+  return body || closing;
+}
+
+function sentMessage(row) {
+  const subject = (row?.last_sent_subject || '').trim();
+  const body = (row?.last_sent_body || '').trim();
+  if (!subject && !body) return null;
+  return { subject, body };
+}
+
+function followUpDraftsFor(rows, stageList, template) {
+  const stageByOrder = new Map((stageList || []).map((stage) => [stage.stage_order, stage]));
+  const drafts = {};
+  for (const row of rows) {
+    const nextOrder = (row.current_stage || 0) + 1;
+    const stage = stageByOrder.get(nextOrder);
+    const key = stage ? String(stage.id) : `new-${nextOrder}`;
+    if (drafts[key]) continue;
+    const previous = stageByOrder.get(nextOrder - 1);
+    const sent = sentMessage(row);
+    const fallback = !stage && !sent && !previous ? template : null;
+    drafts[key] = {
+      key,
+      stageId: stage ? stage.id : null,
+      stageOrder: nextOrder,
+      isNew: !stage,
+      fromSent: !stage && Boolean(sent),
+      subject: stage?.subject || sent?.subject || previous?.subject || fallback?.subject || '',
+      body: stage ? stage.body || '' : sent?.body || stageMessage(previous) || stageMessage(fallback),
+    };
+  }
+  return drafts;
+}
 
 function defaultScheduleValue() {
   const d = new Date(Date.now() + 5 * 60 * 1000);
@@ -55,7 +95,9 @@ export default function UpdateListPage() {
   const [selectedRecipientIds, setSelectedRecipientIds] = useState([]);
   const [markingReplied, setMarkingReplied] = useState(false);
   const [stages, setStages] = useState([]);
+  const [primaryTemplate, setPrimaryTemplate] = useState(null);
   const [followUpModalOpen, setFollowUpModalOpen] = useState(false);
+  const [followUpDrafts, setFollowUpDrafts] = useState({});
   const [followUpAt, setFollowUpAt] = useState('');
   const [schedulingFollowUp, setSchedulingFollowUp] = useState(false);
   const [pendingOpenSchedule, setPendingOpenSchedule] = useState(false);
@@ -140,11 +182,13 @@ export default function UpdateListPage() {
     async (campaignId) => {
       setEmailsLoading(true);
       try {
-        const [recipientsRes, stagesRes] = await Promise.all([
+        const [recipientsRes, stagesRes, templateRes] = await Promise.all([
           campaignService.getRecipients(campaignId),
           sequenceService.getAll(campaignId).catch(() => ({ data: [] })),
+          campaignService.getTemplate(campaignId).catch(() => ({ data: null })),
         ]);
         setStages(stagesRes.data || []);
+        setPrimaryTemplate(templateRes.data || null);
         const items = recipientsRes.data?.items || [];
         const rows = items
           .map((r) => ({
@@ -156,15 +200,20 @@ export default function UpdateListPage() {
             designation: r.recipient_designation,
             industry: r.recipient_industry,
             status: r.status,
+            current_stage: r.current_stage || 0,
             follow_up_state: r.follow_up_state,
             follow_up_label: r.follow_up_label,
             last_sent_at: r.last_sent_at,
+            last_sent_subject: r.last_sent_subject,
+            last_sent_body: r.last_sent_body,
             is_suppressed: r.is_suppressed,
           }));
         setEmailRows(rows);
       } catch {
         toast.error('Failed to load campaign emails');
         setEmailRows([]);
+        setStages([]);
+        setPrimaryTemplate(null);
       } finally {
         setEmailsLoading(false);
       }
@@ -179,6 +228,8 @@ export default function UpdateListPage() {
       setEmailSearch('');
     } else {
       setEmailRows([]);
+      setStages([]);
+      setPrimaryTemplate(null);
       setSelectedRecipientIds([]);
     }
   }, [selectedId, loadEmails]);
@@ -208,6 +259,13 @@ export default function UpdateListPage() {
       return;
     }
     setFollowUpAt(defaultScheduleValue());
+      setFollowUpDrafts(
+      followUpDraftsFor(
+        emailRows.filter((row) => selectedRecipientIds.includes(row.recipient_id)),
+        stages,
+        primaryTemplate
+      )
+    );
     setFollowUpModalOpen(true);
     setPendingOpenSchedule(false);
   }, [pendingOpenSchedule, emailsLoading, selectedRecipientIds.length]);
@@ -283,9 +341,50 @@ export default function UpdateListPage() {
     selectableRows.length > 0 &&
     selectableRows.every((r) => selectedRecipientIds.includes(r.recipient_id));
 
-  const selectedSchedulableCount = filteredEmailRows.filter(
+  const selectedSchedulableRows = filteredEmailRows.filter(
     (r) => selectedRecipientIds.includes(r.recipient_id) && isSchedulable(r)
-  ).length;
+  );
+  const selectedSchedulableCount = selectedSchedulableRows.length;
+
+  const followUpPreviews = useMemo(() => {
+    const stageByOrder = new Map(stages.map((stage) => [stage.stage_order, stage]));
+    const groups = new Map();
+    for (const row of selectedSchedulableRows) {
+      const nextOrder = (row.current_stage || 0) + 1;
+      const stage = stageByOrder.get(nextOrder) || null;
+      const key = stage ? String(stage.id) : `new-${nextOrder}`;
+      if (!groups.has(key)) groups.set(key, { key, stage, stageOrder: nextOrder, rows: [] });
+      groups.get(key).rows.push(row);
+    }
+    return [...groups.values()].map(({ key, stage, stageOrder, rows }) => {
+      const sample = rows[0];
+      const draft = followUpDrafts[key];
+      const context = {
+        Name: displayRecipientName(sample.name, sample.email),
+        Email: sample.email || '',
+        Company: sample.company || '',
+        Designation: sample.designation || '',
+        Industry: sample.industry || '',
+      };
+      const sourceBody = draft?.body ?? (stage ? stage.body : '') ?? '';
+      let body = renderTemplate(sourceBody, context).replace(/\*\*/g, '').trim();
+      if (stage?.closing && !draft?.isNew) {
+        const closing = renderTemplate(stage.closing, context).replace(/\*\*/g, '').trim();
+        if (closing) body = body ? `${body}\n\n${closing}` : closing;
+      }
+      return {
+        key,
+        stageId: stage?.id ?? null,
+        stageOrder,
+        isNew: !stage,
+        fromSent: Boolean(draft?.fromSent),
+        subject: renderTemplate(draft?.subject ?? stage?.subject ?? '', context).replace(/\*\*/g, '').trim(),
+        body,
+        sampleName: context.Name || sample.email || 'this recipient',
+        count: rows.length,
+      };
+    });
+  }, [stages, selectedSchedulableRows, followUpDrafts]);
 
   const toggleSelect = (recipientId) => {
     setSelectedRecipientIds((prev) =>
@@ -330,6 +429,7 @@ export default function UpdateListPage() {
       return;
     }
     setFollowUpAt(defaultScheduleValue());
+    setFollowUpDrafts(followUpDraftsFor(selectedSchedulableRows, stages, primaryTemplate));
     setFollowUpModalOpen(true);
   };
 
@@ -337,7 +437,15 @@ export default function UpdateListPage() {
     if (!isSchedulable(row)) return;
     setSelectedRecipientIds([row.recipient_id]);
     setFollowUpAt(defaultScheduleValue());
+    setFollowUpDrafts(followUpDraftsFor([row], stages, primaryTemplate));
     setFollowUpModalOpen(true);
+  };
+
+  const updateFollowUpDraft = (stageId, field, value) => {
+    setFollowUpDrafts((current) => ({
+      ...current,
+      [stageId]: { ...current[stageId], [field]: value },
+    }));
   };
 
   const handleScheduleFollowUp = async () => {
@@ -352,9 +460,38 @@ export default function UpdateListPage() {
       toast.error('No eligible recipients selected');
       return;
     }
+    const incomplete = Object.values(followUpDrafts).some(
+      (draft) => !draft.subject.trim() || !draft.body.trim()
+    );
+    if (incomplete) {
+      toast.error('Add a subject and message for the follow-up email');
+      return;
+    }
 
     setSchedulingFollowUp(true);
     try {
+      const stageById = new Map(stages.map((stage) => [stage.id, stage]));
+      await Promise.all(
+        Object.values(followUpDrafts).map((draft) => {
+          const subject = draft.subject.trim();
+          const body = draft.body.trim();
+          if (!subject || !body) return null;
+          if (draft.isNew) {
+            return sequenceService.create(selectedId, {
+              stage_order: draft.stageOrder,
+              delay_value: 1,
+              delay_unit: 'days',
+              subject,
+              body,
+              queue_waiting: false,
+            });
+          }
+          const stage = stageById.get(draft.stageId);
+          if (!stage) return null;
+          if (subject === (stage.subject || '').trim() && body === (stage.body || '').trim()) return null;
+          return sequenceService.update(draft.stageId, { subject, body });
+        })
+      );
       const { data } = await campaignService.scheduleFollowUp(selectedId, {
         scheduled_at: new Date(followUpAt).toISOString(),
         recipient_ids: ids,
@@ -641,7 +778,7 @@ export default function UpdateListPage() {
         <Modal
           isOpen={followUpModalOpen}
           onClose={() => !schedulingFollowUp && setFollowUpModalOpen(false)}
-          size="md"
+          size="lg"
           hideHeader
         >
           <div className="p-6 sm:p-7">
@@ -670,18 +807,84 @@ export default function UpdateListPage() {
               </button>
             </div>
 
-            {stages.length > 0 && (
-              <div className="mt-5 flex items-start gap-2.5 rounded-2xl border border-emerald-100 bg-emerald-50/80 px-3.5 py-3">
-                <FiSend size={16} className="mt-0.5 shrink-0 text-emerald-600" />
-                <p className="text-sm text-emerald-900">
-                  <span className="font-semibold">Follow-up email</span>
-                  <span className="text-emerald-800/80">
-                    {' '}
-                    — Using stage {stages[0]?.stage_order}: “{stages[0]?.subject}”
-                  </span>
-                </p>
-              </div>
-            )}
+            <div className="mt-5 space-y-3">
+              {followUpPreviews.length === 0 ? (
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 px-3.5 py-3 text-sm text-emerald-900/80">
+                  Select a recipient that can receive a follow-up.
+                </div>
+              ) : (
+                followUpPreviews.map((preview) => {
+                  const draft = followUpDrafts[preview.key] || {
+                    subject: '',
+                    body: '',
+                  };
+                  return (
+                    <div key={preview.key} className="space-y-3">
+                      {followUpPreviews.length > 1 && (
+                        <p className="text-xs font-medium text-slate-500">
+                          Follow-up {preview.stageOrder} · {preview.count} recipient{preview.count === 1 ? '' : 's'}
+                        </p>
+                      )}
+                      {preview.isNew && (
+                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 px-3.5 py-3 text-sm text-emerald-900/80">
+                          {preview.fromSent
+                            ? 'This is the email that was already sent. Edit it if this follow-up should say something else.'
+                            : 'No later follow-up email is saved. The subject and message below will be sent.'}
+                        </div>
+                      )}
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor={`follow-up-subject-${preview.key}`}>
+                          Subject
+                        </label>
+                        <input
+                          id={`follow-up-subject-${preview.key}`}
+                          className="input-field w-full"
+                          value={draft.subject}
+                          disabled={schedulingFollowUp}
+                          onChange={(e) => updateFollowUpDraft(preview.key, 'subject', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor={`follow-up-body-${preview.key}`}>
+                          Message
+                        </label>
+                        <textarea
+                          id={`follow-up-body-${preview.key}`}
+                          className="input-field min-h-36 w-full resize-y"
+                          value={draft.body}
+                          disabled={schedulingFollowUp}
+                          onChange={(e) => updateFollowUpDraft(preview.key, 'body', e.target.value)}
+                        />
+                        <p className="mt-1.5 text-xs text-slate-500">
+                          {'{{Name}}'} and {'{{Company}}'} are filled in for each recipient.
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 px-3.5 py-3">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-emerald-900">
+                          <FiSend size={16} className="shrink-0 text-emerald-600" />
+                          Preview for {preview.sampleName}
+                        </div>
+                        <div className="mt-2 rounded-xl bg-white px-3 py-2.5 text-sm">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Subject</p>
+                          <p className="font-semibold text-slate-950">{preview.subject || 'No subject'}</p>
+                          {preview.body && (
+                            <>
+                              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Message</p>
+                              <p className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap text-slate-700">{preview.body}</p>
+                            </>
+                          )}
+                          {preview.count > 1 && (
+                            <p className="mt-2 text-xs text-slate-500">
+                              Each recipient gets their own name and company.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
 
             <div className="mt-5 space-y-4">
               <div>

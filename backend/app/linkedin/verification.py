@@ -214,6 +214,38 @@ _US_STATE_NAMES = {
     "washington", "wisconsin", "wyoming",
 }
 
+# Abbreviation → compact name. "MS" and "Mississippi" compare as one state.
+_US_STATE_ABBR_TO_NAME = {
+    "al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas",
+    "ca": "california", "co": "colorado", "ct": "connecticut", "de": "delaware",
+    "fl": "florida", "ga": "georgia", "hi": "hawaii", "id": "idaho",
+    "il": "illinois", "in": "indiana", "ia": "iowa", "ks": "kansas",
+    "ky": "kentucky", "la": "louisiana", "me": "maine", "md": "maryland",
+    "ma": "massachusetts", "mi": "michigan", "mn": "minnesota", "ms": "mississippi",
+    "mo": "missouri", "mt": "montana", "ne": "nebraska", "nv": "nevada",
+    "nh": "newhampshire", "nj": "newjersey", "nm": "newmexico", "ny": "newyork",
+    "nc": "northcarolina", "nd": "northdakota", "oh": "ohio", "ok": "oklahoma",
+    "or": "oregon", "pa": "pennsylvania", "ri": "rhodeisland", "sc": "southcarolina",
+    "sd": "southdakota", "tn": "tennessee", "tx": "texas", "ut": "utah",
+    "vt": "vermont", "va": "virginia", "wa": "washington", "wv": "westvirginia",
+    "wi": "wisconsin", "wy": "wyoming", "dc": "districtofcolumbia",
+}
+
+# Longer phrases first so "West Virginia" is not read as "Virginia".
+_US_STATE_PHRASES = (
+    ("district of columbia", "districtofcolumbia"),
+    ("new hampshire", "newhampshire"),
+    ("north carolina", "northcarolina"),
+    ("north dakota", "northdakota"),
+    ("south carolina", "southcarolina"),
+    ("south dakota", "southdakota"),
+    ("west virginia", "westvirginia"),
+    ("rhode island", "rhodeisland"),
+    ("new jersey", "newjersey"),
+    ("new mexico", "newmexico"),
+    ("new york", "newyork"),
+)
+
 # Honorifics and post-nominals that carry no identity signal.
 _NAME_PREFIXES = {"mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"}
 _NAME_SUFFIXES = {
@@ -635,7 +667,115 @@ def _person_country_from_row(
         code = normalize_country(explicit)
         if code:
             return code
+    from_state = country_from_state_text(_pick_from_row(source_row, PERSON_STATE_ALIASES))
+    if from_state:
+        return from_state
     return country_from_location_text(person_location)
+
+
+def state_from_location_text(value: Any) -> str:
+    """Canonical US state key from a free-form location, or empty."""
+    text = normalize_text(value)
+    if not text:
+        return ""
+    for phrase, canon in _US_STATE_PHRASES:
+        if re.search(rf"\b{re.escape(phrase)}\b", text):
+            return canon
+    for token in text.split():
+        compact = re.sub(r"[^a-z0-9]", "", token)
+        if compact in _US_STATE_ABBR_TO_NAME:
+            return _US_STATE_ABBR_TO_NAME[compact]
+        if compact in _US_STATE_NAMES:
+            return compact
+    return ""
+
+
+def country_from_state_text(value: Any) -> str:
+    """Country code for a state that belongs to a known country. US states map to us."""
+    if state_from_location_text(value):
+        return "us"
+    return ""
+
+
+def _sheet_state_key(raw: str | None) -> str:
+    """US state key, or a generic label such as Maharashtra."""
+    if not raw or not str(raw).strip():
+        return ""
+    us = state_from_location_text(raw)
+    if us:
+        return us
+    compact = re.sub(r"[^a-z0-9]", "", normalize_text(raw))
+    if len(compact) >= 4:
+        return f"generic:{compact}"
+    return ""
+
+
+def _same_state(
+    sheet_state: str | None,
+    uploaded: str | None,
+    extracted: str | None,
+) -> bool:
+    """True when the sheet state and the extracted location name the same state."""
+    if not extracted or not str(extracted).strip():
+        return False
+    key = _sheet_state_key(sheet_state) or state_from_location_text(uploaded)
+    if not key:
+        return False
+    found = state_from_location_text(extracted)
+    if key == found:
+        return True
+    if key.startswith("generic:"):
+        phrase = key[len("generic:") :]
+        extracted_compact = re.sub(r"[^a-z0-9]", "", normalize_text(extracted))
+        return len(phrase) >= 4 and phrase in extracted_compact
+    return False
+
+
+def _country_pair_result(
+    left: str,
+    right: str,
+    uploaded: str | None,
+    extracted: str | None,
+) -> bool | None:
+    """Country-wise result once both sides have been reduced to codes.
+
+    A USA sheet location matches a LinkedIn place that omits the country
+    ("Greater Boston Area", "Dallas-Fort Worth Metroplex"). A different
+    resolved country is still a mismatch, and an empty extract stays a miss.
+    """
+    if left and right:
+        return left == right
+    if (
+        left == "us"
+        and extracted
+        and str(extracted).strip()
+        and not right
+    ):
+        return True
+    # Country unknown on a side: a shared city still confirms a match.
+    # Anything else stays inconclusive rather than a conflict.
+    if locations_compatible(uploaded, extracted) is True:
+        return True
+    return False if left else None
+
+
+def _location_after_state(
+    result: bool | None,
+    *,
+    left: str,
+    right: str,
+    sheet_state: str | None,
+    uploaded: str | None,
+    extracted: str | None,
+) -> bool | None:
+    """Same sheet state as the extract is a match. A different country still conflicts."""
+    if result is True:
+        return True
+    if left and right and left != right:
+        return result
+    if _same_state(sheet_state, uploaded, extracted):
+        return True
+    return result
 
 
 def _compare_location_country(
@@ -643,8 +783,9 @@ def _compare_location_country(
     extracted: str | None,
     *,
     uploaded_country: str | None = None,
+    source_row: dict[str, Any] | None = None,
 ) -> bool | None:
-    """Person/company location vs LinkedIn: country-wise."""
+    """Person location vs LinkedIn: country-wise, and same state is not a mismatch."""
     if not uploaded or not str(uploaded).strip():
         return None
     if values_equivalent(uploaded, extracted):
@@ -652,14 +793,18 @@ def _compare_location_country(
     left = normalize_country(uploaded_country) if uploaded_country else ""
     if not left:
         left = country_from_location_text(uploaded)
+    if not left:
+        left = country_from_state_text(_pick_from_row(source_row, PERSON_STATE_ALIASES))
     right = country_from_location_text(extracted)
-    if left and right:
-        return left == right
-    # Country unknown on a side ("Greater Boston Area"): a shared city still
-    # confirms a match, anything else stays inconclusive rather than a conflict.
-    if locations_compatible(uploaded, extracted) is True:
-        return True
-    return False if left else None
+    result = _country_pair_result(left, right, uploaded, extracted)
+    return _location_after_state(
+        result,
+        left=left,
+        right=right,
+        sheet_state=_pick_from_row(source_row, PERSON_STATE_ALIASES),
+        uploaded=uploaded,
+        extracted=extracted,
+    )
 
 
 def _compare_location(original: str | None, extracted: str | None) -> bool | None:
@@ -675,6 +820,9 @@ def _company_country_from_row(
         code = normalize_country(explicit)
         if code:
             return code
+    from_state = country_from_state_text(_pick_from_row(source_row, COMPANY_STATE_ALIASES))
+    if from_state:
+        return from_state
     return country_from_location_text(company_location)
 
 
@@ -690,11 +838,15 @@ def _compare_company_location_country(
         return True
     left = _company_country_from_row(source_row, company_location)
     right = country_from_location_text(extracted_location)
-    if left and right:
-        return left == right
-    if locations_compatible(company_location, extracted_location) is True:
-        return True
-    return False if left else None
+    result = _country_pair_result(left, right, company_location, extracted_location)
+    return _location_after_state(
+        result,
+        left=left,
+        right=right,
+        sheet_state=_pick_from_row(source_row, COMPANY_STATE_ALIASES),
+        uploaded=company_location,
+        extracted=extracted_location,
+    )
 
 
 def _company_address_consistency(source_row: dict[str, Any] | None) -> bool | None:
@@ -767,6 +919,7 @@ def compare_field(
             uploaded,
             extracted,
             uploaded_country=_pick_from_row(source_row, PERSON_COUNTRY_ALIASES),
+            source_row=source_row,
         )
     if field == "company_location":
         return _compare_company_location_country(source_row, uploaded, extracted)
@@ -809,6 +962,7 @@ def compare_uploaded_vs_extracted(
         originals["location"],
         extracted_location,
         uploaded_country=_pick_from_row(source_row, PERSON_COUNTRY_ALIASES),
+        source_row=source_row,
     )
     company_location_match = _compare_company_location_country(
         source_row, originals["company_location"], extracted_location
@@ -908,6 +1062,254 @@ def compare_uploaded_vs_extracted(
     )
 
 
+_COUNTRY_LABELS = {
+    "us": "United States",
+    "uk": "United Kingdom",
+    "in": "India",
+    "ca": "Canada",
+    "au": "Australia",
+    "de": "Germany",
+    "fr": "France",
+    "sg": "Singapore",
+    "ae": "United Arab Emirates",
+    "nl": "Netherlands",
+    "ie": "Ireland",
+    "br": "Brazil",
+    "mx": "Mexico",
+    "jp": "Japan",
+    "cn": "China",
+    "kr": "South Korea",
+    "es": "Spain",
+    "it": "Italy",
+    "se": "Sweden",
+    "ch": "Switzerland",
+    "pl": "Poland",
+    "ph": "Philippines",
+    "id": "Indonesia",
+    "my": "Malaysia",
+    "th": "Thailand",
+    "vn": "Vietnam",
+    "za": "South Africa",
+    "nz": "New Zealand",
+    "il": "Israel",
+    "pk": "Pakistan",
+    "bd": "Bangladesh",
+    "ng": "Nigeria",
+    "ke": "Kenya",
+    "ar": "Argentina",
+    "cl": "Chile",
+    "co": "Colombia",
+    "pe": "Peru",
+    "pt": "Portugal",
+    "be": "Belgium",
+    "at": "Austria",
+    "dk": "Denmark",
+    "no": "Norway",
+    "fi": "Finland",
+    "hk": "Hong Kong",
+    "tw": "Taiwan",
+}
+
+AUTO_VERIFIED_FIELDS_KEY = "_auto_verified_fields"
+UPDATE_COMMENT_KEY = "_update_comment"
+_COMMENTS_ORIGINAL_KEY = "_comments_original"
+_COMMENT_ALIASES = {"comments", "comment"}
+
+
+def country_label(code: str | None) -> str:
+    token = (code or "").strip().lower()
+    if not token:
+        return ""
+    return _COUNTRY_LABELS.get(token, token.upper())
+
+
+def _place_without_country(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    cleaned = text
+    for phrase in sorted(_COUNTRY_PHRASES, key=len, reverse=True):
+        cleaned = re.sub(rf"(?i)[,\s]*\b{re.escape(phrase)}\b\s*$", "", cleaned).strip(" ,")
+    return cleaned or text
+
+
+def _comment_header(source: dict[str, Any]) -> str | None:
+    for key in source:
+        if _normalize_header(str(key)) in _COMMENT_ALIASES:
+            return str(key)
+    return None
+
+
+@dataclass
+class FieldUpdatePlan:
+    """Final values and the comments that explain each mismatch."""
+
+    resolved: dict[str, str | None]
+    auto_fields: list[str]
+    comments: list[str]
+    needs_manual_review: bool
+
+
+def plan_field_updates(
+    source_row: dict[str, Any] | None,
+    *,
+    extracted_name: str | None,
+    extracted_designation: str | None,
+    extracted_company: str | None,
+    extracted_location: str | None,
+) -> FieldUpdatePlan:
+    """Decide which mismatches can be saved, and the comment for each one.
+
+    A match is left unchanged and produces no comment. A same-country location
+    change and a designation with an extracted title are updated. A country
+    change, a blank extract, or a name/company difference is left unchanged
+    and marked for manual review.
+    """
+    originals = original_fields(source_row)
+    resolved: dict[str, str | None] = {}
+    auto_fields: list[str] = []
+    comments: list[str] = []
+    needs_manual = False
+
+    def _review(comment: str) -> None:
+        nonlocal needs_manual
+        needs_manual = True
+        comments.append(comment)
+
+    name_match = _compare_name(originals["name"], extracted_name)
+    if name_match is False:
+        _review(
+            "Manual Review Required. Name differs. Existing value kept. "
+            f"Uploaded: {originals['name'] or '—'}. Extracted: {extracted_name or '—'}."
+        )
+
+    company_match = _compare_company(originals["company"], extracted_company)
+    if company_match is False:
+        _review(
+            "Manual Review Required. Company differs. Existing value kept. "
+            f"Uploaded: {originals['company'] or '—'}. Extracted: {extracted_company or '—'}."
+        )
+
+    uploaded_title = originals["designation"]
+    extracted_title = (extracted_designation or "").strip() or None
+    designation_match = _compare_designation(uploaded_title, extracted_title)
+    if designation_match is True and uploaded_title:
+        resolved["designation"] = uploaded_title
+    elif designation_match is False and extracted_title:
+        resolved["designation"] = extracted_title
+        auto_fields.append("designation")
+        comments.append(
+            f"Designation changed from {uploaded_title or '—'} to {extracted_title}. "
+            "Updated based on verified extracted data."
+        )
+    elif designation_match is False:
+        _review(
+            "Manual Review Required. Designation could not be verified because no "
+            f"extracted value was available. Existing value kept: {uploaded_title or '—'}."
+        )
+
+    def _apply_location(field: str, uploaded: str | None, label: str) -> None:
+        extracted = (extracted_location or "").strip() or None
+        if not uploaded or not str(uploaded).strip():
+            return
+        if values_equivalent(uploaded, extracted):
+            resolved[field] = uploaded
+            return
+        left = country_from_location_text(uploaded)
+        right = country_from_location_text(extracted) if extracted else ""
+        if left and right and left == right and extracted:
+            resolved[field] = extracted
+            auto_fields.append(field)
+            comments.append(
+                f"{label} changed from {_place_without_country(uploaded)} to "
+                f"{_place_without_country(extracted)}. Country remains {country_label(left)}. "
+                "Verified based on the available data."
+            )
+            return
+        if left and right and left != right:
+            _review(
+                f"Manual Review Required. Country changed from {country_label(left)} to "
+                f"{country_label(right)}. {label} not updated. "
+                f"Uploaded: {uploaded}. Extracted: {extracted}."
+            )
+            return
+        if not extracted:
+            _review(
+                f"Manual Review Required. {label} could not be verified because no "
+                f"extracted value was available. Existing value kept: {uploaded}."
+            )
+            return
+        _review(
+            f"Manual Review Required. {label} could not be verified from the available data. "
+            f"Existing value kept. Uploaded: {uploaded}. Extracted: {extracted}."
+        )
+
+    _apply_location("location", originals["location"], "Location")
+    _apply_location("company_location", originals["company_location"], "Company location")
+
+    return FieldUpdatePlan(
+        resolved=resolved,
+        auto_fields=auto_fields,
+        comments=comments,
+        needs_manual_review=needs_manual,
+    )
+
+
+def _write_update_comment(item: Any, comment: str) -> None:
+    source = getattr(item, "source_row_json", None)
+    source = dict(source) if isinstance(source, dict) else {}
+    if _COMMENTS_ORIGINAL_KEY not in source:
+        header = _comment_header(source)
+        source[_COMMENTS_ORIGINAL_KEY] = (str(source.get(header) or "").strip() if header else "")
+    base = str(source.get(_COMMENTS_ORIGINAL_KEY) or "").strip()
+    combined = f"{base}\n{comment}".strip() if base and comment else (comment or base)
+    header = _comment_header(source) or "Comments"
+    if combined:
+        source[header] = combined
+    source[UPDATE_COMMENT_KEY] = comment
+    item.source_row_json = source
+
+
+def apply_auto_field_updates(item: Any) -> FieldUpdatePlan:
+    """Save supported mismatches and record every mismatch in Comments."""
+    plan = plan_field_updates(
+        getattr(item, "source_row_json", None),
+        extracted_name=getattr(item, "name", None),
+        extracted_designation=getattr(item, "designation", None),
+        extracted_company=getattr(item, "company", None),
+        extracted_location=getattr(item, "location", None),
+    )
+    resolved_attr = {
+        "designation": "resolved_designation",
+        "location": "resolved_location",
+        "company_location": "resolved_company_location",
+    }
+    for field, value in plan.resolved.items():
+        attr = resolved_attr.get(field)
+        if attr and hasattr(item, attr):
+            setattr(item, attr, value)
+
+    source = getattr(item, "source_row_json", None)
+    source = dict(source) if isinstance(source, dict) else {}
+    source[AUTO_VERIFIED_FIELDS_KEY] = plan.auto_fields
+    item.source_row_json = source
+
+    comment = "\n".join(plan.comments)
+    _write_update_comment(item, comment)
+    if comment:
+        reason = (getattr(item, "verification_reason", None) or "").strip()
+        item.verification_reason = f"{reason}\n{comment}".strip() if reason else comment
+    if not plan.needs_manual_review and getattr(item, "verification_status", None) not in {
+        VERIFY_NOT_VERIFIED,
+        None,
+        "",
+    }:
+        item.verification_status = VERIFY_VERIFIED
+    elif plan.needs_manual_review and getattr(item, "verification_status", None) == VERIFY_VERIFIED:
+        item.verification_status = VERIFY_REVIEW
+    return plan
+
+
 def apply_verification(item: Any, *, match_threshold: int, review_threshold: int) -> VerificationResult:
     """Write verification fields onto a bulk job item. Does not change extraction status."""
     if getattr(item, "status", None) != "SUCCESS":
@@ -956,4 +1358,5 @@ def apply_verification(item: Any, *, match_threshold: int, review_threshold: int
     if hasattr(item, "company_location_match"):
         item.company_location_match = result.company_location_match
     item.verification_reason = result.reason
+    apply_auto_field_updates(item)
     return result

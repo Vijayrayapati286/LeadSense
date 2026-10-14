@@ -89,6 +89,20 @@ export function buildRecipientContext(recipient) {
   return context;
 }
 
+/** Saved name, unless it is the email or the part before @.
+ * anand.konagani@acme.com stored as anand.konagani → Anand Konagani. */
+export function displayRecipientName(name, email) {
+  const raw = String(name || '').trim();
+  const mail = String(email || '').trim();
+  const local = mail.includes('@') ? mail.split('@')[0].trim() : '';
+  const takenFromEmail =
+    !raw ||
+    raw.toLowerCase() === mail.toLowerCase() ||
+    (local && raw.toLowerCase() === local.toLowerCase());
+  if (takenFromEmail) return nameFromEmail(mail) || raw;
+  return raw;
+}
+
 export function nameFromEmail(email) {
   const raw = String(email || '').trim();
   if (!raw.includes('@')) return '';

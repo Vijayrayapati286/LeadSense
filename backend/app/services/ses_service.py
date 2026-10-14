@@ -13,7 +13,13 @@ from email.mime.text import MIMEText
 from email.utils import formataddr, make_msgid, parseaddr
 
 from app.config import get_settings
-from app.utils.helpers import KNOWN_MERGE_FIELDS, add_known_field_case_aliases, render_email_body, render_template
+from app.utils.helpers import (
+    KNOWN_MERGE_FIELDS,
+    add_known_field_case_aliases,
+    display_recipient_name,
+    render_email_body,
+    render_template,
+)
 from app.utils.unsubscribe import (
     list_unsubscribe_value,
     unsubscribe_footer_html,
@@ -279,10 +285,10 @@ class SESService:
 
         for recipient in recipients:
             context = {key: recipient.get(field, "") for key, field in KNOWN_MERGE_FIELDS.items()}
-            if not str(context.get("Name") or "").strip():
-                from app.utils.helpers import name_from_email
-
-                context["Name"] = name_from_email(recipient.get("email") or context.get("Email"))
+            context["Name"] = display_recipient_name(
+                context.get("Name"),
+                recipient.get("email") or context.get("Email"),
+            )
             if from_name:
                 context["FromName"] = from_name
             add_known_field_case_aliases(context)

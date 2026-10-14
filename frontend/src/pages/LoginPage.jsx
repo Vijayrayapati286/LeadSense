@@ -42,8 +42,7 @@ export default function LoginPage() {
   const handleMicrosoftLogin = async () => {
     setLoading(true);
     try {
-      const hint = email.trim();
-      const { data } = await authService.getLoginUrl(hint || undefined);
+      const { data } = await authService.getLoginUrl();
       if (data.dev_mode || !data.login_url) {
         toast.error('Microsoft sign-in is not configured.');
         setLoading(false);
