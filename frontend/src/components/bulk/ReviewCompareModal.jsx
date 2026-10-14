@@ -138,11 +138,12 @@ export default function ReviewCompareModal({
   busy = false,
   position = null,
   autoAdvance = false,
+  readOnly = false,
 }) {
   const conflicts = useMemo(() => (item ? buildConflicts(item) : []), [item]);
   const conflictKeys = useMemo(() => new Set(conflicts.map((c) => c.field)), [conflicts]);
   const hasConflicts = conflicts.length > 0;
-  const canResolve = item ? hasConflicts || itemHasConflict(item) : false;
+  const canResolve = !readOnly && (item ? hasConflicts || itemHasConflict(item) : false);
   const displayName =
     item?.extracted?.name || item?.uploaded?.name || `Row ${item?.source_row_number}`;
 
@@ -449,7 +450,9 @@ export default function ReviewCompareModal({
           {hasConflicts ? (
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-slate-600">
-                Highlighted fields differ. Click Edit, then click any field — including a match — to change it.
+                {readOnly
+                  ? 'Uploaded and LinkedIn values for this verified record.'
+                  : 'Highlighted fields differ. Click Edit, then click any field — including a match — to change it.'}
               </p>
               {canResolve ? (
                 <button
@@ -471,10 +474,19 @@ export default function ReviewCompareModal({
             <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5">
               <FiCheck className="shrink-0 text-emerald-600" size={18} />
               <p className="text-sm font-medium text-emerald-900">
-                Both sheets agree on every field. Verify to move this record on.
+                {readOnly
+                  ? 'This record is verified. Uploaded and LinkedIn values are shown below.'
+                  : 'Both sheets agree on every field. Verify to move this record on.'}
               </p>
             </div>
           )}
+
+          {item.update_comment ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Comments</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.update_comment}</p>
+            </div>
+          ) : null}
 
           {/* Two sheets, side by side. One grid keeps each field on a shared row. */}
           <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:gap-x-4">

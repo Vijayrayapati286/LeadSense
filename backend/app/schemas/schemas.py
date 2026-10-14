@@ -640,6 +640,8 @@ class CampaignRecipientResponse(BaseModel):
     current_stage: int
     next_send_at: datetime | None
     last_sent_at: datetime | None
+    last_sent_subject: str | None = None
+    last_sent_body: str | None = None
     replied_at: datetime | None
     bounced_at: datetime | None
     ooo_at: datetime | None = None
@@ -719,6 +721,8 @@ class CampaignSequenceStageCreate(BaseModel):
     body: str
     closing: str | None = None
     cta: str | None = None
+    # False keeps this stage from scheduling every contact already waiting on it.
+    queue_waiting: bool = True
 
 
 class CampaignSequenceStageUpdate(BaseModel):
@@ -898,6 +902,7 @@ class EmailLogResponse(BaseModel):
     body: str | None = None
     recipient_name: str | None = None
     recipient_email: str | None = None
+    recipient_company: str | None = None
     campaign_name: str | None = None
     sender_name: str | None = None
     sender_email: str | None = None
@@ -913,6 +918,7 @@ class VerifiedEmailGroupResponse(BaseModel):
     emails: list[str] = []
     email_count: int = 0
     send_count: int = 0
+    company: str | None = None
     latest_sent_at: datetime | None = None
     latest_status: str | None = None
     latest_campaign_name: str | None = None

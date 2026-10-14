@@ -698,12 +698,18 @@ class CampaignService:
         if existing:
             raise ValueError(f"Stage order {data.stage_order} already exists for this campaign")
 
-        stage = CampaignSequenceStage(campaign_id=campaign_id, **data.model_dump())
+        stage = CampaignSequenceStage(
+            campaign_id=campaign_id,
+            **data.model_dump(exclude={"queue_waiting"}),
+        )
         db.add(stage)
         db.flush()
         # People already sent the previous stage never got a next_send_at when
         # this stage did not exist yet. Queue them now so the follow-up appears.
-        self._queue_followups_for_new_stage(db, stage)
+        # Scheduling from the recipient list passes queue_waiting=False so only
+        # the contacts chosen in that dialog get a send time.
+        if data.queue_waiting:
+            self._queue_followups_for_new_stage(db, stage)
         db.commit()
         db.refresh(stage)
         return stage

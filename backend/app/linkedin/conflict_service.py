@@ -168,9 +168,12 @@ def conflicting_fields(item: BulkJobItemRow) -> list[dict[str, Any]]:
         item.source_row_json if isinstance(item.source_row_json, dict) else {}
     )
     matches = live_matches(item)
+    source = item.source_row_json if isinstance(item.source_row_json, dict) else {}
+    auto_fields = source.get("_auto_verified_fields") or []
+    auto = set(auto_fields) if isinstance(auto_fields, list) else set()
     out: list[dict[str, Any]] = []
     for field in COMPARE_FIELDS:
-        if matches[field] is not False:
+        if field in auto or matches[field] is not False:
             continue
         out.append(
             {

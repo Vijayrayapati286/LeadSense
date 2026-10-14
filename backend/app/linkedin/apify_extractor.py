@@ -150,6 +150,8 @@ class LinkedInApifyProfileExtractor:
         job_title = str(item.get("jobTitle") or "").strip()
         if not company:
             company = self._company_from_texts(job_title, headline) or ""
+        if not job_title:
+            job_title = self._title_from_headline(headline) or ""
 
         data = {
             "name": name,
@@ -520,6 +522,8 @@ class LinkedInApifyProfileExtractor:
 
         if not company:
             company = self._company_from_texts(job_title, headline) or ""
+        if not job_title:
+            job_title = self._title_from_headline(headline) or ""
 
         profile_url = (
             self._first_str(item, ("inputUrl", "profileUrl", "url", "linkedinUrl"))
@@ -669,6 +673,33 @@ class LinkedInApifyProfileExtractor:
         if at_word:
             return at_word.group(1).strip(" .") or None
         return None
+
+    @staticmethod
+    def _title_from_headline(headline: str | None) -> str | None:
+        """Derive designation from 'Title @ Company' or 'Title at Company' headlines.
+
+        A headline with no separator is left alone so a tagline is not stored as a title.
+        """
+        text = (headline or "").strip()
+        if not text:
+            return None
+        at_match = re.search(r"^(.+?)\s@\s", text)
+        if at_match:
+            return at_match.group(1).strip(" .") or None
+        at_word = re.search(r"(?i)^(.+?)\sat\s", text)
+        if at_word:
+            return at_word.group(1).strip(" .") or None
+        return None
+
+    @staticmethod
+    def designation_or_headline_title(
+        designation: str | None, headline: str | None
+    ) -> str | None:
+        """Keep a real job title. If it is blank, take the title from the headline."""
+        text = (designation or "").strip()
+        if text:
+            return text
+        return LinkedInApifyProfileExtractor._title_from_headline(headline)
 
     @staticmethod
     def _first_str(item: dict[str, Any], keys: tuple[str, ...]) -> str | None:

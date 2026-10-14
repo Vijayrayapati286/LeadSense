@@ -121,6 +121,7 @@ export const campaignService = {
 export const sequenceService = {
   getAll: (campaignId) => api.get(`/campaign/${campaignId}/sequence`),
   create: (campaignId, data) => api.post(`/campaign/${campaignId}/sequence`, data),
+  update: (stageId, data) => api.put(`/campaign/sequence/${stageId}`, data),
   delete: (stageId) => api.delete(`/campaign/sequence/${stageId}`),
 };
 
@@ -171,6 +172,9 @@ export const emailService = {
 
 export const logService = {
   getAll: (params) => api.get('/logs', { params }),
+  getProspect: (email) => api.get('/logs/prospect', { params: { key: email } }),
+  exportCategory: (category) =>
+    api.get('/logs/export', { params: { category }, responseType: 'blob' }),
 };
 
 export const blacklistService = {

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import DATABASE_URL, SessionLocal
 from app.config import get_settings
+from app.linkedin.apify_extractor import LinkedInApifyProfileExtractor
 from app.linkedin.bulk_models import (
     CLAIMABLE_ITEM_STATUSES,
     ITEM_FINAL_FAILED,
@@ -379,9 +380,11 @@ def copy_canonical_results_to_duplicates(db: Session, job_id: str) -> int:
         item.status = canon.status
         item.name = canon.name
         item.company = canon.company
-        item.designation = canon.designation
-        item.about = canon.about
         item.headline = canon.headline
+        item.designation = LinkedInApifyProfileExtractor.designation_or_headline_title(
+            canon.designation, canon.headline
+        )
+        item.about = canon.about
         item.location = canon.location
         item.followers = canon.followers
         item.connections = canon.connections
@@ -577,6 +580,11 @@ def item_to_result_dict(item: BulkJobItemRow) -> dict[str, Any]:
         "verification_status": status or item.verification_status,
         "verification_score": scored if scored is not None else (item.verification_score or 0),
         "verification_reason": item.verification_reason,
+        "update_comment": (
+            item.source_row_json.get("_update_comment")
+            if isinstance(item.source_row_json, dict)
+            else None
+        ),
         "resolved": {
             "name": getattr(item, "resolved_name", None),
             "designation": getattr(item, "resolved_designation", None),

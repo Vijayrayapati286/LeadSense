@@ -63,13 +63,34 @@ def name_from_email(email: str | None) -> str:
     return " ".join(w[:1].upper() + w[1:].lower() for w in words)
 
 
+def display_recipient_name(name: str | None, email: str | None) -> str:
+    """Use a saved name, unless it is just the email or its local part.
+
+    anand.konagani@acme.com stored as anand.konagani → Anand Konagani.
+    A real name such as Anand Konagani is left unchanged.
+    """
+    raw = (name or "").strip()
+    mail = (email or "").strip()
+    local = mail.split("@", 1)[0].strip() if "@" in mail else ""
+    taken_from_email = (
+        not raw
+        or raw.lower() == mail.lower()
+        or (local and raw.lower() == local.lower())
+    )
+    if taken_from_email:
+        return name_from_email(mail) or raw
+    return raw
+
+
 def build_recipient_context(recipient) -> dict[str, str]:
     """Build the {{Key}}: value context for rendering a template against a
     real Recipient row — every known merge field, plus any approved custom
     fields (RecipientCustomValue) this recipient has a value for."""
     context = {key: (getattr(recipient, field, None) or "") for key, field in KNOWN_MERGE_FIELDS.items()}
-    if not str(context.get("Name") or "").strip():
-        context["Name"] = name_from_email(context.get("Email") or getattr(recipient, "email", None))
+    context["Name"] = display_recipient_name(
+        context.get("Name"),
+        context.get("Email") or getattr(recipient, "email", None),
+    )
     for cv in getattr(recipient, "custom_values", []) or []:
         context[cv.custom_field.name] = cv.value or ""
     add_known_field_case_aliases(context)
@@ -99,11 +120,22 @@ def is_known_merge_field(field: str) -> bool:
 def render_template(text: str, context: dict[str, str]) -> str:
     """Replace {{Key}} placeholders with context values.
 
-    Matching is case-insensitive so {{name}} and {{Name}} both resolve when
-    the context provides Name."""
+    Two or more braces are accepted, so {{Company}} and {{{{Company}}}} both
+    resolve. Matching is case-insensitive so {{name}} and {{Name}} both
+    resolve when the context provides Name."""
+    if not text:
+        return text or ""
     result = text
     for key, value in context.items():
-        result = re.sub(rf"\{{\{{{re.escape(key)}\}}\}}", value or "", result, flags=re.IGNORECASE)
+        # Built without an f-string: {{ in an f-string collapses before re sees it.
+        pattern = r"\{{2,}" + re.escape(key) + r"\}{2,}"
+        replacement = value or ""
+        result = re.sub(
+            pattern,
+            lambda _match, repl=replacement: repl,
+            result,
+            flags=re.IGNORECASE,
+        )
     return result
 
 

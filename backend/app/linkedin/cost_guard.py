@@ -20,6 +20,7 @@ from app.linkedin.bulk_models import (
     ITEM_SUCCESS,
     BulkJobItemRow,
 )
+from app.linkedin.apify_extractor import LinkedInApifyProfileExtractor
 from app.linkedin.validator import is_linkedin_in_profile_url, normalize_profile_url
 from app.linkedin.verification import apply_verification
 
@@ -71,7 +72,9 @@ def _copy_extracted_fields(dest: BulkJobItemRow, src: BulkJobItemRow, *, now: da
     dest.status = ITEM_SUCCESS
     dest.name = src.name
     dest.company = src.company
-    dest.designation = src.designation
+    dest.designation = LinkedInApifyProfileExtractor.designation_or_headline_title(
+        src.designation, src.headline
+    )
     dest.about = src.about
     dest.headline = src.headline
     dest.location = src.location

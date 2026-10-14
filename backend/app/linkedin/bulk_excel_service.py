@@ -263,6 +263,7 @@ class BulkExcelService:
             "Verification Score",
             "Verification Status",
             "Verification Reason",
+            "Update Comment",
             "Resolution",
             "Resolved Name",
             "Resolved Designation",
@@ -342,6 +343,7 @@ class BulkExcelService:
             row["Verification Score"] = "" if score is None else score
             row["Verification Status"] = getattr(item, "verification_status", "") or ""
             row["Verification Reason"] = getattr(item, "verification_reason", None)
+            row["Update Comment"] = source.get("_update_comment") or ""
             row["Resolution"] = getattr(item, "resolution_summary", None)
             row["Resolved Name"] = getattr(item, "resolved_name", None)
             row["Resolved Designation"] = getattr(item, "resolved_designation", None)

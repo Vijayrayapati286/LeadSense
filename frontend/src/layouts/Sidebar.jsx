@@ -212,7 +212,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+      <nav className="sidebar-nav flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {getNavItems(user).map((item) => {
           if (item.children) {
             return <NavGroup key={item.label} item={item} collapsed={collapsed} />;

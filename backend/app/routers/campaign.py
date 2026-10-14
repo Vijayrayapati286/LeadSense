@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.middleware.auth import get_current_user
-from app.models import Campaign, CampaignRecipient, Recipient, User
+from app.models import Campaign, CampaignRecipient, EmailLog, Recipient, User
 from app.schemas.schemas import (
     CampaignListMemberResponse,
     CampaignListSummaryResponse,
@@ -371,6 +371,23 @@ def get_campaign_recipients(
             for rid, names in names_by_recipient.items()
         }
 
+    latest_sent: dict[int, EmailLog] = {}
+    if recipient_ids:
+        sent_logs = (
+            db.query(EmailLog)
+            .filter(
+                EmailLog.campaign_id == campaign_id,
+                EmailLog.recipient_id.in_(recipient_ids),
+                EmailLog.subject.isnot(None),
+                EmailLog.subject != "",
+            )
+            .order_by(EmailLog.sent_at.desc(), EmailLog.id.desc())
+            .all()
+        )
+        for log in sent_logs:
+            if log.recipient_id not in latest_sent:
+                latest_sent[log.recipient_id] = log
+
     items = []
     emails = [cr.recipient.email for cr in rows]
     reasons = [cr.recipient.suppression_reason for cr in rows]
@@ -386,6 +403,10 @@ def get_campaign_recipients(
         response.suppression_reason = cr.recipient.suppression_reason
         response.email_verification_status = v_status
         response.email_verification_result = v_result
+        sent = latest_sent.get(cr.recipient_id)
+        if sent:
+            response.last_sent_subject = sent.subject
+            response.last_sent_body = sent.body
         state, label = derive_follow_up_state(cr)
         response.follow_up_state = state
         response.follow_up_label = label

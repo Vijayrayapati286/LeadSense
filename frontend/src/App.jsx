@@ -15,6 +15,7 @@ import RecordOutsideMailPage from './pages/RecordOutsideMailPage';
 import RecipientsPage from './pages/RecipientsPage';
 import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
+import EmailLogProspectPage from './pages/EmailLogProspectPage';
 import SettingsPage from './pages/SettingsPage';
 import BlacklistPage from './pages/BlacklistPage';
 import AccountsPage from './pages/AccountsPage';
@@ -76,6 +77,7 @@ export default function App() {
             <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
             <Route path="/templates" element={<TemplatesPage />} />
             <Route path="/logs" element={<EmailLogsPage />} />
+            <Route path="/logs/prospect" element={<EmailLogProspectPage />} />
             <Route path="/blacklist" element={<BlacklistPage />} />
             <Route path="/icp-accounts" element={<AccountsPage />} />
             <Route path="/icp-contacts" element={<ContactsPage />} />
@@ -102,6 +104,7 @@ export default function App() {
           <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/logs" element={<EmailLogsPage />} />
+          <Route path="/logs/prospect" element={<EmailLogProspectPage />} />
           <Route path="/blacklist" element={<BlacklistPage />} />
           <Route path="/icp-accounts" element={<AccountsPage />} />
           <Route path="/icp-contacts" element={<ContactsPage />} />

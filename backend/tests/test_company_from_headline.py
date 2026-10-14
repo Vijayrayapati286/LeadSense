@@ -46,6 +46,85 @@ def test_normalize_item_fills_company_from_headline_when_job_title_lacks_it():
     assert mapped["job_title"] == "Director of Information Technology"
 
 
+def test_title_from_headline_at_pattern():
+    assert (
+        LinkedInApifyProfileExtractor._title_from_headline(
+            "Chief Financial Officer at 3CDC"
+        )
+        == "Chief Financial Officer"
+    )
+
+
+def test_title_from_headline_case_insensitive_at():
+    assert (
+        LinkedInApifyProfileExtractor._title_from_headline(
+            "Director Of IT At First South Farm Credit"
+        )
+        == "Director Of IT"
+    )
+
+
+def test_title_from_headline_at_sign():
+    assert (
+        LinkedInApifyProfileExtractor._title_from_headline(
+            "Chief Financial Officer @ 3CDC"
+        )
+        == "Chief Financial Officer"
+    )
+
+
+def test_title_from_headline_ignores_tagline():
+    assert LinkedInApifyProfileExtractor._title_from_headline("Building better cities") is None
+
+
+def test_designation_or_headline_title_keeps_explicit_title():
+    assert (
+        LinkedInApifyProfileExtractor.designation_or_headline_title(
+            "Director of Information Technology",
+            "Director of IT at First South Farm Credit",
+        )
+        == "Director of Information Technology"
+    )
+
+
+def test_designation_or_headline_title_fills_blank():
+    assert (
+        LinkedInApifyProfileExtractor.designation_or_headline_title(
+            "",
+            "Chief Legal Officer & EVP of Human Resources at 3CDC",
+        )
+        == "Chief Legal Officer & EVP of Human Resources"
+    )
+
+
+def test_map_rich_item_fills_job_title_from_headline_when_missing():
+    extractor = LinkedInApifyProfileExtractor.__new__(LinkedInApifyProfileExtractor)
+    mapped = extractor._map_rich_item(
+        {
+            "firstName": "Tim",
+            "lastName": "Szilasi",
+            "companyName": "3CDC",
+            "headline": "Chief Financial Officer at 3CDC",
+        }
+    )
+    assert mapped["job_title"] == "Chief Financial Officer"
+    assert mapped["company"] == "3CDC"
+    assert mapped["headline"] == "Chief Financial Officer at 3CDC"
+
+
+def test_map_rich_item_keeps_explicit_job_title():
+    extractor = LinkedInApifyProfileExtractor.__new__(LinkedInApifyProfileExtractor)
+    mapped = extractor._map_rich_item(
+        {
+            "firstName": "Mark",
+            "lastName": "Huff",
+            "jobTitle": "Director of Information Technology",
+            "headline": "Director of IT at First South Farm Credit",
+        }
+    )
+    assert mapped["job_title"] == "Director of Information Technology"
+
+
 def test_map_rich_item_fills_company_from_headline():
     extractor = LinkedInApifyProfileExtractor.__new__(LinkedInApifyProfileExtractor)
     mapped = extractor._map_rich_item(
