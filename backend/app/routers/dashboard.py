@@ -29,23 +29,30 @@ def _date_range_bounds(date_from: date | None, date_to: date | None) -> tuple[da
     return dt_from, dt_to
 
 
-def _resolve_scoped_user_id(current_user: User, requested_user_id: int | None) -> int | None:
-    """Never trust a cross-tenant user_id from the client."""
+def _scoped_dashboard_user_id(
+    db: Session, current_user: User, requested_user_id: int | None
+) -> int | None:
+    """Match the campaigns list: no user selected means the whole organization.
+
+    A chosen user must belong to the caller's org. Members may only select
+    themselves. Callers with no org stay on their own rows.
+    """
     org_id = getattr(current_user, "org_id", None)
     role = getattr(current_user, "role", None)
 
-    if role != ROLE_ADMIN:
+    if not org_id:
         return current_user.id
 
     if requested_user_id is None:
         return None
 
-    # ADMIN may filter by user only within their own org
-    if org_id:
-        # Verified in the route against DB; here we just pass through and
-        # validate below when db is available.
-        return requested_user_id
-    return current_user.id
+    if role != ROLE_ADMIN and requested_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    target = db.query(User).filter(User.id == requested_user_id, User.org_id == org_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    return requested_user_id
 
 
 @router.get("/stats", response_model=DashboardResponse)
@@ -58,18 +65,10 @@ def get_dashboard_stats(
     current_user: User = Depends(get_current_user),
 ):
     """Get aggregated dashboard statistics and charts data, optionally
-    narrowed by sender/owner, campaign, and/or a date range."""
+    narrowed by sender, campaign, and/or a date range. With no user selected,
+    counts cover the caller's organization, same as the campaigns list."""
     org_id = getattr(current_user, "org_id", None)
-    role = getattr(current_user, "role", None)
-
-    scoped_user_id = user_id
-    if role != ROLE_ADMIN:
-        scoped_user_id = current_user.id
-    elif user_id is not None and org_id:
-        target = db.query(User).filter(User.id == user_id, User.org_id == org_id).first()
-        if not target:
-            raise HTTPException(status_code=404, detail="User not found")
-        scoped_user_id = user_id
+    scoped_user_id = _scoped_dashboard_user_id(db, current_user, user_id)
 
     if campaign_id is not None and org_id:
         from app.models import Campaign
@@ -109,15 +108,7 @@ def export_report(
     send history) for the Dashboard's "Export Report" button — respects the
     same filters currently applied on screen."""
     org_id = getattr(current_user, "org_id", None)
-    role = getattr(current_user, "role", None)
-
-    scoped_user_id = user_id
-    if role != ROLE_ADMIN:
-        scoped_user_id = current_user.id
-    elif user_id is not None and org_id:
-        target = db.query(User).filter(User.id == user_id, User.org_id == org_id).first()
-        if not target:
-            raise HTTPException(status_code=404, detail="User not found")
+    scoped_user_id = _scoped_dashboard_user_id(db, current_user, user_id)
 
     dt_from, dt_to = _date_range_bounds(date_from, date_to)
     content = dashboard_service.build_report_workbook(

@@ -17,9 +17,10 @@ MAX_EMAILS_PER_DAY_SPAN = 90
 
 class DashboardService:
     """All aggregation methods take the same four optional filters —
-    user_id (sender/owner), campaign_id, date_from, date_to (both
-    timezone-aware datetimes bounding the relevant activity window) — so the
-    Dashboard's filter bar can narrow every widget consistently. Each metric
+    user_id (sender, only when a specific user is selected), campaign_id,
+    date_from, date_to (both timezone-aware datetimes bounding the relevant
+    activity window) — so the Dashboard's filter bar can narrow every widget
+    consistently. A missing user_id means the whole organization. Each metric
     is filtered against whichever timestamp is actually meaningful for it
     (campaign counts by Campaign.created_at, email counts by
     EmailLog.sent_at, suppressions by SuppressionEntry.created_at)."""
