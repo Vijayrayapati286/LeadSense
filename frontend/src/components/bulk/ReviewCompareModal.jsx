@@ -16,6 +16,15 @@ const SHEET = 'KEEP_EXISTING';
 const LINKEDIN = 'KEEP_EXTRACTED';
 const MANUAL = 'MANUAL_EDIT';
 
+function FieldHint({ text }) {
+  return (
+    <span className="mt-1.5 block text-[11px] leading-4 text-slate-500">
+      <span className="font-semibold uppercase tracking-[0.04em] text-slate-400">Headline</span>
+      <span className="mt-0.5 block text-slate-600">{text}</span>
+    </span>
+  );
+}
+
 function display(value) {
   const text = value?.toString().trim();
   return text ? text : '—';
@@ -51,6 +60,8 @@ function FieldCell({
   showInput = false,
   inputValue = '',
   onInput,
+  hint = '',
+  autoFocus = false,
 }) {
   const isSheet = side === 'sheet';
   const empty = !hasValue(value);
@@ -75,12 +86,13 @@ function FieldCell({
         </span>
         <input
           type="text"
-          autoFocus
+          autoFocus={autoFocus}
           disabled={disabled}
           value={inputValue}
           onChange={(event) => onInput?.(event.target.value)}
           className="w-full rounded-md border border-primary-300 bg-white px-2 py-1 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary-200"
         />
+        {hint ? <FieldHint text={hint} /> : null}
       </div>
     );
   }
@@ -121,6 +133,7 @@ function FieldCell({
       >
         {empty ? 'No value' : value}
       </span>
+      {hint ? <FieldHint text={hint} /> : null}
       {custom ? (
         <span className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-primary-600">
           Replaced by custom value
@@ -167,7 +180,7 @@ export default function ReviewCompareModal({
   const [decisions, setDecisions] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [editingAll, setEditingAll] = useState(false);
-  const [activeEdit, setActiveEdit] = useState(null);
+  const [drafts, setDrafts] = useState({});
   const [visible, setVisible] = useState(false);
   const dialogRef = useRef(null);
   const editSnapshot = useRef(null);
@@ -180,7 +193,7 @@ export default function ReviewCompareModal({
     setDecisions(initial);
     setSaving(false);
     setEditingAll(false);
-    setActiveEdit(null);
+    setDrafts({});
     editSnapshot.current = null;
     const frame = requestAnimationFrame(() => setVisible(true));
     const focusFrame = requestAnimationFrame(() => dialogRef.current?.focus());
@@ -221,29 +234,42 @@ export default function ReviewCompareModal({
     setField(field, { resolution, editing: false, edited_value: source || '', baseSide: side });
   }
 
+  function sideText(field, side, sourceDecisions = decisions) {
+    const d = sourceDecisions[field];
+    if (d?.resolution === MANUAL && d?.baseSide === side) return d.edited_value || '';
+    const raw = side === 'sheet' ? item?.uploaded?.[field] : item?.extracted?.[field];
+    return raw == null ? '' : String(raw);
+  }
+
   function openUniversalEdit() {
+    const next = {};
+    FIELDS.forEach((f) => {
+      next[f.key] = {
+        sheet: sideText(f.key, 'sheet'),
+        linkedin: sideText(f.key, 'linkedin'),
+      };
+    });
     editSnapshot.current = decisions;
-    setActiveEdit(null);
+    setDrafts(next);
     setEditingAll(true);
   }
 
   function cancelUniversalEdit() {
     if (editSnapshot.current) setDecisions(editSnapshot.current);
     editSnapshot.current = null;
-    setActiveEdit(null);
+    setDrafts({});
     setEditingAll(false);
   }
 
-  function startCellEdit(field, side) {
-    const d = decisions[field] || {};
-    const source = side === 'sheet' ? item?.uploaded?.[field] : item?.extracted?.[field];
-    const keepCustom = d.resolution === MANUAL && d.baseSide === side;
-    setActiveEdit({ field, side });
-    if (keepCustom) return;
+  function editSide(field, side, value) {
+    setDrafts((prev) => ({
+      ...prev,
+      [field]: { ...(prev[field] || {}), [side]: value },
+    }));
     setField(field, {
-      resolution: side === 'sheet' ? SHEET : LINKEDIN,
+      edited_value: value,
+      resolution: MANUAL,
       editing: true,
-      edited_value: source || '',
       baseSide: side,
     });
   }
@@ -272,7 +298,7 @@ export default function ReviewCompareModal({
     });
     setDecisions(next);
     setEditingAll(false);
-    setActiveEdit(null);
+    setDrafts({});
     editSnapshot.current = null;
   }
 
@@ -452,7 +478,9 @@ export default function ReviewCompareModal({
               <p className="text-sm text-slate-600">
                 {readOnly
                   ? 'Uploaded and LinkedIn values for this verified record.'
-                  : 'Highlighted fields differ. Click Edit, then click any field — including a match — to change it.'}
+                  : editingAll
+                    ? 'Every field is open. Type in the box you want to keep — that value is what gets saved.'
+                    : 'Highlighted fields differ. Click Edit to change any field, including one that already matches.'}
               </p>
               {canResolve ? (
                 <button
@@ -471,13 +499,30 @@ export default function ReviewCompareModal({
               ) : null}
             </div>
           ) : (
-            <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5">
-              <FiCheck className="shrink-0 text-emerald-600" size={18} />
-              <p className="text-sm font-medium text-emerald-900">
-                {readOnly
-                  ? 'This record is verified. Uploaded and LinkedIn values are shown below.'
-                  : 'Both sheets agree on every field. Verify to move this record on.'}
-              </p>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5">
+              <div className="flex items-center gap-3">
+                <FiCheck className="shrink-0 text-emerald-600" size={18} />
+                <p className="text-sm font-medium text-emerald-900">
+                  {readOnly
+                    ? 'This record is verified. Uploaded and LinkedIn values are shown below.'
+                    : 'Both sheets agree on every field. Verify to move this record on.'}
+                </p>
+              </div>
+              {canResolve ? (
+                <button
+                  type="button"
+                  disabled={isBusy || editingAll}
+                  onClick={openUniversalEdit}
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
+                    editingAll
+                      ? 'border-primary-600 bg-primary-600 text-white'
+                      : 'border-emerald-300 bg-white text-emerald-800 hover:border-emerald-400'
+                  }`}
+                >
+                  <FiEdit2 size={13} />
+                  {editingAll ? 'Editing' : 'Edit'}
+                </button>
+              ) : null}
             </div>
           )}
 
@@ -545,8 +590,17 @@ export default function ReviewCompareModal({
               const decision = decisions[f.key];
               const customSheet = decision?.resolution === MANUAL && decision?.baseSide === 'sheet';
               const customLinkedIn = decision?.resolution === MANUAL && decision?.baseSide === 'linkedin';
-              const sheetInput = editingAll && activeEdit?.field === f.key && activeEdit?.side === 'sheet';
-              const linkedInInput = editingAll && activeEdit?.field === f.key && activeEdit?.side === 'linkedin';
+              const linkedInShown = editingAll
+                ? drafts[f.key]?.linkedin
+                : customLinkedIn
+                  ? decision?.edited_value
+                  : item?.extracted?.[f.key];
+              const headlineHint =
+                f.key === 'designation' &&
+                hasValue(item?.extracted?.headline) &&
+                String(item.extracted.headline).trim() !== String(linkedInShown ?? '').trim()
+                  ? String(item.extracted.headline).trim()
+                  : '';
               return (
                 <Fragment key={f.key}>
                   <FieldCell
@@ -558,17 +612,11 @@ export default function ReviewCompareModal({
                     custom={customSheet}
                     interactive={isDiff || editingAll}
                     disabled={isBusy || !canResolve}
-                    showInput={sheetInput}
-                    inputValue={decision?.edited_value || ''}
-                    onInput={(value) =>
-                      setField(f.key, {
-                        edited_value: value,
-                        resolution: MANUAL,
-                        editing: true,
-                        baseSide: 'sheet',
-                      })
-                    }
-                    onClick={() => (editingAll ? startCellEdit(f.key, 'sheet') : chooseSource(f.key, SHEET))}
+                    showInput={editingAll}
+                    inputValue={drafts[f.key]?.sheet ?? ''}
+                    autoFocus={editingAll && f.key === FIELDS[0].key}
+                    onInput={(value) => editSide(f.key, 'sheet', value)}
+                    onClick={() => chooseSource(f.key, SHEET)}
                   />
                   <FieldCell
                     label={f.label}
@@ -579,19 +627,11 @@ export default function ReviewCompareModal({
                     custom={customLinkedIn}
                     interactive={isDiff || editingAll}
                     disabled={isBusy || !canResolve}
-                    showInput={linkedInInput}
-                    inputValue={decision?.edited_value || ''}
-                    onInput={(value) =>
-                      setField(f.key, {
-                        edited_value: value,
-                        resolution: MANUAL,
-                        editing: true,
-                        baseSide: 'linkedin',
-                      })
-                    }
-                    onClick={() =>
-                      editingAll ? startCellEdit(f.key, 'linkedin') : chooseSource(f.key, LINKEDIN)
-                    }
+                    showInput={editingAll}
+                    inputValue={drafts[f.key]?.linkedin ?? ''}
+                    hint={headlineHint}
+                    onInput={(value) => editSide(f.key, 'linkedin', value)}
+                    onClick={() => chooseSource(f.key, LINKEDIN)}
                   />
                 </Fragment>
               );

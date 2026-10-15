@@ -148,10 +148,7 @@ class LinkedInApifyProfileExtractor:
         headline = str(item.get("headline") or "").strip()
         company = str(item.get("companyName") or "").strip()
         job_title = str(item.get("jobTitle") or "").strip()
-        if not company:
-            company = self._company_from_texts(job_title, headline) or ""
-        if not job_title:
-            job_title = self._title_from_headline(headline) or ""
+        company, job_title = self._apply_role_fallback(item, company, job_title)
 
         data = {
             "name": name,
@@ -504,26 +501,11 @@ class LinkedInApifyProfileExtractor:
             default_position = item.get("defaultPosition") or item.get("current_position")
             if isinstance(default_position, dict):
                 if not company:
-                    company = (
-                        self._first_str(
-                            default_position,
-                            ("companyName", "company_name", "company"),
-                        )
-                        or ""
-                    )
+                    company = self._company_label(default_position, allow_subtitle=True)
                 if not job_title:
-                    job_title = (
-                        self._first_str(
-                            default_position,
-                            ("title", "jobTitle", "job_title"),
-                        )
-                        or ""
-                    )
+                    job_title = self._role_title(default_position)
 
-        if not company:
-            company = self._company_from_texts(job_title, headline) or ""
-        if not job_title:
-            job_title = self._title_from_headline(headline) or ""
+        company, job_title = self._apply_role_fallback(item, company, job_title)
 
         profile_url = (
             self._first_str(item, ("inputUrl", "profileUrl", "url", "linkedinUrl"))
@@ -599,57 +581,106 @@ class LinkedInApifyProfileExtractor:
             (
                 "job_title",
                 "jobTitle",
-                "headline",
                 "occupation",
                 "title",
                 "designation",
             ),
         )
-        if not job_title:
-            default_position = item.get("defaultPosition") or item.get("current_position")
-            if isinstance(default_position, dict):
-                job_title = self._first_str(
-                    default_position,
-                    ("title", "jobTitle", "jobtitle", "headline"),
-                )
-
         company = self._first_str(
             item,
-            ("company", "company_name", "companyName", "current_company"),
+            ("company_name", "companyName", "current_company"),
         )
         if not company:
-            default_position = item.get("defaultPosition") or item.get("current_position")
-            if isinstance(default_position, dict):
-                company = self._first_str(
-                    default_position,
-                    ("companyName", "company_name", "company"),
-                )
-        if not company:
-            positions = item.get("current_positions") or item.get("positions") or item.get("experience")
-            if isinstance(positions, list) and positions:
-                first_pos = positions[0]
-                if isinstance(first_pos, dict):
-                    company = self._first_str(
-                        first_pos,
-                        ("companyName", "company_name", "company", "subtitle"),
-                    )
-                    if not job_title:
-                        job_title = self._first_str(first_pos, ("title", "jobTitle"))
+            company = self._company_label(item) or None
+        default_position = item.get("defaultPosition") or item.get("current_position")
+        if isinstance(default_position, dict):
+            if not job_title:
+                job_title = self._role_title(default_position)
+            if not company:
+                company = self._company_label(default_position, allow_subtitle=True) or None
+
+        company, job_title = self._apply_role_fallback(item, company or "", job_title or "")
 
         about = self._first_str(item, ("about", "summary", "description", "bio"))
-        headline = self._first_str(item, ("headline",))
-
-        if not company:
-            # Prefer experience/title parse first, then headline — job title alone
-            # often omits company while headline is "Title at Company".
-            company = self._company_from_texts(job_title, headline)
 
         return {
             "full_name": full_name,
-            "company": company,
-            "job_title": job_title,
+            "company": company or None,
+            "job_title": job_title or None,
             "about": about,
         }
+
+    def _apply_role_fallback(
+        self, item: dict[str, Any], company: str, job_title: str
+    ) -> tuple[str, str]:
+        """Fill a blank title and company from the current role, then the headline.
+
+        Grouped LinkedIn experience stores the real title one level down
+        (positions[0].positions[0].title) and the company on positions[0].company.name.
+        A headline is kept as its own field and is only split when no role title exists.
+        """
+        headline = self._first_str(item, ("headline",)) or ""
+        title = (job_title or "").strip()
+        org = (company or "").strip()
+        if title and headline and title == headline:
+            title = ""
+
+        role_title, role_company = self._current_role(item)
+        if not title:
+            title = role_title
+        if not org:
+            org = role_company
+        if not org:
+            org = self._company_label(item)
+        if not org:
+            org = self._company_from_texts(title, headline) or ""
+        if not title:
+            title = self._title_from_headline(headline) or ""
+        return org, title
+
+    @classmethod
+    def _current_role(cls, item: dict[str, Any]) -> tuple[str, str]:
+        """Title and company of the first current experience entry."""
+        positions = item.get("current_positions") or item.get("positions") or item.get("experience")
+        if not isinstance(positions, list):
+            return "", ""
+        for entry in positions:
+            if not isinstance(entry, dict):
+                continue
+            title = cls._role_title(entry)
+            org = cls._company_label(entry, allow_subtitle=True)
+            if title or org:
+                return title, org
+        return "", ""
+
+    @classmethod
+    def _role_title(cls, entry: dict[str, Any]) -> str:
+        """Role title, including a title nested under a company group."""
+        nested = entry.get("positions")
+        if isinstance(nested, list):
+            for role in nested:
+                if isinstance(role, dict):
+                    title = cls._first_str(role, ("title", "jobTitle", "job_title"))
+                    if title:
+                        return title
+        return cls._first_str(entry, ("title", "jobTitle", "job_title")) or ""
+
+    @classmethod
+    def _company_label(cls, entry: dict[str, Any], *, allow_subtitle: bool = False) -> str:
+        """Company name from a string, a {name: ...} object, or companyName."""
+        company = entry.get("company")
+        if isinstance(company, dict):
+            named = cls._first_str(company, ("name", "companyName", "company_name"))
+            if named:
+                return named
+        elif isinstance(company, str):
+            named = cls._first_str({"company": company}, ("company",))
+            if named:
+                return named
+        keys = ("companyName", "company_name")
+        if allow_subtitle:
+            keys = keys + ("subtitle",)
+        return cls._first_str(entry, keys) or ""
 
     @classmethod
     def _company_from_texts(cls, *texts: str | None) -> str | None:
@@ -705,7 +736,7 @@ class LinkedInApifyProfileExtractor:
     def _first_str(item: dict[str, Any], keys: tuple[str, ...]) -> str | None:
         for key in keys:
             value = item.get(key)
-            if value is None:
+            if value is None or isinstance(value, (dict, list)):
                 continue
             text = str(value).strip()
             text = re.sub(r"\s+", " ", text)
