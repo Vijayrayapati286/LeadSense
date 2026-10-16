@@ -1578,6 +1578,16 @@ def add_job_verified_items_to_icp(
             errors.append({"item_id": item.id, "error": str(exc)})
 
     db.flush()
+    synced = added + updated
+    if len(items) > 0 and synced > 0:
+        from app.linkedin.bulk_models import BulkExtractJobRow
+
+        job_row = db.query(BulkExtractJobRow).filter(BulkExtractJobRow.id == job_id).first()
+        if job_row is not None:
+            job_row.icp_added_at = datetime.now(timezone.utc)
+            job_row.icp_added_count = synced
+            db.flush()
+
     return {
         "job_id": job_id,
         "eligible": len(items),
@@ -1587,4 +1597,6 @@ def add_job_verified_items_to_icp(
         "icp_record_ids": record_ids,
         "errors": errors[:25],
         "org_id": org_id,
+        "icp_added": synced > 0 and len(items) > 0,
+        "icp_added_count": synced,
     }

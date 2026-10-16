@@ -77,6 +77,9 @@ class BulkExtractJob:
     completed_at: str | None = None
     created_at: str = ""
     updated_at: str = ""
+    icp_added: bool = False
+    icp_added_count: int = 0
+    icp_added_at: str | None = None
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -134,6 +137,9 @@ def job_row_to_snapshot(job: BulkExtractJobRow) -> BulkExtractJob:
         completed_at=_iso(job.completed_at),
         created_at=_iso(job.created_at) or "",
         updated_at=_iso(job.updated_at) or "",
+        icp_added=bool(getattr(job, "icp_added_at", None)),
+        icp_added_count=int(getattr(job, "icp_added_count", 0) or 0),
+        icp_added_at=_iso(getattr(job, "icp_added_at", None)),
     )
 
 
@@ -313,6 +319,7 @@ def get_job(job_id: str) -> BulkExtractJob | None:
         if not job:
             return None
         refresh_job_counters(db, job)
+        _backfill_icp_added_flags(db, [job], user_id=job.user_id)
         db.commit()
         return job_row_to_snapshot(job)
     finally:
@@ -597,6 +604,49 @@ def item_to_result_dict(item: BulkJobItemRow) -> dict[str, Any]:
     }
 
 
+def _backfill_icp_added_flags(
+    db: Session, rows: list[BulkExtractJobRow], *, user_id: int | None
+) -> None:
+    """If verified job URLs are already in ICP, mark the job as added (for older jobs)."""
+    pending = [
+        row
+        for row in rows
+        if not getattr(row, "icp_added_at", None)
+        and (row.status or "") == "done"
+        and ((row.verified_count or 0) + (row.resolved_count or 0)) > 0
+    ]
+    if not pending:
+        return
+
+    from app.icp.service import find_icp_by_linkedin_urls, resolve_org_id
+
+    org_id = resolve_org_id(db, user_id=user_id)
+    now = datetime.now(timezone.utc)
+    for row in pending:
+        items = (
+            db.query(BulkJobItemRow)
+            .filter(
+                BulkJobItemRow.job_id == row.id,
+                BulkJobItemRow.dedupe_of_id.is_(None),
+                BulkJobItemRow.status == ITEM_SUCCESS,
+                func.upper(BulkJobItemRow.verification_status).in_(
+                    [VERIFY_VERIFIED, VERIFY_RESOLVED]
+                ),
+            )
+            .all()
+        )
+        urls = [i.normalized_url for i in items if (i.normalized_url or "").strip()]
+        if not urls:
+            continue
+        icp_map = find_icp_by_linkedin_urls(
+            db, user_id=user_id or row.user_id, org_id=org_id, urls=urls
+        )
+        in_icp = sum(1 for u in urls if u in icp_map)
+        if in_icp >= len(urls):
+            row.icp_added_at = now
+            row.icp_added_count = in_icp
+
+
 def list_jobs(
     *,
     user_id: int | None,
@@ -648,6 +698,7 @@ def list_jobs(
         )
         for row in rows:
             refresh_job_counters(db, row)
+        _backfill_icp_added_flags(db, rows, user_id=user_id)
         db.commit()
         return {
             "total": total,

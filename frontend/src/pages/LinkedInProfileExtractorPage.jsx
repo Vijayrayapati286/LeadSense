@@ -733,6 +733,16 @@ export default function LinkedInProfileExtractorPage() {
                         )}
                         <div className="flex flex-wrap justify-center gap-2">
                           {openConflicts === 0 && ((bulkJob.verified || 0) + (bulkJob.resolved || 0) > 0) ? (
+                          bulkJob.icp_added ? (
+                            <span
+                              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600"
+                              title="Verified contacts from this job are already in ICP"
+                            >
+                              <FiUsers size={16} />
+                              Already added
+                              {bulkJob.icp_added_count ? ` (${bulkJob.icp_added_count})` : ''}
+                            </span>
+                          ) : (
                           <button
                             type="button"
                             onClick={() => handleAddBulkJobToIcp(bulkJobId)}
@@ -753,6 +763,7 @@ export default function LinkedInProfileExtractorPage() {
                               </>
                             )}
                           </button>
+                          )
                           ) : null}
                           <button
                             type="button"

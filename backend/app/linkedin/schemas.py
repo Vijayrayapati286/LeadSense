@@ -92,6 +92,9 @@ class BulkJobStatusResponse(BaseModel):
     excel_file: str | None = None
     download_ready: bool = False
     error: str | None = None
+    icp_added: bool = False
+    icp_added_count: int = 0
+    icp_added_at: str | None = None
 
 
 class BulkJobResultItem(BaseModel):

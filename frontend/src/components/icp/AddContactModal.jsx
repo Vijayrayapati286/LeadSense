@@ -153,6 +153,7 @@ export default function AddContactModal({ isOpen, onClose, onCreated, defaultCom
 
     const fullName = `${firstName} ${lastName}`.trim();
     const selectedAccount = company ? accounts.find((a) => a.company_name === company) : null;
+    const phoneWithCode = `${form.country_code || ''}${phone}`.trim();
 
     setSaving(true);
     try {
@@ -160,7 +161,9 @@ export default function AddContactModal({ isOpen, onClose, onCreated, defaultCom
         name: fullName,
         company_name: company,
         designation: form.designation?.trim() || undefined,
+        department: form.department?.trim() || undefined,
         email: form.email?.trim() || undefined,
+        phone: phoneWithCode || undefined,
         linkedin_url: form.linkedin_url?.trim() || undefined,
         icp_status: form.status || 'active',
         industry: selectedAccount?.industry || undefined,

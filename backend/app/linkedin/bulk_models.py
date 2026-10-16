@@ -66,6 +66,8 @@ class BulkExtractJobRow(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    icp_added_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    icp_added_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     items: Mapped[list["BulkJobItemRow"]] = relationship(
         "BulkJobItemRow",

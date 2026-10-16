@@ -180,16 +180,26 @@ export default function BulkJobDetailPage() {
             </button>
           )}
           {job.status === 'done' && (job.needs_review || 0) === 0 && ((job.verified || 0) + (job.resolved || 0) > 0) ? (
-            <button
-              type="button"
-              onClick={onAddToIcp}
-              disabled={busy}
-              className="btn-primary inline-flex items-center gap-2"
-              title="Add verified profiles now that every conflict is resolved"
-            >
-              <FiUsers size={14} /> Add to ICP
-              {` (${(job.verified || 0) + (job.resolved || 0)})`}
-            </button>
+            job.icp_added ? (
+              <span
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600"
+                title="Verified contacts from this job are already in ICP"
+              >
+                <FiUsers size={14} /> Already added
+                {job.icp_added_count ? ` (${job.icp_added_count})` : ''}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={onAddToIcp}
+                disabled={busy}
+                className="btn-primary inline-flex items-center gap-2"
+                title="Add verified profiles now that every conflict is resolved"
+              >
+                <FiUsers size={14} /> Add to ICP
+                {` (${(job.verified || 0) + (job.resolved || 0)})`}
+              </button>
+            )
           ) : null}
           {(job.needs_review || 0) > 0 && (
             <Link
