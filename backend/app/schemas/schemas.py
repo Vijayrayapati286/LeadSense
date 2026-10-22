@@ -86,9 +86,15 @@ class DashboardStats(BaseModel):
 
 class DailyEmailStat(BaseModel):
     date: str
+    iso_date: str = ""
     count: int
     sent: int = 0
     delivered: int = 0
+    cumulative_month: int = 0
+    cumulative_overall: int = 0
+    icp_db_day: int = 0
+    icp_db_cumulative: int = 0
+    month_label: str = ""
 
 
 class CampaignStatusStat(BaseModel):
