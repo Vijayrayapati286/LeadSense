@@ -4,30 +4,36 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.icp.schemas import (
     IcpAccountListResponse,
+    IcpBulkCreateRequest,
+    IcpBulkCreateResponse,
     IcpListResponse,
     IcpRecordCreate,
     IcpRecordResponse,
     IcpRecordUpdate,
 )
 from app.icp.service import (
+    MAX_MANUAL_ICP_CONTACTS,
+    bulk_create_icp_records,
     create_icp_record,
     delete_icp_record,
     get_icp_record,
     icp_counts_summary,
     list_accounts_summary,
     list_icp_records,
+    parse_icp_contacts_file,
     purge_empty_icp_records,
     resolve_org_id,
     serialize_icp,
     update_icp_record,
     upsert_icp_from_bulk_item,
 )
+from app.linkedin.bulk_excel_service import BulkExcelError
 from app.linkedin.bulk_jobs import get_job_row
 from app.linkedin.bulk_models import BulkJobItemRow
 from app.middleware.auth import get_current_user
@@ -143,6 +149,65 @@ def icp_count(
     summary = icp_counts_summary(db, user_id=user_id, org_id=org_id)
     db.commit()
     return summary
+
+
+@router.post("/bulk", response_model=IcpBulkCreateResponse)
+def create_icp_bulk(
+    body: IcpBulkCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add many contacts to ICP from a JSON list (typed rows or pasted table)."""
+    contacts = [c.model_dump() for c in (body.contacts or [])]
+    if not contacts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Add at least one contact",
+        )
+    user_id, org_id = _tenant_ids(current_user)
+    try:
+        result = bulk_create_icp_records(
+            db, user_id=user_id, org_id=org_id, rows=contacts
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return result
+
+
+@router.post("/bulk-upload", response_model=IcpBulkCreateResponse)
+async def create_icp_bulk_upload(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add many contacts to ICP from an Excel or CSV file."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+    try:
+        rows = parse_icp_contacts_file(content, file.filename or "contacts.csv")
+    except BulkExcelError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No contact rows found. Use columns like First Name, Last Name, Email, Company.",
+        )
+    if len(rows) > MAX_MANUAL_ICP_CONTACTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Too many contacts ({len(rows)}). Maximum allowed per upload is {MAX_MANUAL_ICP_CONTACTS}.",
+        )
+    user_id, org_id = _tenant_ids(current_user)
+    try:
+        result = bulk_create_icp_records(
+            db, user_id=user_id, org_id=org_id, rows=rows
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return result
 
 
 @router.get("/{record_id}", response_model=IcpRecordResponse)

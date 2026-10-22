@@ -6,6 +6,7 @@ and `/webhooks/ses-inbound` (reply/OOO classification).
 
 import logging
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -23,13 +24,17 @@ app_settings_service = AppSettingsService()
 _CANCEL_FOLLOWUP_STATUSES = frozenset({"replied", "bounced", "suppressed", "invalid_email", "risky"})
 
 
+def _email_matches(email: str):
+    return func.lower(Recipient.email) == (email or "").strip().lower()
+
+
 def _mark_campaign_recipients(
     db: Session, email: str, campaign_id: int | None, status: str, timestamp_field: str
 ) -> list[int]:
     query = (
         db.query(CampaignRecipient)
         .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
-        .filter(Recipient.email == email)
+        .filter(_email_matches(email))
     )
     if campaign_id is not None:
         query = query.filter(CampaignRecipient.campaign_id == campaign_id)
@@ -92,7 +97,7 @@ def handle_bounce(
     error — are retried: each occurrence increments a per-recipient counter,
     and only once that count exceeds `settings.soft_bounce_threshold` does
     the address get suppressed too (as `soft_bounce_threshold_exceeded`)."""
-    recipients = db.query(Recipient).filter(Recipient.email == email).all()
+    recipients = db.query(Recipient).filter(_email_matches(email)).all()
 
     if bounce_type != "Permanent":
         if not recipients:
@@ -144,7 +149,7 @@ def handle_bounce(
 def handle_complaint(
     db: Session, email: str, campaign_id: int | None = None, detail: str | None = None
 ) -> None:
-    recipients = db.query(Recipient).filter(Recipient.email == email).all()
+    recipients = db.query(Recipient).filter(_email_matches(email)).all()
     if recipients:
         for recipient in recipients:
             suppression_service.add(
@@ -173,7 +178,7 @@ def handle_out_of_office(db: Session, email: str, campaign_id: int | None = None
     query = (
         db.query(CampaignRecipient)
         .join(Recipient, CampaignRecipient.recipient_id == Recipient.id)
-        .filter(Recipient.email == email)
+        .filter(_email_matches(email))
     )
     if campaign_id is not None:
         query = query.filter(CampaignRecipient.campaign_id == campaign_id)

@@ -113,6 +113,8 @@ def _ensure_linkedin_bulk_schema() -> None:
         "backup_status": "VARCHAR(32) DEFAULT 'none'",
         "backup_file_path": "VARCHAR(500)",
         "started_at": "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME",
+        "icp_added_at": "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME",
+        "icp_added_count": "INTEGER DEFAULT 0",
     }
     item_adds = {
         "verification_status": "VARCHAR(32) DEFAULT 'NOT_VERIFIED'",

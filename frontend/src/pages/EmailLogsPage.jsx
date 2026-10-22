@@ -51,11 +51,13 @@ export default function EmailLogsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const category = searchParams.get('category') || '';
+  const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') || '');
   const [filters, setFilters] = useState(() => ({
     ...EMPTY_FILTERS,
+    userId: searchParams.get('userId') || '',
+    campaignId: searchParams.get('campaignId') || '',
     dateFrom: searchParams.get('dateFrom') || '',
     dateTo: searchParams.get('dateTo') || '',
   }));

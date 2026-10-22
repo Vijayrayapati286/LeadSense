@@ -1189,6 +1189,171 @@ def create_icp_record(
     return row
 
 
+MAX_MANUAL_ICP_CONTACTS = 500
+LINKEDIN_URL_ALIASES = {
+    "linkedin",
+    "linkedinurl",
+    "linkedinprofile",
+    "linkedinprofileurl",
+    "personlinkedinurl",
+    "personlinkedin",
+    "profileurl",
+    "profilelink",
+    "linkedinprofilelink",
+}
+ACCOUNT_ALIASES = {"account", "accountname"}
+
+
+def _row_has_identity(payload: dict[str, Any]) -> bool:
+    return bool(
+        _clean(payload.get("name"))
+        or _clean(payload.get("email"))
+        or _clean(payload.get("linkedin_url"))
+        or _clean(payload.get("phone"))
+        or _clean(payload.get("first_name"))
+        or _clean(payload.get("last_name"))
+    )
+
+
+def payload_from_manual_row(source_row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Map a spreadsheet / form row onto create_icp_record fields."""
+    if not isinstance(source_row, dict):
+        return None
+    from app.linkedin.verification import original_fields
+
+    originals = original_fields(source_row)
+    first_name = _pick_from_row(source_row, FIRST_NAME_ALIASES)
+    last_name = _pick_from_row(source_row, LAST_NAME_ALIASES)
+    name = originals.get("name") or _compose_name(first_name, last_name) or _clean(
+        source_row.get("name")
+    )
+    payload: dict[str, Any] = {
+        "name": name,
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": originals.get("email") or _pick_from_row(source_row, EMAIL_ALIASES),
+        "company_name": originals.get("company") or _pick_from_row(source_row, ACCOUNT_ALIASES),
+        "designation": originals.get("designation"),
+        "department": _pick_from_row(source_row, DEPARTMENT_ALIASES),
+        "linkedin_url": _pick_from_row(source_row, LINKEDIN_URL_ALIASES)
+        or _clean(source_row.get("linkedin_url")),
+        "phone": _pick_from_row(source_row, PHONE_ALIASES) or _clean(source_row.get("phone")),
+        "location": originals.get("location") or _clean(source_row.get("location")),
+        "industry": _pick_from_row(source_row, INDUSTRY_ALIASES),
+        "company_size": _pick_from_row(source_row, COMPANY_SIZE_ALIASES),
+        "company_website": _pick_from_row(source_row, WEBSITE_ALIASES),
+        "icp_status": _clean(source_row.get("icp_status") or source_row.get("status")) or "active",
+    }
+    if not _row_has_identity(payload):
+        return None
+    return payload
+
+
+def parse_icp_contacts_file(file_content: bytes, filename: str) -> list[dict[str, Any]]:
+    """Read Excel/CSV into raw column dicts (empty cells omitted)."""
+    from app.linkedin.bulk_excel_service import BulkExcelError, BulkExcelService
+    import pandas as pd
+
+    try:
+        df = BulkExcelService().read_upload(file_content, filename)
+    except BulkExcelError:
+        raise
+    rows: list[dict[str, Any]] = []
+    for _, series in df.iterrows():
+        source: dict[str, Any] = {}
+        for col in df.columns:
+            value = series[col]
+            if pd.isna(value):
+                continue
+            text = str(value).strip()
+            if not text or text.lower() in {"none", "nan", "null", "n/a", "-"}:
+                continue
+            source[str(col)] = text
+        if source:
+            rows.append(source)
+    return rows
+
+
+def bulk_create_icp_records(
+    db: Session,
+    *,
+    user_id: int | None,
+    rows: list[dict[str, Any]],
+    org_id: str | None = None,
+) -> dict[str, Any]:
+    """Create or update many ICP contacts. Empty rows are skipped."""
+    if len(rows) > MAX_MANUAL_ICP_CONTACTS:
+        raise ValueError(
+            f"Too many contacts ({len(rows)}). Maximum allowed per upload is {MAX_MANUAL_ICP_CONTACTS}."
+        )
+    org_id = resolve_org_id(db, user_id=user_id, org_id=org_id)
+    created = 0
+    updated = 0
+    results: list[dict[str, Any]] = []
+
+    for index, raw in enumerate(rows, start=1):
+        payload = payload_from_manual_row(raw)
+        if payload is None:
+            results.append(
+                {
+                    "row": index,
+                    "status": "skipped",
+                    "error": "Need a name, email, phone, or LinkedIn URL",
+                    "id": None,
+                    "name": None,
+                }
+            )
+            continue
+        try:
+            linkedin_url = _normalize_linkedin(payload.get("linkedin_url"))
+            name = _compose_name(
+                payload.get("first_name"),
+                payload.get("last_name"),
+                payload.get("name"),
+            )
+            company = _clean(payload.get("company_name"))
+            existing = _find_existing(
+                db,
+                user_id=user_id,
+                org_id=org_id,
+                linkedin_url=linkedin_url,
+                dedupe_key=_dedupe_key(name, company),
+            )
+            row = create_icp_record(db, user_id=user_id, org_id=org_id, data=payload)
+            status = "updated" if existing else "created"
+            if existing:
+                updated += 1
+            else:
+                created += 1
+            results.append(
+                {
+                    "row": index,
+                    "status": status,
+                    "error": None,
+                    "id": row.id,
+                    "name": row.name,
+                }
+            )
+        except Exception as exc:
+            logger.exception("Bulk ICP row %s failed", index)
+            results.append(
+                {
+                    "row": index,
+                    "status": "skipped",
+                    "error": str(exc) or "Could not save this contact",
+                    "id": None,
+                    "name": _clean(payload.get("name")),
+                }
+            )
+
+    return {
+        "created": created,
+        "updated": updated,
+        "skipped": sum(1 for r in results if r["status"] == "skipped"),
+        "results": results,
+    }
+
+
 def update_icp_record(
     db: Session,
     row: IcpRecordRow,

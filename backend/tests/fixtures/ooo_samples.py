@@ -19,6 +19,23 @@ I am currently out of the office and will return on Monday.
 """.encode("utf-8")
 
 
+def exchange_ooo_without_auto_submitted(*, from_email: str, to_email: str, in_reply_to: str, message_id: str = "<ooo-exch@example.com>") -> bytes:
+    """Typical Exchange OOF: Automatic reply subject + X-Auto-Response-Suppress, no Auto-Submitted."""
+    return f"""From: {from_email}
+To: {to_email}
+Subject: Automatic reply: Checking in
+Message-ID: {message_id}
+In-Reply-To: {in_reply_to}
+References: {in_reply_to}
+X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply
+X-MS-Exchange-Inbox-Rules-Loop: 1
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Thank you for your email. I am currently out of the office and will return Monday.
+""".encode("utf-8")
+
+
 def generic_auto_reply_no_ooo_phrase(*, from_email: str, to_email: str, in_reply_to: str) -> bytes:
     """Auto-submitted but not OOO — should classify as OTHER, not OUT_OF_OFFICE."""
     return f"""From: {from_email}

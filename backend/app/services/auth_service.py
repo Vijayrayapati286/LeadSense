@@ -12,10 +12,25 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import get_settings
 from app.models import Organization, User
 from app.services.core_users import is_allowed_login
-from app.services.tenant_constants import DEFAULT_TENANT_KEY, TENANT_DEFS
+from app.services.tenant_constants import DEFAULT_TENANT_KEY, ORG_TYPE_PROVIDER, TENANT_DEFS
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _provider_org_id(db: Session) -> str | None:
+    """Feuji / provider org — used for @feuji.com Microsoft SSO users."""
+    org = db.query(Organization).filter(Organization.org_name == "Feuji").first()
+    if org:
+        return org.org_id
+    org = db.query(Organization).filter(Organization.org_type == ORG_TYPE_PROVIDER).first()
+    return org.org_id if org else None
+
+
+def _org_id_for_microsoft_user(db: Session, email: str) -> str | None:
+    if (email or "").lower().endswith("@feuji.com"):
+        return _provider_org_id(db) or _default_tenant_org_id(db)
+    return _default_tenant_org_id(db)
 
 
 def _default_tenant_org_id(db: Session) -> str | None:
@@ -109,7 +124,7 @@ class AuthService:
         with httpx.Client() as client:
             profile = client.get("https://graph.microsoft.com/v1.0/me", headers=headers).json()
 
-        user = self._upsert_user(db, profile)
+        user = self._upsert_user(db, profile, require_allowlist=False)
         token = self._create_jwt(user)
         return {"access_token": token, "user": user}
 
@@ -130,7 +145,7 @@ class AuthService:
         }
         if name:
             profile["displayName"] = name
-        user = self._upsert_user(db, profile)
+        user = self._upsert_user(db, profile, require_allowlist=True)
         token = self._create_jwt(user)
         return {"access_token": token, "user": user}
 
@@ -159,18 +174,19 @@ class AuthService:
         token = self._create_jwt(user)
         return {"access_token": token, "user": user}
 
-    def _upsert_user(self, db: Session, profile: dict) -> User:
-        email = profile.get("mail") or profile.get("userPrincipalName", "")
+    def _upsert_user(self, db: Session, profile: dict, *, require_allowlist: bool = False) -> User:
+        email = (profile.get("mail") or profile.get("userPrincipalName") or "").strip()
         oid = profile.get("id", "")
 
-        # Single choke point for both Azure AD (handle_callback) and
-        # dev_login — only the hardcoded core team can authenticate through
-        # either path until real Azure AD group-based access replaces this.
-        if not is_allowed_login(email):
+        # Microsoft SSO: Azure AD is the gate (configured Entra tenant).
+        # Dev-login has no Microsoft check, so it still uses CORE_USERS.
+        if require_allowlist and not is_allowed_login(email):
             raise ValueError(f"{email or '(no email)'} is not authorized to access this application")
+        if not email:
+            raise ValueError("Microsoft account did not return an email")
 
         user = db.query(User).filter(User.email == email).first()
-        default_org_id = _default_tenant_org_id(db)
+        default_org_id = _org_id_for_microsoft_user(db, email)
         if not user:
             user = User(
                 name=profile.get("displayName", "Unknown"),

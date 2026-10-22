@@ -16,6 +16,7 @@ from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import parseaddr
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -195,7 +196,10 @@ def _match_campaign_recipient(
             variants.append(f"<{bare}>")
         log = (
             db.query(EmailLog)
-            .filter(EmailLog.message_id.in_(variants), EmailLog.status == "sent")
+            .filter(
+                EmailLog.message_id.in_(variants),
+                EmailLog.status.in_(["sent", "delivered", "opened", "clicked"]),
+            )
             .order_by(EmailLog.sent_at.desc())
             .first()
         )
@@ -213,7 +217,10 @@ def _match_campaign_recipient(
     if not parsed.from_email:
         return None, None, "no_from_email"
 
-    recipients = db.query(Recipient).filter(Recipient.email == parsed.from_email).all()
+    from_email = parsed.from_email.strip().lower()
+    recipients = (
+        db.query(Recipient).filter(func.lower(Recipient.email) == from_email).all()
+    )
     if not recipients:
         return None, None, "unknown_sender"
 
@@ -224,7 +231,15 @@ def _match_campaign_recipient(
         .filter(
             CampaignRecipient.recipient_id.in_(recipient_ids),
             CampaignRecipient.status.in_(
-                ["sent", "queued", "delivered", "opened", "clicked", "out_of_office"]
+                [
+                    "sent",
+                    "queued",
+                    "delivered",
+                    "opened",
+                    "clicked",
+                    "out_of_office",
+                    "contacted",
+                ]
             ),
         )
         .order_by(CampaignRecipient.last_sent_at.desc())

@@ -31,12 +31,6 @@ export const authService = {
   logout: () => api.post('/auth/logout'),
 };
 
-export const notificationService = {
-  list: () => api.get('/notifications'),
-  markRead: (id) => api.post(`/notifications/${id}/read`),
-  markAllRead: () => api.post('/notifications/read-all'),
-};
-
 export const dashboardService = {
   getStats: (params) => api.get('/dashboard/stats', { params }),
   getAdminStats: () => api.get('/dashboard/admin'),
@@ -270,6 +264,17 @@ export const icpService = {
   counts: () => api.get('/icp/count').then((r) => r.data),
   get: (id) => api.get(`/icp/${id}`).then((r) => r.data),
   create: (payload) => api.post('/icp', payload).then((r) => r.data),
+  bulkCreate: (contacts) => api.post('/icp/bulk', { contacts }).then((r) => r.data),
+  bulkUpload: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api
+      .post('/icp/bulk-upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120_000,
+      })
+      .then((r) => r.data);
+  },
   update: (id, payload) => api.put(`/icp/${id}`, payload).then((r) => r.data),
   remove: (id) => api.delete(`/icp/${id}`).then((r) => r.data),
 };

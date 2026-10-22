@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FiX } from 'react-icons/fi';
 
-export default function SlideOver({ isOpen, onClose, title, subtitle, children, width = 'md' }) {
+export default function SlideOver({ isOpen, onClose, title, subtitle, children, width = 'md', plain = false }) {
   useEffect(() => {
     if (!isOpen) return undefined;
     const previousOverflow = document.body.style.overflow;
@@ -25,6 +25,7 @@ export default function SlideOver({ isOpen, onClose, title, subtitle, children, 
     xl: 'max-w-xl',
     '2xl': 'max-w-2xl',
     '3xl': 'max-w-4xl',
+    full: 'max-w-5xl',
   };
 
   return createPortal(
@@ -34,7 +35,7 @@ export default function SlideOver({ isOpen, onClose, title, subtitle, children, 
     >
       <div className="absolute inset-0 bg-slate-900/45 backdrop-blur-[1px]" onClick={onClose} aria-hidden />
       <aside
-        className={`relative flex h-full w-full ${widths[width] || widths.md} flex-col bg-white shadow-2xl animate-fade-in`}
+        className={`relative flex h-full w-full ${widths[width] || widths.md} flex-col bg-white shadow-2xl ${plain ? '' : 'animate-fade-in'}`}
         role="dialog"
         aria-modal="true"
         aria-label={typeof title === 'string' ? title : 'Details'}

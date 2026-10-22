@@ -97,6 +97,14 @@ class DailyEmailStat(BaseModel):
     month_label: str = ""
 
 
+class MonthWiseStat(BaseModel):
+    month: str
+    year: int
+    month_key: str
+    mails_sent: int
+    icp_database: int
+
+
 class CampaignStatusStat(BaseModel):
     status: str
     count: int
@@ -122,6 +130,7 @@ class RecentCampaign(BaseModel):
 class DashboardResponse(BaseModel):
     stats: DashboardStats
     emails_per_day: list[DailyEmailStat]
+    month_wise: list[MonthWiseStat] = []
     campaign_status: list[CampaignStatusStat]
     recent_activity: list[RecentActivity]
     recent_campaigns: list[RecentCampaign]

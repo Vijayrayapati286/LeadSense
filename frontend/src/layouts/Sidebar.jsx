@@ -100,13 +100,7 @@ function getNavItems(user) {
   if (isProviderOrg(user)) {
     return filterNavItems(PROVIDER_NAV_ITEMS, user);
   }
-  const items = NAV_ITEMS.map((item) => {
-    if (item.path === '/dashboard' && hasPermission(user, 'members:read')) {
-      return { ...item, label: 'Admin Dashboard' };
-    }
-    return item;
-  });
-  return filterNavItems(items, user);
+  return filterNavItems(NAV_ITEMS, user);
 }
 
 function initials(name) {

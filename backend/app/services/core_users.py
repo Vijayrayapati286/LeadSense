@@ -1,9 +1,9 @@
-"""Single source of truth for who is allowed to use this application.
+"""Named team members for password seed / local dev-login only.
 
-Named team members, gated at login (see auth_service.py) — no one outside
-this list can authenticate, through any login path, until real Azure AD
-group-based access replaces this hardcoded list. Edit this list to
-add/remove access.
+Microsoft SSO does not use this list — any user who authenticates with
+Azure AD (the configured Entra tenant) can sign in. CORE_USERS is still
+used to provision email+password accounts (CORE_USER_PASSWORDS) and to
+gate the unauthenticated /auth/dev-login fallback.
 
 Passwords are NOT stored here — this file is committed to a shared repo, so
 passwords live only in the CORE_USER_PASSWORDS env var (see

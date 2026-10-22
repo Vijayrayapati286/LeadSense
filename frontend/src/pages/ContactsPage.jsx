@@ -10,6 +10,7 @@ import {
   FiMoreVertical,
   FiPlus,
   FiSearch,
+  FiUpload,
   FiSliders,
   FiUserX,
   FiUsers,
@@ -18,6 +19,7 @@ import {
 import IcpFiltersPanel, { EMPTY_ICP_FILTERS, FILTER_LABELS } from '../components/icp/IcpFiltersPanel';
 import IcpRecordDetail from '../components/icp/IcpRecordDetail';
 import AddContactModal from '../components/icp/AddContactModal';
+import BulkAddContactsModal from '../components/icp/BulkAddContactsModal';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Pagination from '../components/ui/Pagination';
 import { useToast } from '../hooks/useToast';
@@ -209,6 +211,7 @@ export default function ContactsPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
   useEffect(() => {
@@ -370,13 +373,22 @@ export default function ContactsPage() {
               People at your target accounts — name, designation, email, and location.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setAddOpen(true)}
-            className="btn-primary inline-flex min-h-10 shrink-0 items-center gap-2 px-4 py-2 text-sm shadow-lg shadow-primary-200/60"
-          >
-            <FiPlus size={16} /> Add contact
-          </button>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setBulkOpen(true)}
+              className="btn-secondary inline-flex min-h-10 items-center gap-2 px-4 py-2 text-sm"
+            >
+              <FiUpload size={16} /> Add bulk
+            </button>
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="btn-primary inline-flex min-h-10 items-center gap-2 px-4 py-2 text-sm shadow-lg shadow-primary-200/60"
+            >
+              <FiPlus size={16} /> Add contact
+            </button>
+          </div>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -543,7 +555,7 @@ export default function ContactsPage() {
                   <td colSpan={8} className="py-16 text-center text-gray-500">
                     {withoutAccountOnly
                       ? 'No contacts without an account — everyone has a company linked.'
-                      : 'No contacts yet. Verify extracted profiles or add one manually.'}
+                      : 'No contacts yet. Verify extracted profiles, add one, or add bulk contacts.'}
                   </td>
                 </tr>
               ) : (
@@ -663,6 +675,12 @@ export default function ContactsPage() {
         isOpen={addOpen}
         onClose={() => setAddOpen(false)}
         defaultCompany={companyFromUrl}
+        onCreated={() => load()}
+      />
+
+      <BulkAddContactsModal
+        isOpen={bulkOpen}
+        onClose={() => setBulkOpen(false)}
         onCreated={() => load()}
       />
 

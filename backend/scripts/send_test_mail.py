@@ -20,17 +20,18 @@ def main(to_email: str) -> int:
     svc = SESService()
     svc.settings = settings
 
+    greeting = to_email.split("@", 1)[0].replace(".", " ").replace("_", " ").title()
     subject = "LeadSense test — please check Inbox vs Junk"
     body_text = (
-        "Hi Sunhith,\n\n"
+        f"Hi {greeting},\n\n"
         "This is a test email from LeadSense.\n"
         "Please tell us if it landed in Inbox or Junk.\n\n"
         "If you do not want more test mail, use Unsubscribe in your email client.\n"
     )
-    body_html = """
+    body_html = f"""
     <html>
       <body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1f2937;line-height:1.6;">
-        <p>Hi Sunhith,</p>
+        <p>Hi {greeting},</p>
         <p>This is a <strong>test email from LeadSense</strong>.</p>
         <p>Please tell us if it landed in <strong>Inbox</strong> or <strong>Junk</strong>.</p>
         <p>If you do not want more test mail, use <strong>Unsubscribe</strong> in your email client.</p>

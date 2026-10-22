@@ -136,6 +136,17 @@ def test_classify_ooo_without_exact_out_of_office_phrase():
     assert result.classification == CLASS_OUT_OF_OFFICE
 
 
+def test_classify_exchange_ooo_without_auto_submitted():
+    raw = ooo_samples.exchange_ooo_without_auto_submitted(
+        from_email="prospect@acme.com",
+        to_email="rep@mail.example.com",
+        in_reply_to="<out-1@mail.example.com>",
+    )
+    parsed = inbound_email_service.parse_raw_email(raw)
+    result = classify_inbound_email(parsed.message, body_text=parsed.body_text, from_email=parsed.from_email)
+    assert result.classification == CLASS_OUT_OF_OFFICE
+
+
 def test_classify_auto_without_ooo_is_other():
     raw = ooo_samples.generic_auto_reply_no_ooo_phrase(
         from_email="system@acme.com",
@@ -212,6 +223,21 @@ def test_duplicate_ooo_is_idempotent(db):
     assert first.duplicate is False
     assert second.duplicate is True
     assert db.query(InboundEmail).count() == before + 1
+    db.refresh(cr)
+    assert cr.status == "out_of_office"
+
+
+def test_process_ooo_matches_mixed_case_email(db):
+    _user, campaign, recipient, cr, log = _seed_sent(db, email="Prospect.Case@Acme.com")
+    raw = ooo_samples.outlook_ooo(
+        from_email="prospect.case@acme.com",
+        to_email="rep@mail.example.com",
+        in_reply_to=log.message_id,
+        message_id=f"<ooo-case-{uuid.uuid4().hex[:8]}@example.com>",
+    )
+    result = inbound_email_service.process_raw_inbound(db, raw)
+    assert result.matched
+    assert result.campaign_id == campaign.id
     db.refresh(cr)
     assert cr.status == "out_of_office"
 
