@@ -12,16 +12,11 @@ import {
   FiZap,
 } from 'react-icons/fi';
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
   Cell,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
-  XAxis,
-  YAxis,
 } from 'recharts';
 import { campaignService, dashboardService, userService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
@@ -37,10 +32,56 @@ import SurfaceCard from '../components/ui/SurfaceCard';
 import MetricCard from '../components/ui/MetricCard';
 import PanelHeader from '../components/ui/PanelHeader';
 import FilterBar, { FilterField } from '../components/ui/FilterBar';
+import CampaignDayDetailPanel from '../components/dashboard/CampaignDayDetailPanel';
 import { CHART_COLORS } from '../design-tokens';
 import { formatDate } from '../utils/helpers';
 
 const EMPTY_FILTERS = { userId: '', campaignId: '', dateFrom: '', dateTo: '' };
+
+const STATUS_COLORS = {
+  Draft: '#3578f6',
+  Active: '#14b87a',
+  Completed: '#ffac32',
+  Paused: '#f2535a',
+};
+
+function toLocalIsoDate(value = new Date()) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function shiftIsoDate(isoDate, days) {
+  const date = new Date(`${isoDate}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return toLocalIsoDate(date);
+}
+
+function formatCount(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+function formatDisplayDate(isoDate) {
+  if (!isoDate) return '—';
+  const [year, month, day] = isoDate.split('-');
+  return `${day} - ${month} - ${year}`;
+}
+
+function weekdayLabel(isoDate) {
+  if (!isoDate) return '';
+  const date = new Date(`${isoDate}T12:00:00`);
+  return date.toLocaleDateString(undefined, { weekday: 'short' });
+}
+
+function dayNumber(isoDate) {
+  if (!isoDate) return '';
+  return Number(isoDate.slice(-2));
+}
+
+function statusColor(status, index = 0) {
+  return STATUS_COLORS[status] || CHART_COLORS[index % CHART_COLORS.length];
+}
 
 const STAT_META = [
   { key: 'total_campaigns', label: 'Total campaigns', icon: FiMail, tone: 'blue', note: 'All time' },
@@ -58,6 +99,8 @@ export default function DashboardPage() {
   const [users, setUsers] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [performanceRange, setPerformanceRange] = useState('week');
+  const [selectedDay, setSelectedDay] = useState(null);
   const { user } = useAuth();
   const toast = useToast();
 
@@ -68,12 +111,17 @@ export default function DashboardPage() {
     campaignService.getAll().then(({ data: result }) => setCampaigns(result)).catch(() => {});
   }, [user]);
 
-  const buildParams = () => ({
-    user_id: filters.userId || undefined,
-    campaign_id: filters.campaignId || undefined,
-    date_from: filters.dateFrom || undefined,
-    date_to: filters.dateTo || undefined,
-  });
+  const buildParams = () => {
+    const today = toLocalIsoDate();
+    const hasCustomDates = Boolean(filters.dateFrom || filters.dateTo);
+    const rangeDays = performanceRange === 'day' ? 0 : 6;
+    return {
+      user_id: filters.userId || undefined,
+      campaign_id: filters.campaignId || undefined,
+      date_from: filters.dateFrom || (!hasCustomDates ? shiftIsoDate(today, -rangeDays) : undefined),
+      date_to: filters.dateTo || (!hasCustomDates ? today : undefined),
+    };
+  };
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -86,7 +134,7 @@ export default function DashboardPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters, toast]);
+  }, [filters, performanceRange, toast]);
 
   useEffect(() => {
     loadDashboard();
@@ -140,16 +188,27 @@ export default function DashboardPage() {
   } = data;
   const campaignTotal = campaignStatus.reduce((sum, item) => sum + Number(item.count || 0), 0);
   const firstName = user?.name?.trim().split(/\s+/)[0] || 'there';
-  const performanceByDay = emailsPerDay.map((row) => {
-    const sent = Number(row.sent ?? row.count ?? 0);
+  const todayIso = toLocalIsoDate();
+  const yesterdayIso = toLocalIsoDate(new Date(Date.now() - 86_400_000));
+  const dailyRows = emailsPerDay.map((row) => {
+    const isoDate = row.iso_date || '';
     return {
-      date: row.date,
-      sent,
-      delivered: Number(row.delivered ?? sent),
+      ...row,
+      isoDate,
+      sent: Number(row.sent ?? row.count ?? 0),
+      cumulativeMonth: Number(row.cumulative_month ?? 0),
+      cumulativeOverall: Number(row.cumulative_overall ?? 0),
+      icpDbDay: Number(row.icp_db_day ?? 0),
+      icpDbCumulative: Number(row.icp_db_cumulative ?? 0),
+      monthLabel: row.month_label || (isoDate ? new Date(`${isoDate}T12:00:00`).toLocaleString(undefined, { month: 'short' }).toUpperCase() : ''),
+      isToday: isoDate === todayIso,
+      isYesterday: isoDate === yesterdayIso,
     };
   });
+  const monthColumnLabel = dailyRows[0]?.monthLabel || new Date().toLocaleString(undefined, { month: 'short' }).toUpperCase();
 
   return (
+    <>
     <PageShell>
       <PageHeader
         eyebrow="Overview"
@@ -190,10 +249,10 @@ export default function DashboardPage() {
           </select>
         </FilterField>
         <FilterField label="From">
-          <input type="date" className="control py-2 text-xs" value={filters.dateFrom} max={filters.dateTo || undefined} onChange={(event) => updateFilter('dateFrom', event.target.value)} />
+          <input type="date" className="control min-w-[10rem] py-2 text-xs" value={filters.dateFrom} max={filters.dateTo || undefined} onChange={(event) => updateFilter('dateFrom', event.target.value)} />
         </FilterField>
         <FilterField label="To">
-          <input type="date" className="control py-2 text-xs" value={filters.dateTo} min={filters.dateFrom || undefined} onChange={(event) => updateFilter('dateTo', event.target.value)} />
+          <input type="date" className="control min-w-[10rem] py-2 text-xs" value={filters.dateTo} min={filters.dateFrom || undefined} onChange={(event) => updateFilter('dateTo', event.target.value)} />
         </FilterField>
       </FilterBar>
 
@@ -211,66 +270,174 @@ export default function DashboardPage() {
         />
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[1.1fr_.9fr]">
-        <SurfaceCard>
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-bold text-slate-900">Campaign Performance</h2>
-            <div className="flex items-center gap-4 text-xs text-slate-500">
-              <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-blue-500" />
-                Sent
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                Delivered
-              </span>
+      <section className="grid gap-6 xl:grid-cols-[1.45fr_.9fr]">
+        <SurfaceCard className="overflow-hidden p-0">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Campaign Performance</h2>
+              <p className="mt-0.5 text-xs text-slate-500">Daily volume, cumulatives &amp; ICP growth</p>
+            </div>
+            <div className="inline-flex rounded-full bg-slate-100 p-1 text-xs font-semibold">
+              {[
+                { key: 'day', label: 'Day' },
+                { key: 'week', label: 'Week' },
+              ].map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setPerformanceRange(option.key)}
+                  className={`rounded-full px-3.5 py-1.5 transition ${
+                    performanceRange === option.key
+                      ? 'bg-slate-800 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
           </div>
-          <div className="mt-5 h-[270px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={performanceByDay} barGap={4} barCategoryGap="28%" margin={{ top: 10, right: 8, left: -24, bottom: 0 }}>
-                <CartesianGrid vertical={false} stroke="#eef2f7" />
-                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} dy={8} />
-                <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', boxShadow: '0 8px 24px rgba(15,23,42,.08)', fontSize: 12 }} />
-                <Bar dataKey="sent" name="Sent" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={18} />
-                <Bar dataKey="delivered" name="Delivered" fill="#22c55e" radius={[4, 4, 0, 0]} maxBarSize={18} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-3 py-3">Sent</th>
+                  <th className="px-3 py-3">Cum ({monthColumnLabel})</th>
+                  <th className="px-3 py-3">Cum all</th>
+                  <th className="px-3 py-3">ICP day</th>
+                  <th className="px-3 py-3 pr-4">ICP total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center text-sm text-slate-400">No daily activity yet</td>
+                  </tr>
+                ) : dailyRows.map((row) => {
+                  const isSelected = selectedDay?.isoDate === row.isoDate;
+                  return (
+                  <tr
+                    key={row.isoDate || row.date}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedDay(row)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedDay(row);
+                      }
+                    }}
+                    className={`cursor-pointer border-t border-slate-100 transition ${
+                      isSelected
+                        ? 'bg-orange-50 ring-1 ring-inset ring-[#FF7A00]/40'
+                        : row.isToday
+                          ? 'bg-[#FFF9F5] hover:bg-[#FFF3EB]'
+                          : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                            row.isToday || isSelected ? 'bg-[#FF7A00] text-white' : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {dayNumber(row.isoDate)}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-medium leading-5 text-slate-800">
+                            {formatDisplayDate(row.isoDate)}
+                            <span className="ml-1.5 font-normal text-slate-400">{weekdayLabel(row.isoDate)}</span>
+                          </p>
+                        </div>
+                        {row.isToday && (
+                          <span className="rounded-full bg-[#FF7A00] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                            Today
+                          </span>
+                        )}
+                        {row.isYesterday && (
+                          <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                            Yesterday
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <span className="font-medium text-slate-800">{formatCount(row.sent)}</span>
+                    </td>
+                    <td className="px-3 py-3 text-slate-700">{formatCount(row.cumulativeMonth)}</td>
+                    <td className="px-3 py-3 text-slate-700">{formatCount(row.cumulativeOverall)}</td>
+                    <td className="px-3 py-3">
+                      {row.icpDbDay > 0 ? (
+                        <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                          + {formatCount(row.icpDbDay)}
+                        </span>
+                      ) : (
+                        <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                          - 0
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 pr-4 text-slate-700">{formatCount(row.icpDbCumulative)}</td>
+                  </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </SurfaceCard>
 
-        <SurfaceCard>
-          <h2 className="text-sm font-bold text-slate-900">Campaign status</h2>
-          <div className="mt-3 grid min-h-[285px] items-center gap-4 sm:grid-cols-[1fr_.9fr]">
-            <div className="relative h-[245px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={campaignStatus} dataKey="count" nameKey="status" innerRadius={64} outerRadius={92} paddingAngle={2} stroke="none">
-                    {campaignStatus.map((item, index) => <Cell key={`${item.status}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 12 }} />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-2xl font-bold text-slate-950">{campaignTotal}</span>
-                <span className="text-micro text-slate-400">Total</span>
-              </div>
+        <SurfaceCard className="flex flex-col">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-bold text-slate-900">Campaign status</h2>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+              {campaignTotal} total
+            </span>
+          </div>
+          <div className="relative mx-auto mt-4 h-[210px] w-full max-w-[230px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={campaignStatus}
+                  dataKey="count"
+                  nameKey="status"
+                  innerRadius={62}
+                  outerRadius={88}
+                  paddingAngle={2}
+                  stroke="none"
+                >
+                  {campaignStatus.map((item, index) => (
+                    <Cell key={`${item.status}-${index}`} fill={statusColor(item.status, index)} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 12 }} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-2xl font-bold text-slate-950">{campaignTotal}</span>
+              <span className="text-[11px] text-slate-400">Total campaigns</span>
             </div>
-            <div className="space-y-3">
-              {campaignStatus.map((item, index) => {
-                const percent = campaignTotal ? Math.round((Number(item.count || 0) / campaignTotal) * 100) : 0;
-                return (
-                  <div key={item.status} className="flex items-center gap-2 text-xs">
-                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }} />
-                    <span className="min-w-0 flex-1 truncate capitalize text-slate-600">{item.status}</span>
-                    <span className="font-semibold text-slate-900">{item.count}</span>
-                    <span className="w-8 text-right text-micro text-slate-400">{percent}%</span>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2.5">
+            {campaignStatus.map((item, index) => {
+              const percent = campaignTotal ? Math.round((Number(item.count || 0) / campaignTotal) * 100) : 0;
+              return (
+                <div key={item.status} className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: statusColor(item.status, index) }} />
+                    <span className="truncate capitalize">{item.status}</span>
                   </div>
-                );
-              })}
-              {campaignStatus.length === 0 && <p className="text-xs text-slate-400">No campaign data</p>}
-            </div>
+                  <div className="mt-1.5 flex items-end justify-between gap-2">
+                    <span className="text-lg font-bold leading-none text-slate-900">{item.count}</span>
+                    <span className="text-[11px] font-medium text-slate-400">{percent}%</span>
+                  </div>
+                </div>
+              );
+            })}
+            {campaignStatus.length === 0 && (
+              <p className="col-span-2 py-6 text-center text-xs text-slate-400">No campaign data</p>
+            )}
           </div>
         </SurfaceCard>
       </section>
@@ -336,6 +503,15 @@ export default function DashboardPage() {
           </Link>
         </div>
       </section>
+
     </PageShell>
+
+    <CampaignDayDetailPanel
+      day={selectedDay}
+      isOpen={Boolean(selectedDay)}
+      onClose={() => setSelectedDay(null)}
+      filters={filters}
+    />
+    </>
   );
 }

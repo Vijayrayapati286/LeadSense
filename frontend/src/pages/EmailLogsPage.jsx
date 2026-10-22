@@ -54,7 +54,11 @@ export default function EmailLogsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const category = searchParams.get('category') || '';
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [filters, setFilters] = useState(() => ({
+    ...EMPTY_FILTERS,
+    dateFrom: searchParams.get('dateFrom') || '',
+    dateTo: searchParams.get('dateTo') || '',
+  }));
   const [users, setUsers] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [groupsFilter, setGroupsFilter] = useState([]);
