@@ -88,8 +88,10 @@ class Settings(BaseSettings):
         False, validation_alias="SES_USE_REPLY_TO_AS_FROM"
     )
     # S3 bucket used by the SES inbound receipt rule (raw MIME). May differ
-    # from S3_BUCKET_NAME (file uploads). Empty = inbound S3 fetch disabled.
-    ses_inbound_s3_bucket: str = Field("", validation_alias="SES_INBOUND_S3_BUCKET")
+    # from S3_BUCKET_NAME (file uploads). UAT/prod default is the OOO inbound bucket.
+    ses_inbound_s3_bucket: str = Field(
+        "leadsense-ses-inbound-ooo", validation_alias="SES_INBOUND_S3_BUCKET"
+    )
     ses_inbound_s3_prefix: str = Field("inbound/", validation_alias="SES_INBOUND_S3_PREFIX")
     # When true, out_of_office is treated as terminal (no further follow-ups).
     # Default false: detect + status only (STEP 10).
