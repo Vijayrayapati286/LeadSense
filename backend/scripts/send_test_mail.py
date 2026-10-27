@@ -20,21 +20,25 @@ def main(to_email: str) -> int:
     svc = SESService()
     svc.settings = settings
 
-    greeting = to_email.split("@", 1)[0].replace(".", " ").replace("_", " ").title()
-    subject = "LeadSense test — please check Inbox vs Junk"
+    local = to_email.split("@", 1)[0].lower()
+    if "karthik" in local or "koundinya" in local or "kowndinya" in local:
+        greeting = "Karthik"
+    else:
+        greeting = local.split(".", 1)[0].replace("_", " ").title()
+
+    subject = f"Hi {greeting}"
     body_text = (
         f"Hi {greeting},\n\n"
-        "This is a test email from LeadSense.\n"
-        "Please tell us if it landed in Inbox or Junk.\n\n"
-        "If you do not want more test mail, use Unsubscribe in your email client.\n"
+        "Hope you are doing well. Just checking if this note reached you.\n\n"
+        "Thanks,\n"
+        "Sreelatha\n"
     )
     body_html = f"""
     <html>
-      <body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1f2937;line-height:1.6;">
+      <body>
         <p>Hi {greeting},</p>
-        <p>This is a <strong>test email from LeadSense</strong>.</p>
-        <p>Please tell us if it landed in <strong>Inbox</strong> or <strong>Junk</strong>.</p>
-        <p>If you do not want more test mail, use <strong>Unsubscribe</strong> in your email client.</p>
+        <p>Hope you are doing well. Just checking if this note reached you.</p>
+        <p>Thanks,<br>Sreelatha</p>
       </body>
     </html>
     """
@@ -44,8 +48,9 @@ def main(to_email: str) -> int:
         subject=subject,
         body_html=body_html,
         body_text=body_text,
-        from_name="LeadSense",
+        from_name="Sreelatha",
         reply_to=settings.aws_ses_sender_email,
+        add_unsubscribe=False,
     )
     print(f"to={to_email}")
     print(f"mock_ses={settings.use_mock_ses}")
