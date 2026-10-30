@@ -1,25 +1,32 @@
 """Dashboard statistics aggregation service."""
 
 import io
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import func
 from sqlalchemy.orm import Query, Session
 
+from app.icp.models import IcpRecordRow
 from app.models import Campaign, EmailLog, Recipient, SuppressionEntry, Template
 
 # Cap on how many days get_emails_per_day will break out individually — each
 # day is its own COUNT query, so an unbounded custom date range (e.g. someone
 # picks a 2-year window) would otherwise fan out into hundreds of queries.
-MAX_EMAILS_PER_DAY_SPAN = 90
+MAX_EMAILS_PER_DAY_SPAN = 366
+_MONTH_NAMES = (
+    "",
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
 
 
 class DashboardService:
     """All aggregation methods take the same four optional filters —
-    user_id (sender/owner), campaign_id, date_from, date_to (both
-    timezone-aware datetimes bounding the relevant activity window) — so the
-    Dashboard's filter bar can narrow every widget consistently. Each metric
+    user_id (sender, only when a specific user is selected), campaign_id,
+    date_from, date_to (both timezone-aware datetimes bounding the relevant
+    activity window) — so the Dashboard's filter bar can narrow every widget
+    consistently. A missing user_id means the whole organization. Each metric
     is filtered against whichever timestamp is actually meaningful for it
     (campaign counts by Campaign.created_at, email counts by
     EmailLog.sent_at, suppressions by SuppressionEntry.created_at)."""
@@ -140,14 +147,35 @@ class DashboardService:
             "bounce_rate": bounce_rate,
         }
 
+    def _icp_query(
+        self, db: Session, user_id: int | None = None, org_id: str | None = None,
+    ) -> Query:
+        query = db.query(IcpRecordRow)
+        if org_id:
+            query = query.filter(IcpRecordRow.org_id == org_id)
+        if user_id:
+            query = query.filter(IcpRecordRow.user_id == user_id)
+        return query
+
+    @staticmethod
+    def _as_date(value):
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+
     def get_emails_per_day(
         self, db: Session, user_id: int | None = None, campaign_id: int | None = None,
         date_from: datetime | None = None, date_to: datetime | None = None,
         org_id: str | None = None,
     ) -> list[dict]:
-        """Get email send counts per day. Defaults to the last 7 days when no
-        date range is given; otherwise breaks out the given range day by day
-        (capped at MAX_EMAILS_PER_DAY_SPAN days)."""
+        """Get email send counts per day with running cumulatives and ICP
+        database deltas. Defaults to the last 7 days when no date range is
+        given; otherwise breaks out the given range day by day (capped at
+        MAX_EMAILS_PER_DAY_SPAN days). Rows are returned newest-first."""
         if date_from and date_to:
             start_date = date_from.date()
             end_date = date_to.date()
@@ -157,18 +185,168 @@ class DashboardService:
             end_date = datetime.utcnow().date()
             start_date = end_date - timedelta(days=6)
 
-        results = []
-        day = start_date
-        while day <= end_date:
-            count = (
+        sent_rows = (
+            self._log_query(db, user_id, campaign_id, None, None, org_id=org_id)
+            .filter(
+                EmailLog.status == "sent",
+                EmailLog.sent_at.isnot(None),
+                func.date(EmailLog.sent_at) >= start_date,
+                func.date(EmailLog.sent_at) <= end_date,
+            )
+            .with_entities(func.date(EmailLog.sent_at).label("day"), func.count().label("cnt"))
+            .group_by(func.date(EmailLog.sent_at))
+            .all()
+        )
+        sent_by_day = {self._as_date(row.day): int(row.cnt) for row in sent_rows if row.day is not None}
+
+        overall_before = (
+            self._log_query(db, user_id, campaign_id, None, None, org_id=org_id)
+            .filter(
+                EmailLog.status == "sent",
+                EmailLog.sent_at.isnot(None),
+                func.date(EmailLog.sent_at) < start_date,
+            )
+            .count()
+        )
+
+        # Month-to-date baseline: sends in the same calendar month as start_date
+        # that occurred before the window (so cumulative_month is continuous
+        # across the visible range within that month).
+        month_start = start_date.replace(day=1)
+        month_before = 0
+        if month_start < start_date:
+            month_before = (
                 self._log_query(db, user_id, campaign_id, None, None, org_id=org_id)
-                .filter(func.date(EmailLog.sent_at) == day, EmailLog.status == "sent")
+                .filter(
+                    EmailLog.status == "sent",
+                    EmailLog.sent_at.isnot(None),
+                    func.date(EmailLog.sent_at) >= month_start,
+                    func.date(EmailLog.sent_at) < start_date,
+                )
                 .count()
             )
-            results.append({"date": day.strftime("%b %d"), "count": count})
+
+        icp_rows = (
+            self._icp_query(db, user_id=user_id, org_id=org_id)
+            .filter(
+                IcpRecordRow.created_at.isnot(None),
+                func.date(IcpRecordRow.created_at) >= start_date,
+                func.date(IcpRecordRow.created_at) <= end_date,
+            )
+            .with_entities(func.date(IcpRecordRow.created_at).label("day"), func.count().label("cnt"))
+            .group_by(func.date(IcpRecordRow.created_at))
+            .all()
+        )
+        icp_by_day = {self._as_date(row.day): int(row.cnt) for row in icp_rows if row.day is not None}
+
+        icp_before = (
+            self._icp_query(db, user_id=user_id, org_id=org_id)
+            .filter(
+                IcpRecordRow.created_at.isnot(None),
+                func.date(IcpRecordRow.created_at) < start_date,
+            )
+            .count()
+        )
+
+        results = []
+        cumulative_overall = overall_before
+        cumulative_month = month_before
+        icp_cumulative = icp_before
+        current_month = start_date.month
+
+        day = start_date
+        while day <= end_date:
+            if day.month != current_month:
+                cumulative_month = 0
+                current_month = day.month
+
+            sent = sent_by_day.get(day, 0)
+            icp_day = icp_by_day.get(day, 0)
+            cumulative_overall += sent
+            cumulative_month += sent
+            icp_cumulative += icp_day
+
+            results.append({
+                "date": day.strftime("%b %d"),
+                "iso_date": day.isoformat(),
+                "count": sent,
+                "sent": sent,
+                # EmailLog records a successful send as "sent". Delivery is the
+                # same count until a distinct delivered status is stored.
+                "delivered": sent,
+                "cumulative_month": cumulative_month,
+                "cumulative_overall": cumulative_overall,
+                "icp_db_day": icp_day,
+                "icp_db_cumulative": icp_cumulative,
+                "month_label": day.strftime("%b").upper(),
+            })
             day += timedelta(days=1)
 
+        results.reverse()
         return results
+
+    def get_month_wise(
+        self, db: Session, user_id: int | None = None, campaign_id: int | None = None,
+        date_from: datetime | None = None, date_to: datetime | None = None,
+        org_id: str | None = None,
+    ) -> list[dict]:
+        """Mails sent and ICP records added, one row per calendar month.
+
+        User and campaign filters apply. The range end is date_to (or today).
+        Earlier months are kept so month totals match overall cumulative mail
+        and ICP counts. date_from only affects which months are still open
+        through that end date, not whether prior months appear.
+        """
+        end_date = date_to.date() if date_to else datetime.utcnow().date()
+
+        sent_rows = (
+            self._log_query(db, user_id, campaign_id, None, None, org_id=org_id)
+            .filter(
+                EmailLog.status == "sent",
+                EmailLog.sent_at.isnot(None),
+                func.date(EmailLog.sent_at) <= end_date,
+            )
+            .with_entities(func.date(EmailLog.sent_at).label("day"), func.count().label("cnt"))
+            .group_by(func.date(EmailLog.sent_at))
+            .all()
+        )
+        icp_rows = (
+            self._icp_query(db, user_id=user_id, org_id=org_id)
+            .filter(
+                IcpRecordRow.created_at.isnot(None),
+                func.date(IcpRecordRow.created_at) <= end_date,
+            )
+            .with_entities(func.date(IcpRecordRow.created_at).label("day"), func.count().label("cnt"))
+            .group_by(func.date(IcpRecordRow.created_at))
+            .all()
+        )
+
+        mailed: dict[tuple[int, int], int] = {}
+        icp: dict[tuple[int, int], int] = {}
+        for row in sent_rows:
+            day = self._as_date(row.day)
+            if day is None:
+                continue
+            key = (day.year, day.month)
+            mailed[key] = mailed.get(key, 0) + int(row.cnt)
+        for row in icp_rows:
+            day = self._as_date(row.day)
+            if day is None:
+                continue
+            key = (day.year, day.month)
+            icp[key] = icp.get(key, 0) + int(row.cnt)
+
+        keys = sorted(set(mailed) | set(icp))
+        return [
+            {
+                "month": _MONTH_NAMES[month],
+                "year": year,
+                "month_key": f"{year:04d}-{month:02d}",
+                "mails_sent": mailed.get((year, month), 0),
+                "icp_database": icp.get((year, month), 0),
+            }
+            for year, month in keys
+        ]
 
     def get_campaign_status_breakdown(
         self, db: Session, user_id: int | None = None, campaign_id: int | None = None,
@@ -255,6 +433,7 @@ class DashboardService:
         return {
             "stats": self.get_stats(db, user_id, campaign_id, date_from, date_to, org_id=org_id),
             "emails_per_day": self.get_emails_per_day(db, user_id, campaign_id, date_from, date_to, org_id=org_id),
+            "month_wise": self.get_month_wise(db, user_id, campaign_id, date_from, date_to, org_id=org_id),
             "campaign_status": self.get_campaign_status_breakdown(db, user_id, campaign_id, date_from, date_to, org_id=org_id),
             "recent_activity": self.get_recent_activity(db, 5, user_id, campaign_id, date_from, date_to, org_id=org_id),
             "recent_campaigns": self.get_recent_campaigns(db, 5, user_id, campaign_id, date_from, date_to, org_id=org_id),
@@ -274,6 +453,8 @@ class DashboardService:
         or sender."""
         stats = self.get_stats(db, user_id, campaign_id, date_from, date_to, org_id=org_id)
         campaign_status = self.get_campaign_status_breakdown(db, user_id, campaign_id, date_from, date_to, org_id=org_id)
+        daily_rows = self.get_emails_per_day(db, user_id, campaign_id, date_from, date_to, org_id=org_id)
+        month_rows = self.get_month_wise(db, user_id, campaign_id, date_from, date_to, org_id=org_id)
         summary_rows = [{"Metric": key.replace("_", " ").title(), "Value": value} for key, value in stats.items()]
         summary_rows += [{"Metric": f"{row['status']} Campaigns", "Value": row["count"]} for row in campaign_status]
 
@@ -349,8 +530,36 @@ class DashboardService:
         ]
 
         buffer = io.BytesIO()
+        daily_export = [
+            {
+                "Date": row["iso_date"],
+                "No. of Mails Sent": row["sent"],
+                f"Cumulative mails ({row.get('month_label') or 'month'})": row["cumulative_month"],
+                "Cumulative Mails Sent (overall)": row["cumulative_overall"],
+                "ICP DB (Day)": row["icp_db_day"],
+                "ICP DB (Cumulative)": row["icp_db_cumulative"],
+            }
+            for row in daily_rows
+        ]
+        month_export = [
+            {
+                "Month": f"{row['month']} {row['year']}",
+                "Mails Sent": row["mails_sent"],
+                "ICP Database": row["icp_database"],
+            }
+            for row in month_rows
+        ]
+        if month_export:
+            month_export.append({
+                "Month": "Total",
+                "Mails Sent": sum(row["Mails Sent"] for row in month_export),
+                "ICP Database": sum(row["ICP Database"] for row in month_export),
+            })
+
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             pd.DataFrame(summary_rows).to_excel(writer, index=False, sheet_name="Summary")
+            pd.DataFrame(daily_export).to_excel(writer, index=False, sheet_name="Daily Mails")
+            pd.DataFrame(month_export).to_excel(writer, index=False, sheet_name="Month Wise")
             pd.DataFrame(campaign_rows).to_excel(writer, index=False, sheet_name="Campaigns")
             pd.DataFrame(recipient_rows).to_excel(writer, index=False, sheet_name="Prospects")
             pd.DataFrame(log_rows).to_excel(writer, index=False, sheet_name="Email Logs")

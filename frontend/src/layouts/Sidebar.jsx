@@ -100,13 +100,7 @@ function getNavItems(user) {
   if (isProviderOrg(user)) {
     return filterNavItems(PROVIDER_NAV_ITEMS, user);
   }
-  const items = NAV_ITEMS.map((item) => {
-    if (item.path === '/dashboard' && hasPermission(user, 'members:read')) {
-      return { ...item, label: 'Admin Dashboard' };
-    }
-    return item;
-  });
-  return filterNavItems(items, user);
+  return filterNavItems(NAV_ITEMS, user);
 }
 
 function initials(name) {
@@ -212,7 +206,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+      <nav className="sidebar-nav flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {getNavItems(user).map((item) => {
           if (item.children) {
             return <NavGroup key={item.label} item={item} collapsed={collapsed} />;

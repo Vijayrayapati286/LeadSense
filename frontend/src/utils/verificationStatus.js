@@ -8,7 +8,9 @@ export function deliveryStatusDisplay(status, { errorMessage, verificationStatus
     verification === 'risky' ||
     message.includes('quality=risky') ||
     message.includes('result: catch_all') ||
-    message.includes('result=catch_all');
+    message.includes('result=catch_all') ||
+    message.includes('result: unknown') ||
+    message.includes('result=unknown');
 
   if (risky && (key === 'invalid_email' || key === 'risky' || verification === 'risky')) {
     return { status: 'risky', label: 'Risky' };

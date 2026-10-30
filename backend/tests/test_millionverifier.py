@@ -398,6 +398,12 @@ def test_resolve_verification_status_helpers():
     assert rejection_status("risky", "catch_all") == "risky"
     assert rejection_status("bad", "invalid") == "invalid_email"
     assert rejection_status(None, "disposable") == "invalid_email"
+    assert rejection_status(None, "unknown") == "risky"
+    assert resolve_verification_status(
+        email="u@example.com",
+        suppression_reason=None,
+        cache_row=row("unknown", None),
+    ) == ("risky", "unknown")
 
 
 def test_apply_rejection_suppresses_recipient():
@@ -447,6 +453,127 @@ def test_apply_rejection_suppresses_recipient():
         assert recipient.suppression_reason == "email_verification_failed"
         assert cr.status == "invalid_email"
         assert cr.next_send_at is None
+    finally:
+        db.close()
+
+
+def test_apply_rejection_risky_does_not_blacklist():
+    svc = MillionVerifierService()
+    db = SessionLocal()
+    try:
+        user = User(name="Rep", email="rep-mv-risky@example.com")
+        db.add(user)
+        db.flush()
+        campaign = Campaign(
+            campaign_name="MV Risky",
+            campaign_id="mv-risky-001",
+            owner="Rep",
+            user_id=user.id,
+            status="active",
+        )
+        db.add(campaign)
+        db.flush()
+        recipient = Recipient(name="Catch All", email="catchall@example.com", company="Acme")
+        db.add(recipient)
+        db.flush()
+        cr = CampaignRecipient(campaign_id=campaign.id, recipient_id=recipient.id, status="queued")
+        db.add(cr)
+        db.flush()
+
+        from app.models import SuppressionEntry
+        from app.services.millionverifier_service import VerificationGateResult
+
+        gate = VerificationGateResult(
+            allowed=False,
+            definitive_reject=True,
+            result="unknown",
+            quality="risky",
+            detail="MillionVerifier result: unknown (quality=risky)",
+        )
+        svc.apply_rejection(
+            db,
+            recipient=recipient,
+            campaign_id=campaign.id,
+            campaign_recipient=cr,
+            gate=gate,
+            sender_user_id=user.id,
+        )
+        db.commit()
+        db.refresh(recipient)
+        db.refresh(cr)
+        assert recipient.is_suppressed is False
+        assert recipient.suppression_reason is None
+        assert cr.status == "risky"
+        assert db.query(SuppressionEntry).filter(SuppressionEntry.email == recipient.email).count() == 0
+    finally:
+        db.close()
+
+
+def test_api_unknown_is_risky_and_blocks_default_send(monkeypatch):
+    monkeypatch.setenv("USE_MOCK_MILLIONVERIFIER", "false")
+    monkeypatch.setenv("MILLIONVERIFIER_API_KEY", "test-key")
+    monkeypatch.setenv("MILLIONVERIFIER_ALLOWED_RESULTS", "ok")
+    get_settings.cache_clear()
+    svc = MillionVerifierService()
+    fake = {
+        "email": "u@enterprise.com",
+        "result": "unknown",
+        "resultcode": 3,
+        "quality": "",
+        "error": "",
+    }
+    db = SessionLocal()
+    try:
+        with patch.object(svc, "_call_api", return_value=fake):
+            gate = svc.verify_email(db, "u@enterprise.com")
+        assert gate.allowed is False
+        assert gate.definitive_reject is True
+        assert gate.result == "unknown"
+        from app.services.millionverifier_service import is_display_risky
+
+        assert is_display_risky(gate.quality, gate.result) is True
+    finally:
+        db.close()
+
+
+def test_lift_risky_verification_suppression():
+    from app.models import SuppressionEntry
+    from app.services.millionverifier_service import lift_risky_verification_suppression
+
+    db = SessionLocal()
+    try:
+        now = utc_now()
+        recipient = Recipient(
+            name="Was Blocked",
+            email="was-blocked@example.com",
+            company="Acme",
+            is_suppressed=True,
+            suppression_reason="email_verification_failed",
+        )
+        db.add(recipient)
+        db.flush()
+        db.add(EmailVerification(
+            email=recipient.email,
+            result="catch_all",
+            quality="risky",
+            source="millionverifier",
+            verified_at=now,
+            expires_at=now + timedelta(days=30),
+        ))
+        db.add(SuppressionEntry(
+            email=recipient.email,
+            reason="email_verification_failed",
+            recipient_id=recipient.id,
+        ))
+        db.commit()
+
+        lifted = lift_risky_verification_suppression(db, [recipient])
+        db.commit()
+        db.refresh(recipient)
+        assert lifted == 1
+        assert recipient.is_suppressed is False
+        entry = db.query(SuppressionEntry).filter(SuppressionEntry.email == recipient.email).one()
+        assert entry.overridden_at is not None
     finally:
         db.close()
 
@@ -544,6 +671,41 @@ def test_send_asks_before_queueing_risky_and_honors_the_choice():
         db.close()
 
 
+def test_include_mode_queues_risky_without_asking():
+    from app.models import AppSetting
+    from app.routers.email import send_emails
+    from app.schemas.schemas import SendEmailRequest
+    from app.services.app_settings_service import AppSettingsService
+
+    db = SessionLocal()
+    try:
+        row = AppSettingsService().get(db)
+        row.risky_send_mode = "include"
+        db.commit()
+        user, campaign, good, risky = _seed_campaign_with_emails(db, "include-mode")
+        payload = dict(
+            campaign_id=campaign.id,
+            subject="Hello",
+            body="Hi",
+            recipient_ids=[good.id, risky.id],
+        )
+        preview = send_emails(SendEmailRequest(**payload, preview_risky=True), db, user)
+        assert preview.requires_risky_confirmation is False
+        queued = send_emails(SendEmailRequest(**payload), db, user)
+        assert queued.queued == 2
+        assert queued.skipped_risky == 0
+        risky_row = (
+            db.query(CampaignRecipient)
+            .filter(CampaignRecipient.campaign_id == campaign.id, CampaignRecipient.recipient_id == risky.id)
+            .one()
+        )
+        assert risky_row.allow_risky_send is True
+    finally:
+        db.query(AppSetting).filter(AppSetting.id == 1).update({"risky_send_mode": "ask"})
+        db.commit()
+        db.close()
+
+
 def test_gate_sends_risky_only_when_the_sender_confirmed():
     from app.services.scheduler_service import _gate_before_ses
 
@@ -562,7 +724,7 @@ def test_gate_sends_risky_only_when_the_sender_confirmed():
         assert _gate_before_ses(db, blocked, risky, user) is False
         db.refresh(risky)
         db.refresh(blocked)
-        assert risky.is_suppressed is True
+        assert risky.is_suppressed is False
         assert blocked.status == "risky"
 
         risky.is_suppressed = False
@@ -574,5 +736,71 @@ def test_gate_sends_risky_only_when_the_sender_confirmed():
         assert _gate_before_ses(db, blocked, risky, user) is True
         db.refresh(risky)
         assert risky.is_suppressed is False
+    finally:
+        db.close()
+
+
+def test_gate_matrix_ok_catchall_unknown_invalid():
+    """Production mix: ok sends, catch_all/unknown send only if include-risky, invalid never sends."""
+    from app.models import SuppressionEntry
+    from app.services.scheduler_service import _gate_before_ses
+
+    db = SessionLocal()
+    try:
+        user = User(name="Rep", email="rep-matrix@example.com")
+        db.add(user)
+        db.flush()
+        campaign = Campaign(
+            campaign_name="Matrix",
+            campaign_id="mv-matrix-001",
+            owner="Rep",
+            user_id=user.id,
+            status="active",
+        )
+        db.add(campaign)
+        db.flush()
+        now = utc_now()
+        cases = [
+            ("ok-lead@example.com", "ok", "good", False, True, False),
+            ("catch-lead@example.com", "catch_all", "risky", False, False, False),
+            ("catch-include@example.com", "catch_all", "risky", True, True, False),
+            ("unk-lead@example.com", "unknown", None, False, False, False),
+            ("unk-include@example.com", "unknown", None, True, True, False),
+            ("bad-lead@example.com", "invalid", "bad", False, False, True),
+            ("bad-include@example.com", "invalid", "bad", True, False, True),
+        ]
+        for email, result, quality, include, should_send, should_suppress in cases:
+            recipient = Recipient(name=email, email=email, company="Acme")
+            db.add(recipient)
+            db.flush()
+            db.add(EmailVerification(
+                email=email,
+                result=result,
+                quality=quality,
+                source="millionverifier",
+                verified_at=now,
+                expires_at=now + timedelta(days=30),
+            ))
+            cr = CampaignRecipient(
+                campaign_id=campaign.id,
+                recipient_id=recipient.id,
+                status="queued",
+                allow_risky_send=include,
+            )
+            db.add(cr)
+            db.commit()
+            allowed = _gate_before_ses(db, cr, recipient, user)
+            db.refresh(recipient)
+            db.refresh(cr)
+            assert allowed is should_send, email
+            assert recipient.is_suppressed is should_suppress, email
+            if should_suppress:
+                assert db.query(SuppressionEntry).filter(
+                    SuppressionEntry.email == email, SuppressionEntry.overridden_at.is_(None)
+                ).count() == 1
+            else:
+                assert db.query(SuppressionEntry).filter(
+                    SuppressionEntry.email == email, SuppressionEntry.overridden_at.is_(None)
+                ).count() == 0
     finally:
         db.close()

@@ -1,8 +1,11 @@
 """Email log routes."""
 
+import csv
+import io
 from datetime import date, datetime, time, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Query as OrmQuery, Session
 
@@ -19,6 +22,12 @@ from app.models import (
     User,
 )
 from app.schemas.schemas import EmailLogListResponse, EmailLogResponse, VerifiedEmailGroupResponse
+from app.services.millionverifier_service import (
+    DISPLAY_BAD,
+    DISPLAY_GOOD,
+    DISPLAY_RISKY,
+    classify_cached_verification,
+)
 
 router = APIRouter(prefix="/logs", tags=["Logs"])
 
@@ -105,6 +114,7 @@ def _to_log_response(log: EmailLog, recipient: Recipient, campaign: Campaign, se
     item = EmailLogResponse.model_validate(log)
     item.recipient_name = recipient.name
     item.recipient_email = recipient.email
+    item.recipient_company = recipient.company
     item.campaign_name = campaign.campaign_name
     item.sender_name = sender.name if sender else None
     item.sender_email = sender.email if sender else None
@@ -224,6 +234,7 @@ def _list_grouped_verified(
                 emails=emails,
                 email_count=len(emails),
                 send_count=len(logs),
+                company=next((item.recipient_company for item in logs if item.recipient_company), None),
                 latest_sent_at=latest.sent_at if latest else None,
                 latest_status=latest.status if latest else None,
                 latest_campaign_name=latest.campaign_name if latest else None,
@@ -253,6 +264,10 @@ def list_logs(
         description="Only logs whose recipient email passed address verification; "
         "response is grouped one row per unique prospect name",
     ),
+    category: str = Query(
+        "",
+        description="Show every risky, invalid, or verified address, one row per email",
+    ),
     user_id: int | None = Query(None, description="Filter by the sender (User/Login)"),
     campaign_id: int | None = Query(None),
     group_id: int | None = Query(None, description="Filter by prospect list"),
@@ -261,18 +276,18 @@ def list_logs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if verified_only:
-        return _list_grouped_verified(
+    bucket = (category or "").strip().lower()
+    if not bucket and verified_only:
+        bucket = "verified"
+    if bucket:
+        if bucket not in _EXPORT_CATEGORIES:
+            raise HTTPException(status_code=400, detail="category must be risky, invalid, or verified")
+        return _list_by_category(
             db,
+            category=bucket,
             page=page,
             page_size=page_size,
             search=search,
-            status=status,
-            user_id=user_id,
-            campaign_id=campaign_id,
-            group_id=group_id,
-            date_from=date_from,
-            date_to=date_to,
         )
 
     query = _apply_log_filters(
@@ -304,4 +319,305 @@ def list_logs(
         page_size=page_size,
         verified_total=_verified_email_count(db),
         grouped=False,
+    )
+
+
+_EXPORT_CATEGORIES = {
+    "risky": "risky",
+    "invalid": "invalid",
+    "verified": "verified",
+}
+
+
+def verification_export_bucket(
+    quality: str | None,
+    result: str | None,
+    log_statuses: set[str] | None = None,
+) -> str | None:
+    """Place one address in risky, invalid, or verified.
+
+    Risky wins over invalid, and both win over verified, so an address is
+    never listed in more than one download.
+    """
+    statuses = log_statuses or set()
+    label = classify_cached_verification(quality, result)
+    if label == DISPLAY_RISKY or "risky" in statuses:
+        return "risky"
+    if label == DISPLAY_BAD or "invalid_email" in statuses:
+        return "invalid"
+    allowed = _allowed_verification_results()
+    if label == DISPLAY_GOOD or (result or "").strip().lower() in allowed:
+        return "verified"
+    return None
+
+
+def _collect_verification_export(db: Session) -> list[dict]:
+    """One row per address that has a verification result or a blocked send."""
+    by_email: dict[str, dict] = {}
+
+    for row in db.query(EmailVerification).all():
+        email = (row.email or "").strip()
+        key = email.lower()
+        if not key:
+            continue
+        by_email[key] = {
+            "email": email,
+            "name": "",
+            "company": "",
+            "result": row.result or "",
+            "quality": row.quality or "",
+            "statuses": set(),
+            "latest_sent_at": None,
+            "latest_campaign": "",
+        }
+
+    log_rows = (
+        db.query(Recipient.name, Recipient.email, EmailLog.status, EmailLog.sent_at, Campaign.campaign_name)
+        .join(Recipient, Recipient.id == EmailLog.recipient_id)
+        .join(Campaign, Campaign.id == EmailLog.campaign_id)
+        .order_by(EmailLog.sent_at.desc())
+        .all()
+    )
+    for name, email, status, sent_at, campaign_name in log_rows:
+        raw_email = (email or "").strip()
+        key = raw_email.lower()
+        if not key:
+            continue
+        entry = by_email.get(key)
+        if entry is None:
+            entry = {
+                "email": raw_email,
+                "name": "",
+                "company": "",
+                "result": "",
+                "quality": "",
+                "statuses": set(),
+                "latest_sent_at": None,
+                "latest_campaign": "",
+            }
+            by_email[key] = entry
+        if name and not entry["name"]:
+            entry["name"] = name.strip()
+        if status:
+            entry["statuses"].add(status)
+        if sent_at and (entry["latest_sent_at"] is None or sent_at > entry["latest_sent_at"]):
+            entry["latest_sent_at"] = sent_at
+            entry["latest_campaign"] = campaign_name or ""
+
+    if by_email:
+        name_rows = (
+            db.query(Recipient.email, Recipient.name, Recipient.company)
+            .filter(func.lower(Recipient.email).in_(list(by_email)))
+            .all()
+        )
+        for email, name, company in name_rows:
+            entry = by_email.get((email or "").strip().lower())
+            if not entry:
+                continue
+            if name and not entry["name"]:
+                entry["name"] = name.strip()
+            if company and not entry["company"]:
+                entry["company"] = company.strip()
+
+    exported: list[dict] = []
+    for entry in by_email.values():
+        bucket = verification_export_bucket(entry["quality"], entry["result"], entry["statuses"])
+        if not bucket:
+            continue
+        exported.append(
+            {
+                "name": entry["name"],
+                "email": entry["email"],
+                "company": entry.get("company") or "",
+                "status": _EXPORT_CATEGORIES[bucket],
+                "result": entry["result"],
+                "quality": entry["quality"],
+                "latest_campaign": entry["latest_campaign"],
+                "latest_sent_at": entry["latest_sent_at"],
+                "_bucket": bucket,
+                "_sort_name": (entry["name"] or entry["email"]).lower(),
+            }
+        )
+    exported.sort(key=lambda row: (row["_sort_name"], row["email"].lower()))
+    return exported
+
+
+_BUCKET_LOG_STATUS = {
+    "risky": "risky",
+    "invalid": "invalid_email",
+    "verified": "sent",
+}
+
+
+def _list_by_category(
+    db: Session,
+    *,
+    category: str,
+    page: int,
+    page_size: int,
+    search: str,
+) -> EmailLogListResponse:
+    """One row per address in the chosen verification bucket."""
+    rows = [row for row in _collect_verification_export(db) if row["_bucket"] == category]
+    term = (search or "").strip().lower()
+    if term:
+        rows = [
+            row
+            for row in rows
+            if term in (row["name"] or "").lower()
+            or term in (row["email"] or "").lower()
+            or term in (row["latest_campaign"] or "").lower()
+        ]
+
+    total = len(rows)
+    page_rows = rows[(page - 1) * page_size : page * page_size]
+    keys = [(row["email"] or "").strip().lower() for row in page_rows if row["email"]]
+    logs_by_email: dict[str, list[EmailLogResponse]] = {key: [] for key in keys}
+    if keys:
+        detail_rows = (
+            _base_log_query(db)
+            .filter(func.lower(Recipient.email).in_(keys))
+            .order_by(EmailLog.sent_at.desc())
+            .all()
+        )
+        for log, recipient, campaign, sender in detail_rows:
+            key = (recipient.email or "").strip().lower()
+            if key in logs_by_email:
+                logs_by_email[key].append(_to_log_response(log, recipient, campaign, sender))
+
+    groups: list[VerifiedEmailGroupResponse] = []
+    for row in page_rows:
+        key = (row["email"] or "").strip().lower()
+        logs = logs_by_email.get(key) or []
+        latest = logs[0] if logs else None
+        groups.append(
+            VerifiedEmailGroupResponse(
+                group_key=key or row["email"],
+                recipient_name=row["name"] or row["email"],
+                recipient_email=row["email"],
+                recipient_id=latest.recipient_id if latest else None,
+                emails=[row["email"]] if row["email"] else [],
+                email_count=1 if row["email"] else 0,
+                send_count=len(logs),
+                company=(row.get("company") or None) or (latest.recipient_company if latest else None),
+                latest_sent_at=latest.sent_at if latest else row["latest_sent_at"],
+                latest_status=latest.status if latest else _BUCKET_LOG_STATUS[category],
+                latest_campaign_name=(latest.campaign_name if latest else None) or row["latest_campaign"] or None,
+                logs=logs,
+            )
+        )
+
+    return EmailLogListResponse(
+        items=[],
+        groups=groups,
+        total=total,
+        page=page,
+        page_size=page_size,
+        verified_total=_verified_email_count(db),
+        grouped=True,
+    )
+
+
+@router.get("/prospect", response_model=VerifiedEmailGroupResponse)
+def get_prospect_sends(
+    key: str = Query(..., min_length=1, description="Prospect email address"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Every send for one prospect, plus name, email, and company."""
+    email_key = key.strip().lower()
+    profile = (
+        db.query(Recipient)
+        .filter(func.lower(Recipient.email) == email_key)
+        .order_by(Recipient.id.asc())
+        .first()
+    )
+    detail_rows = (
+        _base_log_query(db)
+        .filter(func.lower(Recipient.email) == email_key)
+        .order_by(EmailLog.sent_at.desc())
+        .all()
+    )
+    logs = [
+        _to_log_response(log, recipient, campaign, sender)
+        for log, recipient, campaign, sender in detail_rows
+    ]
+    latest = logs[0] if logs else None
+    if profile is None and latest is None:
+        match = next(
+            (
+                row for row in _collect_verification_export(db)
+                if (row["email"] or "").strip().lower() == email_key
+            ),
+            None,
+        )
+        if match is None:
+            raise HTTPException(status_code=404, detail="Prospect not found")
+        return VerifiedEmailGroupResponse(
+            group_key=email_key,
+            recipient_name=match["name"] or match["email"],
+            recipient_email=match["email"],
+            emails=[match["email"]] if match["email"] else [],
+            email_count=1 if match["email"] else 0,
+            send_count=0,
+            company=match.get("company") or None,
+            logs=[],
+        )
+
+    name = (
+        (profile.name.strip() if profile and profile.name else None)
+        or (latest.recipient_name if latest else None)
+        or key.strip()
+    )
+    email = (profile.email if profile else None) or (latest.recipient_email if latest else None) or key.strip()
+    company = (profile.company if profile else None) or (latest.recipient_company if latest else None)
+    return VerifiedEmailGroupResponse(
+        group_key=email_key,
+        recipient_name=name,
+        recipient_email=email,
+        recipient_id=profile.id if profile else latest.recipient_id,
+        emails=[email] if email else [],
+        email_count=1 if email else 0,
+        send_count=len(logs),
+        company=company,
+        latest_sent_at=latest.sent_at if latest else None,
+        latest_status=latest.status if latest else None,
+        latest_campaign_name=latest.campaign_name if latest else None,
+        logs=logs,
+    )
+
+
+@router.get("/export")
+def export_logs_by_verification(
+    category: str = Query(..., description="risky, invalid, or verified"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download every risky, invalid, or verified address as CSV."""
+    bucket = (category or "").strip().lower()
+    if bucket not in _EXPORT_CATEGORIES:
+        raise HTTPException(status_code=400, detail="category must be risky, invalid, or verified")
+
+    rows = [row for row in _collect_verification_export(db) if row["_bucket"] == bucket]
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["name", "email", "status", "result", "quality", "latest_campaign", "latest_sent_at"])
+    for row in rows:
+        writer.writerow(
+            [
+                row["name"],
+                row["email"],
+                row["status"],
+                row["result"],
+                row["quality"],
+                row["latest_campaign"],
+                row["latest_sent_at"].isoformat() if row["latest_sent_at"] else "",
+            ]
+        )
+    buffer.seek(0)
+    filename = f"{bucket}_emails.csv"
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

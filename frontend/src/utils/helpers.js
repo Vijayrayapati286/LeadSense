@@ -4,12 +4,14 @@ export function extractPlaceholders(text) {
   return [...new Set(matches.map((m) => m.replace(/\{\{|\}\}/g, '')))];
 }
 
-/** Replace {{Key}} placeholders with values (known keys match case-insensitively
- * so {{name}} / {{Name}} both resolve). */
+/** Replace {{Key}} placeholders with values. Two or more braces are accepted,
+ * so {{Company}} and {{{{Company}}}} both resolve. Known keys match
+ * case-insensitively so {{name}} / {{Name}} both resolve. */
 export function renderTemplate(text, context) {
-  let result = text;
-  Object.entries(context).forEach(([key, value]) => {
-    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'gi'), value ?? '');
+  let result = text || '';
+  Object.entries(context || {}).forEach(([key, value]) => {
+    const safe = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(new RegExp(`\\{{2,}${safe}\\}{2,}`, 'gi'), value ?? '');
   });
   return result;
 }

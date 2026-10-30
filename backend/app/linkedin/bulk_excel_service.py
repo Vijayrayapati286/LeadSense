@@ -236,6 +236,9 @@ class BulkExcelService:
     ) -> tuple[bytes, str, str]:
         from app.linkedin.verification import original_fields
 
+        # Exact download columns: 6 uploaded + 8 extracted/match.
+        # input_columns kept for caller compatibility; extra upload cols are not exported.
+        _ = input_columns
         columns = [
             "Original Name",
             "Original Email",
@@ -243,60 +246,15 @@ class BulkExcelService:
             "Original Designation",
             "Original Company",
             "Original Location",
-            "Original Company Location",
             "Extracted Name",
             "Extracted Designation",
             "Extracted Company",
             "Extracted Location",
-            "Extracted About",
             "Extracted Headline",
-            "Extracted Followers",
-            "Extracted Connections",
-            "Extracted Image",
-            "Extraction Status",
-            "Extraction Attempts",
-            "Name Match",
-            "Designation Match",
             "Company Match",
             "Location Match",
-            "Company Location Match",
-            "Verification Score",
             "Verification Status",
-            "Verification Reason",
-            "Resolution",
-            "Resolved Name",
-            "Resolved Designation",
-            "Resolved Company",
-            "Resolved Location",
-            "Resolved Company Location",
-            "Resolution Summary",
-            "Changed By",
-            "Change Log",
-            "Error",
         ]
-        extra_original = [
-            c
-            for c in (input_columns or [])
-            if c
-            and _normalize_header(c)
-            not in {
-                "name",
-                "fullname",
-                "linkedinurl",
-                "linkedin",
-                "profileurl",
-                "url",
-                "link",
-                "linkedinprofileurl",
-                "designation",
-                "jobtitle",
-                "title",
-                "company",
-                "location",
-            }
-        ]
-        columns = extra_original + columns
-
         def _match_label(value: Any) -> str:
             if value is True:
                 return "true"
@@ -305,61 +263,39 @@ class BulkExcelService:
             return ""
 
         out_rows: list[dict[str, Any]] = []
+        extraction_statuses: list[str] = []
         for item in items:
             source = item.source_row_json if isinstance(getattr(item, "source_row_json", None), dict) else {}
             originals = original_fields(source)
-            row: dict[str, Any] = {}
-            for col in extra_original:
-                row[col] = source.get(col)
-            row["Original Name"] = originals.get("name")
-            row["Original Email"] = originals.get("email")
-            row["Original LinkedIn URL"] = getattr(item, "normalized_url", None) or getattr(
-                item, "profile_url", None
-            )
-            row["Original Designation"] = originals.get("designation")
-            row["Original Company"] = originals.get("company")
-            row["Original Location"] = originals.get("location")
-            row["Original Company Location"] = originals.get("company_location")
-            row["Extracted Name"] = getattr(item, "name", None)
-            row["Extracted Designation"] = getattr(item, "designation", None)
-            row["Extracted Company"] = getattr(item, "company", None)
-            row["Extracted Location"] = getattr(item, "location", None)
-            row["Extracted About"] = getattr(item, "about", None)
-            row["Extracted Headline"] = getattr(item, "headline", None)
-            row["Extracted Followers"] = getattr(item, "followers", None)
-            row["Extracted Connections"] = getattr(item, "connections", None)
-            row["Extracted Image"] = getattr(item, "image", None)
-            row["Extraction Status"] = getattr(item, "status", "") or ""
-            row["Extraction Attempts"] = getattr(item, "attempt_count", 0) or 0
-            row["Name Match"] = _match_label(getattr(item, "name_match", None))
-            row["Designation Match"] = _match_label(getattr(item, "designation_match", None))
-            row["Company Match"] = _match_label(getattr(item, "company_match", None))
-            row["Location Match"] = _match_label(getattr(item, "location_match", None))
-            row["Company Location Match"] = _match_label(
-                getattr(item, "company_location_match", None)
-            )
-            score = getattr(item, "verification_score", None)
-            row["Verification Score"] = "" if score is None else score
-            row["Verification Status"] = getattr(item, "verification_status", "") or ""
-            row["Verification Reason"] = getattr(item, "verification_reason", None)
-            row["Resolution"] = getattr(item, "resolution_summary", None)
-            row["Resolved Name"] = getattr(item, "resolved_name", None)
-            row["Resolved Designation"] = getattr(item, "resolved_designation", None)
-            row["Resolved Company"] = getattr(item, "resolved_company", None)
-            row["Resolved Location"] = getattr(item, "resolved_location", None)
-            row["Resolved Company Location"] = getattr(item, "resolved_company_location", None)
-            row["Resolution Summary"] = getattr(item, "resolution_summary", None)
-            row["Changed By"] = ""
-            row["Change Log"] = ""
-            row["Error"] = getattr(item, "last_error", None)
+            extracted_company = getattr(item, "company", None)
+            # If sheet had no company, show LinkedIn company so Original Company is filled.
+            original_company = originals.get("company") or extracted_company
+            row: dict[str, Any] = {
+                "Original Name": originals.get("name"),
+                "Original Email": originals.get("email"),
+                "Original LinkedIn URL": getattr(item, "normalized_url", None)
+                or getattr(item, "profile_url", None),
+                "Original Designation": originals.get("designation"),
+                "Original Company": original_company,
+                "Original Location": originals.get("location"),
+                "Extracted Name": getattr(item, "name", None),
+                "Extracted Designation": getattr(item, "designation", None),
+                "Extracted Company": extracted_company,
+                "Extracted Location": getattr(item, "location", None),
+                "Extracted Headline": getattr(item, "headline", None),
+                "Company Match": _match_label(getattr(item, "company_match", None)),
+                "Location Match": _match_label(getattr(item, "location_match", None)),
+                "Verification Status": getattr(item, "verification_status", "") or "",
+            }
             out_rows.append(row)
+            extraction_statuses.append(str(getattr(item, "status", "") or "").strip().upper())
 
-        from app.linkedin.conflict_service import audit_by_item_id, serialize_audit_row
+        from app.linkedin.conflict_service import serialize_audit_row
 
         audit_entries = []
         for item in items:
-            for row in list(getattr(item, "resolutions", None) or []):
-                audit_entries.append(serialize_audit_row(row, item))
+            for audit_row in list(getattr(item, "resolutions", None) or []):
+                audit_entries.append(serialize_audit_row(audit_row, item))
         if not audit_entries:
             try:
                 from app.database.connection import SessionLocal
@@ -372,13 +308,6 @@ class BulkExcelService:
                     db.close()
             except Exception:
                 audit_entries = []
-        grouped = audit_by_item_id(audit_entries)
-        for item, row in zip(items, out_rows):
-            logs = grouped.get(int(getattr(item, "id")), [])
-            row["Changed By"] = "; ".join(
-                dict.fromkeys(e.get("actor") or "Unknown user" for e in logs)
-            )
-            row["Change Log"] = " | ".join(e.get("change_summary") or "" for e in logs if e.get("change_summary"))
 
         result_df = pd.DataFrame(out_rows, columns=columns)
         audit_columns = [
@@ -421,9 +350,8 @@ class BulkExcelService:
             if ws is not None:
                 red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
                 red_font = Font(color="9C0006")
-                for i, out in enumerate(out_rows):
+                for i, status in enumerate(extraction_statuses):
                     excel_row = i + 2
-                    status = str(out.get("Extraction Status") or out.get("Status") or "").strip().upper()
                     if status and status != ITEM_SUCCESS and status != "OK":
                         for excel_col in range(1, len(columns) + 1):
                             cell = ws.cell(row=excel_row, column=excel_col)

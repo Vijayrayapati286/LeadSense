@@ -124,6 +124,9 @@ def _bulk_job_status_response(job: BulkExtractJob) -> BulkJobStatusResponse:
             excel_file=job.excel_file,
             download_ready=download_ready,
             error=job.error,
+            icp_added=bool(getattr(job, "icp_added", False)),
+            icp_added_count=int(getattr(job, "icp_added_count", 0) or 0),
+            icp_added_at=getattr(job, "icp_added_at", None),
         )
 
 
@@ -609,7 +612,30 @@ def resolve_bulk_conflict(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         refresh_job_after_resolutions(db, job)
 
-        # ICP is added only via explicit "Add to ICP" after verification — not on resolve.
+        icp_synced = False
+        icp_record_id = None
+        from app.icp.service import resolve_org_id, sync_icp_if_eligible
+
+        owner_id = job.user_id or user_id
+        org_id = resolve_org_id(
+            db,
+            user_id=owner_id,
+            org_id=str(getattr(current_user, "org_id", None) or "").strip() or None,
+        )
+        try:
+            icp_row = sync_icp_if_eligible(
+                db, item, user_id=owner_id, org_id=org_id
+            )
+            if icp_row is not None:
+                icp_synced = True
+                icp_record_id = icp_row.id
+        except Exception:
+            logger.exception(
+                "ICP sync after conflict resolve failed job_id=%s item_id=%s",
+                job_id,
+                item_id,
+            )
+
         try:
             refresh_job_result_excel(db, job, excel_service=bulk_excel_service)
         except Exception:
@@ -622,8 +648,8 @@ def resolve_bulk_conflict(
             "needs_review": job.needs_review_count or 0,
             "resolved": job.resolved_count or 0,
             "phase": job.phase,
-            "icp_synced": False,
-            "icp_record_id": None,
+            "icp_synced": icp_synced,
+            "icp_record_id": icp_record_id,
         }
     except HTTPException:
         db.rollback()
@@ -660,6 +686,14 @@ def bulk_resolve_conflicts(
         job = get_job_row(db, job_id)
         if not job:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        from app.icp.service import resolve_org_id, sync_icp_if_eligible
+
+        owner_id = job.user_id or user_id
+        org_id = resolve_org_id(
+            db,
+            user_id=owner_id,
+            org_id=str(getattr(current_user, "org_id", None) or "").strip() or None,
+        )
         updated = 0
         for item_id in body.item_ids:
             item = (
@@ -675,8 +709,15 @@ def bulk_resolve_conflicts(
             if not scoped:
                 continue
             resolve_item_fields(db, item, decisions=scoped, user_id=user_id, user=current_user)
-            # ICP is added only via explicit "Add to ICP" after verification.
             updated += 1
+            try:
+                sync_icp_if_eligible(db, item, user_id=owner_id, org_id=org_id)
+            except Exception:
+                logger.exception(
+                    "ICP sync after bulk conflict resolve failed job_id=%s item_id=%s",
+                    job_id,
+                    item_id,
+                )
         refresh_job_after_resolutions(db, job)
         refresh_job_result_excel(db, job, excel_service=bulk_excel_service)
         db.commit()

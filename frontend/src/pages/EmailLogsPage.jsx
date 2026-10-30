@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback, Fragment } from 'react';
-import { FiActivity, FiCheckCircle, FiChevronDown, FiChevronRight, FiFilter, FiMail } from 'react-icons/fi';
+import { useEffect, useState, useCallback } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { FiActivity, FiCheckCircle, FiDownload, FiFilter, FiMail } from 'react-icons/fi';
 import { logService, userService, campaignService, recipientGroupService } from '../services/services';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
@@ -50,16 +51,24 @@ export default function EmailLogsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [verifiedOnly, setVerifiedOnly] = useState(false);
-  const [expandedEmails, setExpandedEmails] = useState(() => new Set());
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const category = searchParams.get('category') || '';
+  const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') || '');
+  const [filters, setFilters] = useState(() => ({
+    ...EMPTY_FILTERS,
+    userId: searchParams.get('userId') || '',
+    campaignId: searchParams.get('campaignId') || '',
+    dateFrom: searchParams.get('dateFrom') || '',
+    dateTo: searchParams.get('dateTo') || '',
+  }));
   const [users, setUsers] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [groupsFilter, setGroupsFilter] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(null);
   const toast = useToast();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const pageSize = 10;
 
   useEffect(() => {
@@ -78,7 +87,7 @@ export default function EmailLogsPage() {
         page_size: pageSize,
         search,
         status: statusFilter,
-        verified_only: verifiedOnly || undefined,
+        category: category || undefined,
         user_id: filters.userId || undefined,
         campaign_id: filters.campaignId || undefined,
         group_id: filters.groupId || undefined,
@@ -91,13 +100,12 @@ export default function EmailLogsPage() {
       setLogs(data.items || []);
       setTotal(data.total);
       setVerifiedTotal(data.verified_total ?? 0);
-      if (!isGrouped) setExpandedEmails(new Set());
     } catch {
       toast.error('Failed to load email logs');
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter, verifiedOnly, filters, toast]);
+  }, [page, search, statusFilter, category, filters, toast]);
 
   useEffect(() => {
     loadLogs();
@@ -112,30 +120,51 @@ export default function EmailLogsPage() {
   const clearFilters = () => {
     setFilters(EMPTY_FILTERS);
     setStatusFilter('');
-    setVerifiedOnly(false);
-    setExpandedEmails(new Set());
+    setSearchParams({});
     setPage(1);
   };
   const showAllEmails = () => {
-    setVerifiedOnly(false);
-    setExpandedEmails(new Set());
+    setSearchParams({});
     setPage(1);
   };
-  const toggleVerifiedOnly = () => {
-    setVerifiedOnly((prev) => !prev);
-    setExpandedEmails(new Set());
+  const selectCategory = (next) => {
+    const params = new URLSearchParams(searchParams);
+    if (category === next) params.delete('category');
+    else params.set('category', next);
+    setSearchParams(params);
     setPage(1);
   };
-  const toggleExpanded = (groupKey) => {
-    const key = (groupKey || '').toLowerCase();
-    setExpandedEmails((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  const openProspect = (group) => {
+    const params = new URLSearchParams();
+    if (category) params.set('category', category);
+    params.set('key', group.group_key || group.recipient_email || '');
+    navigate(`/logs/prospect?${params.toString()}`);
   };
-  const filterCount = (statusFilter ? 1 : 0) + (verifiedOnly ? 1 : 0) + Object.values(filters).filter(Boolean).length;
+  const downloadEmails = async (category) => {
+    setDownloading(category);
+    try {
+      const { data } = await logService.exportCategory(category);
+      const text = await data.text();
+      const count = Math.max(0, text.trim().split(/\r?\n/).filter(Boolean).length - 1);
+      if (count === 0) {
+        toast.error(`No ${category} emails to download`);
+        return;
+      }
+      const blob = new Blob([text], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${category}_emails.csv`;
+      link.click();
+      window.URL.revokeObjectURL(url);
+      toast.success(`Downloaded ${count} ${category} email${count === 1 ? '' : 's'}`);
+    } catch {
+      toast.error('Download failed');
+    } finally {
+      setDownloading(null);
+    }
+  };
+  const filterCount = (statusFilter ? 1 : 0) + (category ? 1 : 0) + Object.values(filters).filter(Boolean).length;
   const hasActiveFilters = filterCount > 0;
   const rowCount = grouped ? groups.length : logs.length;
 
@@ -146,9 +175,29 @@ export default function EmailLogsPage() {
         title="Email logs"
         subtitle="Track all sent, failed, and pending emails."
         actions={
-          <Button variant="secondary" icon={FiCheckCircle} onClick={toggleVerifiedOnly}>
-            {verifiedOnly ? 'All emails' : `Verified emails${verifiedTotal ? ` (${verifiedTotal})` : ''}`}
-          </Button>
+          <>
+            <Button
+              variant={category === 'risky' ? 'primary' : 'secondary'}
+              size="sm"
+              onClick={() => selectCategory('risky')}
+            >
+              Risky
+            </Button>
+            <Button
+              variant={category === 'invalid' ? 'primary' : 'secondary'}
+              size="sm"
+              onClick={() => selectCategory('invalid')}
+            >
+              Invalid
+            </Button>
+            <Button
+              variant={category === 'verified' ? 'primary' : 'secondary'}
+              size="sm"
+              onClick={() => selectCategory('verified')}
+            >
+              Verified
+            </Button>
+          </>
         }
       />
 
@@ -156,20 +205,20 @@ export default function EmailLogsPage() {
         <MetricCard
           label="Total emails"
           value={total}
-          hint={verifiedOnly ? 'Click to show all' : 'Matching current view'}
+          hint={category ? 'Click to show all' : 'Matching current view'}
           icon={FiMail}
           onClick={showAllEmails}
-          active={!verifiedOnly}
+          active={!category}
         />
         <MetricCard label="On this page" value={rowCount} hint="Loaded activity" tone="green" icon={FiActivity} />
         <MetricCard
           label="Verified emails"
           value={verifiedTotal}
-          hint={verifiedOnly ? 'Click to clear' : 'Click to view verified'}
+          hint={category === 'verified' ? 'Click to clear' : 'Click to view verified'}
           tone="green"
           icon={FiCheckCircle}
-          onClick={toggleVerifiedOnly}
-          active={verifiedOnly}
+          onClick={() => selectCategory('verified')}
+          active={category === 'verified'}
         />
         <MetricCard
           label="Filters applied"
@@ -182,18 +231,36 @@ export default function EmailLogsPage() {
         />
       </div>
 
-      {verifiedOnly ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-900">
+      {category ? (
+        <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-sm ${
+          category === 'invalid'
+            ? 'border-red-200 bg-red-50 text-red-950'
+            : category === 'risky'
+              ? 'border-amber-200 bg-amber-50 text-amber-950'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+        }`}>
           <p>
-            Showing each <span className="font-semibold">verified</span> prospect once. Click a row to see every email and send.
+            Showing all <span className="font-semibold capitalize">{category}</span> emails. Select a person to see every send.
           </p>
-          <button
-            type="button"
-            onClick={showAllEmails}
-            className="shrink-0 text-xs font-semibold text-emerald-800 underline hover:text-emerald-950"
-          >
-            Show all emails
-          </button>
+          <div className="flex shrink-0 items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={FiDownload}
+              loading={downloading === category}
+              disabled={Boolean(downloading)}
+              onClick={() => downloadEmails(category)}
+            >
+              Download
+            </Button>
+            <button
+              type="button"
+              onClick={showAllEmails}
+              className="text-xs font-semibold underline"
+            >
+              Show all emails
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -296,81 +363,50 @@ export default function EmailLogsPage() {
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="data-table min-w-[900px]">
+              <table className={`data-table ${grouped ? 'min-w-full' : 'min-w-[900px]'}`}>
                 <thead className="sticky top-0 z-[1] border-b border-slate-200 bg-slate-50/95">
                   <tr>
-                    <th className="px-6 py-3 font-medium">Prospect</th>
-                    <th className="px-6 py-3 font-medium">Campaign</th>
-                    <th className="px-6 py-3 font-medium">Sent By</th>
-                    <th className="px-6 py-3 font-medium">Date</th>
-                    <th className="px-6 py-3 font-medium">Status</th>
-                    <th className="px-6 py-3 font-medium">Error Message</th>
+                    {grouped ? (
+                      <>
+                        <th className="px-6 py-3 font-medium">Name</th>
+                        <th className="px-6 py-3 font-medium">Email</th>
+                        <th className="px-6 py-3 font-medium">Company</th>
+                      </>
+                    ) : (
+                      <>
+                        <th className="px-6 py-3 font-medium">Prospect</th>
+                        <th className="px-6 py-3 font-medium">Campaign</th>
+                        <th className="px-6 py-3 font-medium">Sent By</th>
+                        <th className="px-6 py-3 font-medium">Date</th>
+                        <th className="px-6 py-3 font-medium">Status</th>
+                        <th className="px-6 py-3 font-medium">Error Message</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {grouped
                     ? groups.map((group) => {
                         const key = (group.group_key || group.recipient_email || '').toLowerCase();
-                        const open = expandedEmails.has(key);
-                        const sendLabel = group.send_count === 1 ? '1 send' : `${group.send_count} sends`;
-                        const emailLabel =
-                          group.email_count > 1
-                            ? `${group.email_count} emails`
-                            : (group.recipient_email || group.emails?.[0] || '');
                         return (
-                          <Fragment key={key}>
-                            <tr
-                              className="cursor-pointer hover:bg-slate-50/80"
-                              onClick={() => toggleExpanded(key)}
-                              aria-expanded={open}
-                            >
-                              <td className="px-6 py-4">
-                                <div className="flex items-start gap-2">
-                                  <span className="mt-0.5 text-slate-400">
-                                    {open ? <FiChevronDown size={16} /> : <FiChevronRight size={16} />}
-                                  </span>
-                                  <div>
-                                    <p className="font-medium text-gray-900">
-                                      {group.recipient_name || group.recipient_email}
-                                    </p>
-                                    <p className="text-xs text-gray-500">{emailLabel}</p>
-                                    <p className="mt-1 text-[11px] font-medium text-emerald-700">{sendLabel}</p>
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 text-gray-600">
-                                {group.latest_campaign_name || '—'}
-                                {group.send_count > 1 ? (
-                                  <p className="text-xs text-gray-400">Latest of {group.send_count}</p>
-                                ) : null}
-                              </td>
-                              <td className="px-6 py-4 text-gray-400 text-sm">Click to expand</td>
-                              <td className="px-6 py-4 text-gray-600 whitespace-nowrap">
-                                {group.latest_sent_at ? formatDateTime(group.latest_sent_at) : '—'}
-                              </td>
-                              <td className="px-6 py-4">
-                                {group.latest_status ? (
-                                  <StatusBadge
-                                    {...deliveryStatusDisplay(group.latest_status, {
-                                      errorMessage: group.logs?.[0]?.error_message,
-                                    })}
-                                  />
-                                ) : '—'}
-                              </td>
-                              <td className="px-6 py-4 text-gray-400">—</td>
-                            </tr>
-                            {open
-                              ? group.logs.map((log) => (
-                                  <tr key={`${key}-${log.id}`} className="bg-slate-50/70">
-                                    <td className="px-6 py-3 pl-12">
-                                      <p className="text-xs font-medium text-gray-700">{log.recipient_email}</p>
-                                      <p className="text-[11px] text-gray-400">Send detail</p>
-                                    </td>
-                                    <LogDetailCells log={log} />
-                                  </tr>
-                                ))
-                              : null}
-                          </Fragment>
+                          <tr
+                            key={key}
+                            className="cursor-pointer hover:bg-slate-50/80"
+                            onClick={() => openProspect(group)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                openProspect(group);
+                              }
+                            }}
+                            tabIndex={0}
+                          >
+                            <td className="px-6 py-4">
+                              <p className="font-medium text-gray-900">{group.recipient_name || group.recipient_email || '—'}</p>
+                            </td>
+                            <td className="px-6 py-4 text-gray-600">{group.recipient_email || '—'}</td>
+                            <td className="px-6 py-4 text-gray-600">{group.company || '—'}</td>
+                          </tr>
                         );
                       })
                     : logs.map((log) => (
@@ -384,7 +420,7 @@ export default function EmailLogsPage() {
                       ))}
                   {rowCount === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-gray-400">No email logs found</td>
+                      <td colSpan={grouped ? 3 : 6} className="px-6 py-12 text-center text-gray-400">No email logs found</td>
                     </tr>
                   )}
                 </tbody>

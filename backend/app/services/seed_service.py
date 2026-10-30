@@ -1,6 +1,6 @@
 """Seed database with sample data for development."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import random
@@ -511,8 +511,9 @@ def seed_dummy_data(db: Session) -> None:
             campaign_id=campaign.id,
             recipient_id=recipient.id,
             status=status,
+            sender_user_id=user.id,
             error_message="SMTP connection timeout" if status == "failed" else None,
-            sent_at=datetime.utcnow() - timedelta(days=random.randint(0, 14), hours=random.randint(0, 23)),
+            sent_at=datetime.now(timezone.utc) - timedelta(days=random.randint(0, 14), hours=random.randint(0, 23)),
         )
         db.add(log)
 

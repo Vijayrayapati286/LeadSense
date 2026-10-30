@@ -268,13 +268,12 @@ Rules for each object:
 
   <1–2 sentences of high-level offering value — different point per email type>
 
-  <1 soft CTA question>
+  <1 short, non-salesy question>
 
   Regards,
   {{{{FromName}}}}
-  Lead Generation
 - Start with "Hi {{{{Name}}}}," (recipient name is merged from the contact / email local-part when missing)
-- End with "Regards," then {{{{FromName}}}} on the next line, then "Lead Generation"
+- End with "Regards," then {{{{FromName}}}} on the next line. Do not add "Lead Generation", "Book a Demo", or "Try It for Free".
 - Do NOT invent fake metrics. Prefer concrete capability language from the docs.
 - Keep bodies short (cold-email length). Never paste raw brochure / PDF text.
 - Each body must use DIFFERENT high-level points (intro = problem/fit, demo = proof, follow-up = reminder + ask)."""
@@ -313,16 +312,14 @@ Rules for each object:
     def _ensure_regards_signature(body: str) -> str:
         text = (body or "").rstrip()
         if re.search(
-            r"(?i)\bregards,?\s*\n\s*\{\{\s*FromName\s*\}\}(\s*\n\s*Lead Generation)?\s*$",
+            r"(?i)\bregards,?\s*\n\s*\{\{\s*FromName\s*\}\}\s*$",
             text,
         ):
-            if not re.search(r"(?i)Lead Generation\s*$", text):
-                return f"{text}\nLead Generation"
             return text
-        # Strip trailing incomplete sign-offs then append our standard close
+        # Strip trailing incomplete sign-offs then append a plain close
         text = re.sub(r"(?is)\n*(thanks|best|regards|sincerely)[,!]?\s*$", "", text).rstrip()
         text = re.sub(r"(?is)\n*Lead Generation\s*$", "", text).rstrip()
-        return f"{text}\n\nRegards,\n{{{{FromName}}}}\nLead Generation"
+        return f"{text}\n\nRegards,\n{{{{FromName}}}}"
 
     def _mock_campaign_type_templates(
         self, offering_name: str, content: str
@@ -342,21 +339,21 @@ Rules for each object:
                     f"I reached out because {{{{Designation}}}}s in {{{{Industry}}}} "
                     f"often need a clearer path from AI experiments to production.\n\n"
                     f"{intro_blurb}\n\n"
-                    f"Would you be open to a brief conversation about how this could help {{{{Company}}}}?\n\n"
-                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
+                    f"If this is relevant for {{{{Company}}}}, I can share a short walkthrough.\n\n"
+                    f"Regards,\n{{{{FromName}}}}"
                 ),
                 "template_source": "offering_ai",
             },
             {
                 "name": "Product Demo Invite",
-                "subject": f"15-min walkthrough of {offering_name}",
+                "subject": f"Walkthrough of {offering_name} for {{{{Company}}}}",
                 "body": (
                     f"Hi {{{{Name}}}},\n\n"
-                    f"Given your role at {{{{Company}}}}, I thought a short demo of "
-                    f"{offering_name} might be useful.\n\n"
+                    f"Given your role at {{{{Company}}}}, a short look at "
+                    f"{offering_name} may be useful.\n\n"
                     f"{demo_blurb}\n\n"
-                    f"Would a 15-minute walkthrough this week work for you?\n\n"
-                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
+                    f"If useful, I can walk through {offering_name} in a short call.\n\n"
+                    f"Regards,\n{{{{FromName}}}}"
                 ),
                 "template_source": "offering_ai",
             },
@@ -368,8 +365,8 @@ Rules for each object:
                     f"Just following up on {offering_name} for {{{{Company}}}} — "
                     f"happy to keep this brief.\n\n"
                     f"{follow_blurb}\n\n"
-                    f"Open to a 10-minute call if useful?\n\n"
-                    f"Regards,\n{{{{FromName}}}}\nLead Generation"
+                    f"If useful, I can keep a follow-up to 10 minutes.\n\n"
+                    f"Regards,\n{{{{FromName}}}}"
                 ),
                 "template_source": "offering_ai",
             },
@@ -497,7 +494,7 @@ Each version must use a distinctly different opening angle."""
                     f"Can I share a quick overview?"
                 ),
                 closing="Best regards,",
-                cta="Would a 15-minute demo work?",
+                cta="If useful, I can share a short walkthrough.",
             ),
             OfferingEmailVersion(
                 angle="direct",

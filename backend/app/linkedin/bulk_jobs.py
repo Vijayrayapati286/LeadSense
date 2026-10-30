@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import DATABASE_URL, SessionLocal
 from app.config import get_settings
+from app.linkedin.apify_extractor import LinkedInApifyProfileExtractor
 from app.linkedin.bulk_models import (
     CLAIMABLE_ITEM_STATUSES,
     ITEM_FINAL_FAILED,
@@ -76,6 +77,9 @@ class BulkExtractJob:
     completed_at: str | None = None
     created_at: str = ""
     updated_at: str = ""
+    icp_added: bool = False
+    icp_added_count: int = 0
+    icp_added_at: str | None = None
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -133,6 +137,9 @@ def job_row_to_snapshot(job: BulkExtractJobRow) -> BulkExtractJob:
         completed_at=_iso(job.completed_at),
         created_at=_iso(job.created_at) or "",
         updated_at=_iso(job.updated_at) or "",
+        icp_added=bool(getattr(job, "icp_added_at", None)),
+        icp_added_count=int(getattr(job, "icp_added_count", 0) or 0),
+        icp_added_at=_iso(getattr(job, "icp_added_at", None)),
     )
 
 
@@ -312,6 +319,7 @@ def get_job(job_id: str) -> BulkExtractJob | None:
         if not job:
             return None
         refresh_job_counters(db, job)
+        _backfill_icp_added_flags(db, [job], user_id=job.user_id)
         db.commit()
         return job_row_to_snapshot(job)
     finally:
@@ -379,9 +387,11 @@ def copy_canonical_results_to_duplicates(db: Session, job_id: str) -> int:
         item.status = canon.status
         item.name = canon.name
         item.company = canon.company
-        item.designation = canon.designation
-        item.about = canon.about
         item.headline = canon.headline
+        item.designation = LinkedInApifyProfileExtractor.designation_or_headline_title(
+            canon.designation, canon.headline
+        )
+        item.about = canon.about
         item.location = canon.location
         item.followers = canon.followers
         item.connections = canon.connections
@@ -577,6 +587,11 @@ def item_to_result_dict(item: BulkJobItemRow) -> dict[str, Any]:
         "verification_status": status or item.verification_status,
         "verification_score": scored if scored is not None else (item.verification_score or 0),
         "verification_reason": item.verification_reason,
+        "update_comment": (
+            item.source_row_json.get("_update_comment")
+            if isinstance(item.source_row_json, dict)
+            else None
+        ),
         "resolved": {
             "name": getattr(item, "resolved_name", None),
             "designation": getattr(item, "resolved_designation", None),
@@ -587,6 +602,49 @@ def item_to_result_dict(item: BulkJobItemRow) -> dict[str, Any]:
         "resolution_summary": getattr(item, "resolution_summary", None),
         "needs_review": needs_review,
     }
+
+
+def _backfill_icp_added_flags(
+    db: Session, rows: list[BulkExtractJobRow], *, user_id: int | None
+) -> None:
+    """If verified job URLs are already in ICP, mark the job as added (for older jobs)."""
+    pending = [
+        row
+        for row in rows
+        if not getattr(row, "icp_added_at", None)
+        and (row.status or "") == "done"
+        and ((row.verified_count or 0) + (row.resolved_count or 0)) > 0
+    ]
+    if not pending:
+        return
+
+    from app.icp.service import find_icp_by_linkedin_urls, resolve_org_id
+
+    org_id = resolve_org_id(db, user_id=user_id)
+    now = datetime.now(timezone.utc)
+    for row in pending:
+        items = (
+            db.query(BulkJobItemRow)
+            .filter(
+                BulkJobItemRow.job_id == row.id,
+                BulkJobItemRow.dedupe_of_id.is_(None),
+                BulkJobItemRow.status == ITEM_SUCCESS,
+                func.upper(BulkJobItemRow.verification_status).in_(
+                    [VERIFY_VERIFIED, VERIFY_RESOLVED]
+                ),
+            )
+            .all()
+        )
+        urls = [i.normalized_url for i in items if (i.normalized_url or "").strip()]
+        if not urls:
+            continue
+        icp_map = find_icp_by_linkedin_urls(
+            db, user_id=user_id or row.user_id, org_id=org_id, urls=urls
+        )
+        in_icp = sum(1 for u in urls if u in icp_map)
+        if in_icp >= len(urls):
+            row.icp_added_at = now
+            row.icp_added_count = in_icp
 
 
 def list_jobs(
@@ -640,6 +698,7 @@ def list_jobs(
         )
         for row in rows:
             refresh_job_counters(db, row)
+        _backfill_icp_added_flags(db, rows, user_id=user_id)
         db.commit()
         return {
             "total": total,

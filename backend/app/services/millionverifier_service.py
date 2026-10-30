@@ -59,11 +59,15 @@ DISPLAY_UNCHECKED = "unchecked"
 QUALITY_LABELS = frozenset({DISPLAY_GOOD, DISPLAY_RISKY, DISPLAY_BAD})
 
 # Fallback only when `quality` is missing or not one of the three labels.
-# `unknown` and `error` are left alone so they are not shown as Risky or Bad.
+# Enterprise catch-all / unknown mailboxes often still accept mail (Outlook
+# delivered them). Treat those as risky so senders can include them; never
+# map them to bad. Transient API `error` stays unmapped.
 RESULT_TO_QUALITY = {
     "ok": DISPLAY_GOOD,
     "valid": DISPLAY_GOOD,
     "catch_all": DISPLAY_RISKY,
+    "unknown": DISPLAY_RISKY,
+    "risky": DISPLAY_RISKY,
     "invalid": DISPLAY_BAD,
     "disposable": DISPLAY_BAD,
 }
@@ -572,25 +576,13 @@ class MillionVerifierService:
         gate: VerificationGateResult,
         sender_user_id: int | None = None,
     ) -> None:
-        """Suppress a definitive verification failure.
+        """Record a blocked send. Only truly bad addresses are blacklisted.
 
-        Risky addresses are stored as ``risky``. Bad addresses stay ``invalid_email``.
+        Catch-all / unknown stay ``risky`` on this campaign so a later send
+        can include them. Invalid and disposable are suppressed globally.
         """
         detail = gate.detail or f"MillionVerifier rejected: {gate.result}"
         status = rejection_status(gate.quality, gate.result)
-        recipient.is_suppressed = True
-        recipient.suppression_reason = "email_verification_failed"
-
-        db.add(
-            SuppressionEntry(
-                email=recipient.email,
-                company=recipient.company,
-                reason="email_verification_failed",
-                campaign_id=campaign_id,
-                recipient_id=recipient.id,
-                detail=detail,
-            )
-        )
         campaign_recipient.status = status
         campaign_recipient.next_send_at = None
         db.add(
@@ -602,11 +594,65 @@ class MillionVerifierService:
                 sender_user_id=sender_user_id,
             )
         )
+        if status == "risky":
+            return
+
+        recipient.is_suppressed = True
+        recipient.suppression_reason = "email_verification_failed"
+        db.add(
+            SuppressionEntry(
+                email=recipient.email,
+                company=recipient.company,
+                reason="email_verification_failed",
+                campaign_id=campaign_id,
+                recipient_id=recipient.id,
+                detail=detail,
+            )
+        )
 
 
 def is_display_risky(quality: str | None, result: str | None) -> bool:
     """True when the stored verification should be shown and treated as risky."""
     return classify_cached_verification(quality, result) == DISPLAY_RISKY
+
+
+def lift_risky_verification_suppression(db: Session, recipients: list[Recipient]) -> int:
+    """Clear global blacklist for catch-all/unknown that were wrongly suppressed.
+
+    Invalid/disposable stays suppressed. Bounce/complaint suppressions are
+    left alone.
+    """
+    if not recipients:
+        return 0
+    lookup = verification_lookup(db, [recipient.email for recipient in recipients])
+    lifted = 0
+    now = utc_now()
+    for recipient in recipients:
+        if not recipient.is_suppressed:
+            continue
+        if (recipient.suppression_reason or "") != "email_verification_failed":
+            continue
+        email = (recipient.email or "").strip().lower()
+        row = lookup.get(email)
+        if classify_cached_verification(
+            getattr(row, "quality", None), getattr(row, "result", None)
+        ) != DISPLAY_RISKY:
+            continue
+        recipient.is_suppressed = False
+        recipient.suppression_reason = None
+        entries = (
+            db.query(SuppressionEntry)
+            .filter(
+                SuppressionEntry.email == recipient.email,
+                SuppressionEntry.reason == "email_verification_failed",
+                SuppressionEntry.overridden_at.is_(None),
+            )
+            .all()
+        )
+        for entry in entries:
+            entry.overridden_at = now
+        lifted += 1
+    return lifted
 
 
 def partition_recipients_by_risk(
@@ -645,8 +691,7 @@ def classify_cached_verification(quality: str | None, result: str | None) -> str
     """Map a stored MillionVerifier row to good, risky, or bad.
 
     ``quality`` wins when it is already one of those three values. A missing
-    quality falls back to ``result`` (``catch_all`` → risky). Anything else,
-    including ``unknown``, is not relabeled.
+    quality falls back to ``result`` (``catch_all`` / ``unknown`` → risky).
     """
     stored_quality = (quality or "").strip().lower()
     if stored_quality in QUALITY_LABELS:

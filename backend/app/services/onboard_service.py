@@ -71,7 +71,13 @@ def send_owner_verification_email(user: User, org: Organization, token: str) -> 
         f'<p><a href="{safe_url}">{safe_url}</a></p>'
         f"<p>This link expires in {VERIFY_TTL_HOURS} hours.</p>"
     )
-    result = ses.send_email(user.email, subject, body_html, body_text=f"Verify and set password: {url}")
+    result = ses.send_email(
+        user.email,
+        subject,
+        body_html,
+        body_text=f"Verify and set password: {url}",
+        add_unsubscribe=False,
+    )
     logger.info(
         "Owner verification email to %s status=%s url=%s",
         user.email,
@@ -93,7 +99,13 @@ def send_invite_verification_email(invite: Invite, org: Organization | None = No
         f'<p><a href="{safe_url}">{safe_url}</a></p>'
         f"<p>This invite expires in {invite_service.INVITE_TTL_DAYS} days.</p>"
     )
-    result = ses.send_email(invite.email, subject, body_html, body_text=f"Accept invite: {url}")
+    result = ses.send_email(
+        invite.email,
+        subject,
+        body_html,
+        body_text=f"Accept invite: {url}",
+        add_unsubscribe=False,
+    )
     logger.info(
         "Invite verification email to %s status=%s url=%s",
         invite.email,

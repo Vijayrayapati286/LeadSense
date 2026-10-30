@@ -66,11 +66,19 @@ def _is_auto_submitted(msg: Message) -> bool:
     precedence = _header(msg, "Precedence").lower()
     if precedence in {"bulk", "junk", "list", "auto_reply", "autoreply"}:
         return True
-    if _header(msg, "X-Autoreply").lower() in {"yes", "true", "auto"}:
+    autoreply = (
+        _header(msg, "X-Autoreply").lower()
+        or _header(msg, "X-Auto-Reply").lower()
+        or _header(msg, "X-Autorespond").lower()
+    )
+    if autoreply in {"yes", "true", "auto", "oof"}:
         return True
-    if _header(msg, "X-Auto-Response-Suppress"):
-        # Often present on auto-generated traffic; alone not enough for OOO.
-        pass
+    suppress = _header(msg, "X-Auto-Response-Suppress").lower()
+    if suppress and any(
+        token in suppress for token in ("oof", "autoreply", "auto-reply", "all")
+    ):
+        # Exchange OOF often sets this and omits Auto-Submitted.
+        return True
     prefer = _header(msg, "Prefer").lower()
     if "auto-reply" in prefer or "auto_reply" in prefer:
         return True
@@ -78,6 +86,8 @@ def _is_auto_submitted(msg: Message) -> bool:
     if _header(msg, "X-MS-Exchange-Inbox-Rules-Loop"):
         return True
     if "auto-submitted" in _header(msg, "X-MS-Exchange-Message-Flags").lower():
+        return True
+    if "oof" in _header(msg, "X-MS-Exchange-Organization-AutoForwarded").lower():
         return True
     content_class = _header(msg, "Content-Class").lower()
     if "vnd.ms-exchange.appointment" in content_class:

@@ -113,6 +113,8 @@ def _ensure_linkedin_bulk_schema() -> None:
         "backup_status": "VARCHAR(32) DEFAULT 'none'",
         "backup_file_path": "VARCHAR(500)",
         "started_at": "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME",
+        "icp_added_at": "TIMESTAMP WITH TIME ZONE" if dialect != "sqlite" else "DATETIME",
+        "icp_added_count": "INTEGER DEFAULT 0",
     }
     item_adds = {
         "verification_status": "VARCHAR(32) DEFAULT 'NOT_VERIFIED'",
@@ -377,6 +379,7 @@ def _ensure_app_settings_schema() -> None:
         "default_page_size": "INTEGER DEFAULT 10",
         "default_ai_tone": "VARCHAR(32) DEFAULT 'formal'",
         "default_use_recipient_timezone": bool_type,
+        "risky_send_mode": "VARCHAR(16) DEFAULT 'ask'",
     }
 
     with engine.begin() as conn:

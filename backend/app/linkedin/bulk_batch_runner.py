@@ -544,9 +544,14 @@ class BulkBatchRunner:
         item.status = ITEM_SUCCESS
         item.name = _str(data.get("name") or data.get("full_name"))
         item.company = _str(data.get("company"))
-        item.designation = _str(data.get("job_title") or data.get("designation"))
-        item.about = _str(data.get("summary") or data.get("about"))
         item.headline = _str(data.get("headline"))
+        item.designation = _str(
+            LinkedInApifyProfileExtractor.designation_or_headline_title(
+                data.get("job_title") or data.get("designation"),
+                item.headline,
+            )
+        )
+        item.about = _str(data.get("summary") or data.get("about"))
         item.location = _str(data.get("location"))
         item.followers = data.get("followers") if isinstance(data.get("followers"), int) else None
         item.connections = data.get("connections") if isinstance(data.get("connections"), int) else None

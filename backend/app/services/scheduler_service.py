@@ -191,6 +191,10 @@ def process_due_followups() -> None:
             if owner and getattr(owner, "name", None):
                 context["FromName"] = owner.name
                 context["fromname"] = owner.name
+            source_subject = stage.subject
+            source_body = stage.body or ""
+            if stage.closing:
+                source_body = f"{source_body}\n\n{stage.closing}".strip() if source_body else stage.closing
             subject = render_template(stage.subject, context)
             body = render_template(stage.body, context)
             if stage.closing:
@@ -217,6 +221,8 @@ def process_due_followups() -> None:
                     sender_user_id=owner.id if owner else None,
                     message_id=result.get("message_id"),
                     ses_message_id=result.get("ses_message_id"),
+                    subject=source_subject,
+                    body=source_body,
                 )
             )
 
@@ -323,6 +329,10 @@ def process_queued_initial_sends() -> None:
             if owner and getattr(owner, "name", None):
                 context["FromName"] = owner.name
                 context["fromname"] = owner.name
+            source_subject = template.subject
+            source_body = template.body or ""
+            if template.closing:
+                source_body = f"{source_body}\n\n{template.closing}".strip() if source_body else template.closing
             subject = render_template(template.subject, context)
             body_html, body_text = render_email_body(template.body, template.type, context)
             if template.closing:
@@ -355,6 +365,8 @@ def process_queued_initial_sends() -> None:
                     sender_user_id=owner.id if owner else None,
                     message_id=result.get("message_id"),
                     ses_message_id=result.get("ses_message_id"),
+                    subject=source_subject,
+                    body=source_body,
                 )
             )
 

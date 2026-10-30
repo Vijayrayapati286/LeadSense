@@ -36,7 +36,9 @@ export default function HistoryJobCard({
   const verified = job.verified || 0;
   const resolved = job.resolved || 0;
   const icpReady = verified + resolved;
-  const canAddToIcp = job.status === 'done' && icpReady > 0 && typeof onAddToIcp === 'function';
+  const alreadyInIcp = Boolean(job.icp_added);
+  const canAddToIcp =
+    job.status === 'done' && icpReady > 0 && !alreadyInIcp && typeof onAddToIcp === 'function';
   const clean = Math.max(success - needsReview, 0);
   const processed = success + failed;
 
@@ -76,7 +78,16 @@ export default function HistoryJobCard({
       </button>
     ) : null;
 
-  const addToIcpButton = canAddToIcp ? (
+  const addToIcpButton = alreadyInIcp && job.status === 'done' && icpReady > 0 ? (
+    <span
+      title={`Already in ICP${job.icp_added_count ? ` (${job.icp_added_count})` : ''}`}
+      aria-label={`Contacts from ${title} already added to ICP`}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600"
+    >
+      <FiUsers size={12} aria-hidden="true" />
+      Already added
+    </span>
+  ) : canAddToIcp ? (
     <button
       type="button"
       onClick={(e) => {

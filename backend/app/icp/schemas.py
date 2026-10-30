@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 
 class IcpRecordCreate(BaseModel):
     name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
     email: str | None = None
     company_name: str | None = None
     designation: str | None = None
@@ -132,3 +134,22 @@ class IcpAccountListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class IcpBulkCreateRequest(BaseModel):
+    contacts: list[IcpRecordCreate] = Field(default_factory=list)
+
+
+class IcpBulkRowResult(BaseModel):
+    row: int
+    status: str
+    error: str | None = None
+    id: int | None = None
+    name: str | None = None
+
+
+class IcpBulkCreateResponse(BaseModel):
+    created: int
+    updated: int
+    skipped: int
+    results: list[IcpBulkRowResult] = Field(default_factory=list)

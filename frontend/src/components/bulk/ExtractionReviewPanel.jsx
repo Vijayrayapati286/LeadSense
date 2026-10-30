@@ -156,13 +156,15 @@ function ProgressRow({ item }) {
   );
 }
 
-function VerifiedRow({ item, animateIn }) {
+function VerifiedRow({ item, animateIn, onOpen }) {
   const name = itemDisplayName(item);
   const status = (item.verification_status || '').toUpperCase();
 
   return (
-    <div
-      className={`flex items-center gap-2.5 border-b border-slate-100 px-4 py-3 last:border-b-0 ${
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`flex w-full items-center gap-2.5 border-b border-slate-100 px-4 py-3 text-left last:border-b-0 hover:bg-emerald-50/70 ${
         animateIn ? 'animate-slide-up-in' : ''
       }`}
     >
@@ -171,7 +173,7 @@ function VerifiedRow({ item, animateIn }) {
       <span className="badge badge-success shrink-0">
         {status === 'RESOLVED' ? 'Resolved' : 'Verified'}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -203,7 +205,15 @@ export default function ExtractionReviewPanel({
     () => pending.findIndex((p) => p.item_id === activeId),
     [pending, activeId],
   );
-  const activeItem = activeIndex >= 0 ? pending[activeIndex] : null;
+  const activeItem = useMemo(() => {
+    if (!activeId) return null;
+    return (
+      pending.find((p) => p.item_id === activeId) ||
+      verified.find((p) => p.item_id === activeId) ||
+      null
+    );
+  }, [pending, verified, activeId]);
+  const activeIsVerified = activeItem ? isVerifiedItem(activeItem) : false;
   const selectable = Boolean(onBulkResolve);
 
   useEffect(() => {
@@ -222,10 +232,12 @@ export default function ExtractionReviewPanel({
   }, [pending]);
 
   useEffect(() => {
-    if (activeId && !pending.some((p) => p.item_id === activeId) && !exitingId) {
-      setActiveId(null);
-    }
-  }, [pending, activeId, exitingId]);
+    if (!activeId || exitingId) return;
+    const stillListed =
+      pending.some((p) => p.item_id === activeId) ||
+      verified.some((p) => p.item_id === activeId);
+    if (!stillListed) setActiveId(null);
+  }, [pending, verified, activeId, exitingId]);
 
   function openRow(itemId) {
     if (exitingId) return;
@@ -318,7 +330,7 @@ export default function ExtractionReviewPanel({
           <div>
             <p className="text-sm font-semibold text-slate-900">Records to review</p>
             <p className="text-xs text-slate-500">
-              Open a record to compare values, or select several to resolve at once.
+              Open a record, including a verified one, to compare values.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -463,6 +475,7 @@ export default function ExtractionReviewPanel({
                   key={item.item_id}
                   item={item}
                   animateIn={freshVerified.has(item.item_id)}
+                  onOpen={() => openRow(item.item_id)}
                 />
               ))}
             </div>
@@ -475,8 +488,11 @@ export default function ExtractionReviewPanel({
         isOpen={Boolean(activeItem)}
         onClose={closeModal}
         busy={busy || Boolean(exitingId)}
-        autoAdvance
-        position={{ index: activeIndex + 1, total: pending.length }}
+        readOnly={activeIsVerified}
+        autoAdvance={!activeIsVerified}
+        position={
+          activeIsVerified ? null : { index: activeIndex + 1, total: pending.length }
+        }
         onResolve={(decisions) => handleResolve(activeItem, decisions)}
       />
     </>

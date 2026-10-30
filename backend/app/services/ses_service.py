@@ -5,6 +5,7 @@ import logging
 import random
 import re
 import uuid
+from email.charset import QP, Charset
 from email.header import Header
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
@@ -12,10 +13,32 @@ from email.mime.text import MIMEText
 from email.utils import formataddr, make_msgid, parseaddr
 
 from app.config import get_settings
-from app.utils.helpers import KNOWN_MERGE_FIELDS, add_known_field_case_aliases, render_email_body, render_template
+from app.utils.helpers import (
+    KNOWN_MERGE_FIELDS,
+    add_known_field_case_aliases,
+    display_recipient_name,
+    render_email_body,
+    render_template,
+)
+from app.utils.unsubscribe import (
+    list_unsubscribe_value,
+    unsubscribe_footer_html,
+    unsubscribe_footer_text,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+_UTF8_QP = Charset("utf-8")
+_UTF8_QP.header_encoding = QP
+_UTF8_QP.body_encoding = QP
+
+
+def _text_part(content: str, subtype: str) -> MIMEText:
+    """UTF-8 quoted-printable so unsubscribe links stay readable in the raw MIME."""
+    part = MIMEText(content or "", _subtype=subtype)
+    part.set_charset(_UTF8_QP)
+    return part
 
 # Matches a base64 data-URI <img> src, e.g. src="data:image/png;base64,AAAA..."
 # — captures the subtype (png/jpeg/...) and payload separately so each can be
@@ -118,6 +141,31 @@ class SESService:
         _display, address = parseaddr(source)
         return address or reply_to
 
+    def _return_path_address(self) -> str | None:
+        """Envelope sender for custom MAIL FROM. Empty until IT configures SES+DNS."""
+        raw = (getattr(self.settings, "ses_mail_from_domain", None) or "").strip()
+        if not raw:
+            return None
+        if "@" in raw:
+            return raw
+        domain = raw.lstrip("@")
+        return f"noreply@{domain}" if domain else None
+
+    def _append_unsubscribe(self, body_html: str, body_text: str | None, to_email: str) -> tuple[str, str | None]:
+        marker = "unsubscribe here"
+        html = body_html or ""
+        footer = unsubscribe_footer_html(to_email)
+        if marker not in html.lower():
+            lower = html.lower()
+            close = lower.rfind("</body>")
+            html = html[:close] + footer + html[close:] if close != -1 else html + footer
+        text = body_text
+        if text is not None and marker not in text.lower():
+            text = text + unsubscribe_footer_text(to_email)
+        elif text is None:
+            text = unsubscribe_footer_text(to_email).strip()
+        return html, text
+
     def _build_raw_message(
         self,
         source: str,
@@ -127,8 +175,13 @@ class SESService:
         body_text: str | None,
         reply_to: str | None,
         mime_message_id: str | None = None,
+        add_unsubscribe: bool = True,
     ) -> MIMEMultipart:
-        rewritten_html, images = self._extract_inline_images(body_html)
+        html = body_html
+        text = body_text
+        if add_unsubscribe:
+            html, text = self._append_unsubscribe(html, text, to_email)
+        rewritten_html, images = self._extract_inline_images(html)
 
         msg_root = MIMEMultipart("related")
         msg_root["Subject"] = str(Header(subject, "utf-8"))
@@ -137,15 +190,22 @@ class SESService:
         msg_root["To"] = to_email
         if reply_to:
             msg_root["Reply-To"] = reply_to
+        sending_domain = address.rsplit("@", 1)[-1] if address and "@" in address else "leadsense.local"
+        if address and add_unsubscribe:
+            msg_root["List-Unsubscribe"] = list_unsubscribe_value(to_email, address)
+            msg_root["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+            msg_root["List-Id"] = f"LeadSense <campaigns.{sending_domain}>"
+        mail_from = self._return_path_address()
+        if mail_from:
+            msg_root["Return-Path"] = mail_from
         # Stable MIME Message-ID so inbound In-Reply-To / References can match
         # this send. Domain part follows the From address when available.
-        domain = address.rsplit("@", 1)[-1] if address and "@" in address else "leadsense.local"
-        msg_root["Message-ID"] = mime_message_id or make_msgid(domain=domain)
+        msg_root["Message-ID"] = mime_message_id or make_msgid(domain=sending_domain)
 
         msg_alt = MIMEMultipart("alternative")
         msg_root.attach(msg_alt)
-        msg_alt.attach(MIMEText(body_text or rewritten_html, "plain", "utf-8"))
-        msg_alt.attach(MIMEText(rewritten_html, "html", "utf-8"))
+        msg_alt.attach(_text_part(text or rewritten_html, "plain"))
+        msg_alt.attach(_text_part(rewritten_html, "html"))
 
         for content_id, subtype, raw in images:
             img_part = MIMEImage(raw, _subtype=subtype)
@@ -163,6 +223,7 @@ class SESService:
         body_text: str | None = None,
         from_name: str | None = None,
         reply_to: str | None = None,
+        add_unsubscribe: bool = True,
     ) -> dict:
         """Send a single email via AWS SES or mock."""
         delivery_to = self._get_delivery_address(to_email)
@@ -173,7 +234,13 @@ class SESService:
             source = self._build_source(from_name, reply_to)
             effective_reply_to = self._resolve_reply_to(reply_to, source)
             raw_message = self._build_raw_message(
-                source, delivery_to, subject, body_html, body_text, effective_reply_to
+                source,
+                delivery_to,
+                subject,
+                body_html,
+                body_text,
+                effective_reply_to,
+                add_unsubscribe=add_unsubscribe,
             )
             mime_message_id = raw_message["Message-ID"]
 
@@ -218,10 +285,10 @@ class SESService:
 
         for recipient in recipients:
             context = {key: recipient.get(field, "") for key, field in KNOWN_MERGE_FIELDS.items()}
-            if not str(context.get("Name") or "").strip():
-                from app.utils.helpers import name_from_email
-
-                context["Name"] = name_from_email(recipient.get("email") or context.get("Email"))
+            context["Name"] = display_recipient_name(
+                context.get("Name"),
+                recipient.get("email") or context.get("Email"),
+            )
             if from_name:
                 context["FromName"] = from_name
             add_known_field_case_aliases(context)

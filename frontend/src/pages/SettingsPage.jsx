@@ -5,6 +5,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useToast } from '../hooks/useToast';
 import { THEMES } from '../theme';
 import { appSettingsService, authService } from '../services/services';
+import { syncWorkspaceDefaults } from '../utils/workspaceDefaults';
 import { RESPONSE_TAGS } from '../components/FilterBuilder';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import PageHeader from '../components/ui/PageHeader';
@@ -75,7 +76,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     appSettingsService.get()
-      .then(({ data }) => setAppSettings(data))
+      .then(({ data }) => {
+        setAppSettings(data);
+        syncWorkspaceDefaults(data);
+      })
       .catch(() => toast.error('Failed to load application settings'))
       .finally(() => setLoadingSettings(false));
   }, [toast]);
@@ -116,9 +120,16 @@ export default function SettingsPage() {
         soft_bounce_threshold: Number(appSettings.soft_bounce_threshold),
         send_interval_seconds: Number(appSettings.send_interval_seconds),
         suppress_on_tags: appSettings.suppress_on_tags,
+        business_hours_start: Number(appSettings.business_hours_start),
+        business_hours_end: Number(appSettings.business_hours_end),
+        default_page_size: Number(appSettings.default_page_size),
+        default_ai_tone: appSettings.default_ai_tone,
+        default_use_recipient_timezone: Boolean(appSettings.default_use_recipient_timezone),
+        risky_send_mode: appSettings.risky_send_mode || 'ask',
       });
       setAppSettings(data);
-      toast.success('Deliverability settings saved');
+      syncWorkspaceDefaults(data);
+      toast.success('Settings saved');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to save settings');
     } finally {
@@ -248,6 +259,101 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2 className="text-lg font-semibold mb-1 flex items-center gap-2">
+          <FiSliders size={20} /> General
+        </h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Workspace defaults for sending mail, hours, and new campaigns. Saved here — no .env edit needed.
+        </p>
+        {loadingSettings ? (
+          <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+        ) : appSettings && (
+          <div className="space-y-4">
+            <div>
+              <label className="label" htmlFor="risky-send-mode">Risky emails</label>
+              <select
+                id="risky-send-mode"
+                className="input-field"
+                value={appSettings.risky_send_mode || 'ask'}
+                onChange={(e) => setAppSettings((p) => ({ ...p, risky_send_mode: e.target.value }))}
+              >
+                <option value="ask">Ask me each time</option>
+                <option value="include">Always send risky emails</option>
+                <option value="skip">Never send risky emails</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-1">
+                Risky means MillionVerifier catch-all or unknown. Invalid emails are still never sent.
+                This only controls who we send to — Inbox vs Junk is set by Feuji Exchange and the recipient’s mail filter.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="label" htmlFor="hours-start">Business hours start</label>
+                <input
+                  id="hours-start"
+                  type="number"
+                  min={0}
+                  max={23}
+                  className="input-field"
+                  value={appSettings.business_hours_start}
+                  onChange={(e) => setAppSettings((p) => ({ ...p, business_hours_start: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="hours-end">Business hours end</label>
+                <input
+                  id="hours-end"
+                  type="number"
+                  min={1}
+                  max={24}
+                  className="input-field"
+                  value={appSettings.business_hours_end}
+                  onChange={(e) => setAppSettings((p) => ({ ...p, business_hours_end: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="page-size">Default page size</label>
+                <input
+                  id="page-size"
+                  type="number"
+                  min={5}
+                  max={100}
+                  className="input-field"
+                  value={appSettings.default_page_size}
+                  onChange={(e) => setAppSettings((p) => ({ ...p, default_page_size: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="ai-tone">Default AI tone</label>
+                <select
+                  id="ai-tone"
+                  className="input-field"
+                  value={appSettings.default_ai_tone || 'formal'}
+                  onChange={(e) => setAppSettings((p) => ({ ...p, default_ai_tone: e.target.value }))}
+                >
+                  <option value="formal">Formal</option>
+                  <option value="friendly">Friendly</option>
+                  <option value="casual">Casual</option>
+                </select>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                className="rounded border-gray-300"
+                checked={Boolean(appSettings.default_use_recipient_timezone)}
+                onChange={(e) => setAppSettings((p) => ({ ...p, default_use_recipient_timezone: e.target.checked }))}
+              />
+              Use the recipient timezone by default on new campaigns
+            </label>
+            <button onClick={handleSaveSettings} disabled={savingSettings} className="btn-primary flex items-center gap-2">
+              {savingSettings ? <LoadingSpinner size="sm" /> : <><FiSave size={16} /> Save Settings</>}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h2 className="text-lg font-semibold mb-1 flex items-center gap-2">
           <FiSliders size={20} /> Deliverability
         </h2>
         <p className="text-sm text-gray-500 mb-4">
@@ -273,12 +379,12 @@ export default function SettingsPage() {
                 <label className="label">Send Interval (seconds)</label>
                 <input
                   type="number"
-                  min={1}
+                  min={8}
                   className="input-field"
                   value={appSettings.send_interval_seconds}
                   onChange={(e) => setAppSettings((p) => ({ ...p, send_interval_seconds: e.target.value }))}
                 />
-                <p className="text-xs text-gray-400 mt-1">Minimum gap enforced between each outgoing campaign email.</p>
+                <p className="text-xs text-gray-400 mt-1">Minimum gap between each outgoing campaign email (at least 8 seconds).</p>
               </div>
             </div>
 

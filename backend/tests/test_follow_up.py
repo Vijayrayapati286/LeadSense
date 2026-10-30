@@ -330,6 +330,32 @@ def test_adding_stage_queues_followup_for_people_already_sent(db, service):
     assert cr_replied.next_send_at is None
 
 
+def test_adding_stage_can_skip_queueing_existing_recipients(db, service):
+    from app.schemas.schemas import CampaignSequenceStageCreate
+
+    user = _user(db)
+    campaign = _campaign(db, user)
+    sent = _recipient(db)
+    cr_sent = _link(db, campaign, sent, status="sent")
+    cr_sent.last_sent_at = utc_now() - timedelta(days=10)
+    db.commit()
+
+    service.create_sequence_stage(
+        db,
+        campaign.id,
+        CampaignSequenceStageCreate(
+            stage_order=1,
+            delay_value=3,
+            delay_unit="days",
+            subject="Checking in",
+            body="Hello",
+            queue_waiting=False,
+        ),
+    )
+    db.refresh(cr_sent)
+    assert cr_sent.next_send_at is None
+
+
 def test_unmark_replied_can_be_turned_off(db, service):
     user = _user(db)
     campaign = _campaign(db, user)

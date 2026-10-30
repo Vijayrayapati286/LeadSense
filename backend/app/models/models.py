@@ -550,6 +550,8 @@ class AppSetting(Base):
     default_page_size: Mapped[int] = mapped_column(Integer, default=10)
     default_ai_tone: Mapped[str] = mapped_column(String(32), default="formal")
     default_use_recipient_timezone: Mapped[bool] = mapped_column(Boolean, default=False)
+    # ask = confirm before sending risky; include = always send; skip = never send.
+    risky_send_mode: Mapped[str] = mapped_column(String(16), default="ask")
 
 
 class EmailLog(Base):

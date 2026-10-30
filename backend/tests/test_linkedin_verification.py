@@ -11,6 +11,7 @@ from app.linkedin.verification import (
     normalize_location,
     normalize_name,
     original_fields,
+    plan_field_updates,
     values_equivalent,
 )
 
@@ -235,6 +236,120 @@ def test_location_without_country_falls_back_to_city_overlap():
     assert compare_field("location", "Sector 5", "Remote") is None
 
 
+def test_usa_location_matches_when_linkedin_omits_country():
+    """A USA sheet location matches a US metro that does not name the country."""
+    assert compare_field("location", "United States", "Greater Boston Area") is True
+    assert compare_field("location", "USA", "Dallas-Fort Worth Metroplex") is True
+    assert compare_field("location", "USA, Texas", "New York, NY") is True
+    assert compare_field(
+        "location", "United States", "London, England, United Kingdom"
+    ) is False
+    assert compare_field("location", "United States", None) is False
+    assert compare_field("location", "United States", "") is False
+    assert compare_field("location", "India", "Greater Boston Area") is False
+
+
+def test_usa_company_location_matches_metro_without_country():
+    row = {"Company Country": "USA", "Company City": "Boston"}
+    assert compare_field(
+        "company_location",
+        "Boston, USA",
+        "Greater Boston Area",
+        source_row=row,
+    ) is True
+    result = compare_uploaded_vs_extracted(
+        {
+            "Name": "Alex",
+            "Company": "Acme",
+            "Country": "United States",
+            "Company Country": "USA",
+        },
+        extracted_name="Alex",
+        extracted_designation=None,
+        extracted_company="Acme",
+        extracted_location="Greater Boston Area",
+    )
+    assert result.location_match is True
+    assert result.company_location_match is True
+
+
+def test_same_sheet_state_matches_different_city():
+    """Sheet state equals the extracted state: city differences are not a mismatch."""
+    row = {"Location": "Pune", "State": "Maharashtra", "Country": "India"}
+    assert compare_field(
+        "location", "Pune", "Nagpur, Maharashtra", source_row=row
+    ) is True
+    assert compare_field(
+        "location", "Pune", "London, United Kingdom", source_row=row
+    ) is False
+    us_row = {"Location": "100 Main Street", "State": "MS"}
+    assert compare_field(
+        "location", "100 Main Street", "Columbus, Mississippi", source_row=us_row
+    ) is True
+    assert compare_field(
+        "location", "100 Main Street", "Columbus, Ohio", source_row=us_row
+    ) is True
+
+
+def test_state_in_sheet_country_is_verified():
+    """A state that belongs to the sheet country verifies, even when the state name differs."""
+    usa = {"Location": "Macon", "State": "Mississippi", "Country": "United States"}
+    assert compare_field("location", "Macon", "Austin, Texas", source_row=usa) is True
+    assert compare_field(
+        "location", "Macon", "London, United Kingdom", source_row=usa
+    ) is False
+    state_only = {"Location": "100 Main Street", "State": "MS"}
+    assert compare_field(
+        "location", "100 Main Street", "Columbus, Ohio", source_row=state_only
+    ) is True
+    assert compare_field(
+        "location", "100 Main Street", "London, United Kingdom", source_row=state_only
+    ) is False
+    india = {"Location": "Pune", "State": "Maharashtra", "Country": "India"}
+    assert compare_field("location", "Pune", "Austin, Texas", source_row=india) is False
+    company = {"Company City": "Jackson", "Company State": "MS"}
+    assert compare_field(
+        "company_location", "Jackson", "Austin, Texas", source_row=company
+    ) is True
+
+
+def test_same_state_does_not_hide_name_or_company_mismatch():
+    result = compare_uploaded_vs_extracted(
+        {
+            "Name": "John Smith",
+            "Company": "Microsoft",
+            "Location": "Pune",
+            "State": "Maharashtra",
+            "Country": "India",
+            "Company State": "Maharashtra",
+            "Company Country": "India",
+        },
+        extracted_name="Jane Doe",
+        extracted_designation=None,
+        extracted_company="Google",
+        extracted_location="Nagpur, Maharashtra",
+    )
+    assert result.location_match is True
+    assert result.company_location_match is True
+    assert result.name_match is False
+    assert result.company_match is False
+    assert result.status == VERIFY_MISMATCH
+
+
+def test_company_state_matches_different_city():
+    row = {
+        "Company City": "Pune",
+        "Company State": "Maharashtra",
+        "Company Country": "India",
+    }
+    assert compare_field(
+        "company_location",
+        "Pune",
+        "Nagpur, Maharashtra",
+        source_row=row,
+    ) is True
+
+
 def test_evaluate_matches_mirrors_the_score():
     row = {
         "Name": "Phillip Sprayberry",
@@ -273,3 +388,101 @@ def test_company_country_vs_address_country_mismatch():
     )
     assert result.company_location_match is False
     assert "company_country_vs_address" in result.reason
+
+
+def test_same_country_location_change_is_updated_and_commented():
+    plan = plan_field_updates(
+        {
+            "Name": "Asha Rao",
+            "Designation": "VP",
+            "Company": "3CDC",
+            "Location": "Bangalore, Karnataka, India",
+            "Comments": "Existing note",
+        },
+        extracted_name="Asha Rao",
+        extracted_designation="VP",
+        extracted_company="3CDC",
+        extracted_location="Hyderabad, Telangana, India",
+    )
+    assert plan.needs_manual_review is False
+    assert plan.resolved["location"] == "Hyderabad, Telangana, India"
+    assert "location" in plan.auto_fields
+    assert plan.comments == [
+        "Location changed from Bangalore, Karnataka to Hyderabad, Telangana. "
+        "Country remains India. Verified based on the available data."
+    ]
+
+
+def test_designation_change_with_extracted_title_is_updated():
+    plan = plan_field_updates(
+        {
+            "Name": "Sam Lee",
+            "Designation": "Senior Developer",
+            "Company": "Acme",
+            "Location": "Austin, Texas, United States",
+        },
+        extracted_name="Sam Lee",
+        extracted_designation="VP",
+        extracted_company="Acme",
+        extracted_location="Austin, Texas, United States",
+    )
+    assert plan.needs_manual_review is False
+    assert plan.resolved["designation"] == "VP"
+    assert plan.comments == [
+        "Designation changed from Senior Developer to VP. "
+        "Updated based on verified extracted data."
+    ]
+
+
+def test_country_change_is_not_updated():
+    plan = plan_field_updates(
+        {
+            "Name": "Asha Rao",
+            "Designation": "VP",
+            "Company": "3CDC",
+            "Location": "Bangalore, Karnataka, India",
+        },
+        extracted_name="Asha Rao",
+        extracted_designation="VP",
+        extracted_company="3CDC",
+        extracted_location="Austin, Texas, United States",
+    )
+    assert "location" not in plan.resolved
+    assert plan.needs_manual_review is True
+    assert "Manual Review Required" in plan.comments[0]
+    assert "Country changed from India to United States" in plan.comments[0]
+
+
+def test_matching_fields_produce_no_comment():
+    plan = plan_field_updates(
+        {
+            "Name": "Tim Szilasi",
+            "Designation": "Chief Financial Officer",
+            "Company": "3CDC",
+            "Location": "Cincinnati, Ohio, United States",
+        },
+        extracted_name="Tim Szilasi",
+        extracted_designation="Chief Financial Officer",
+        extracted_company="3CDC",
+        extracted_location="Cincinnati, Ohio, United States",
+    )
+    assert plan.comments == []
+    assert plan.needs_manual_review is False
+
+
+def test_blank_designation_is_left_for_review():
+    plan = plan_field_updates(
+        {
+            "Name": "Tim Szilasi",
+            "Designation": "Chief Financial Officer",
+            "Company": "3CDC",
+            "Location": "Cincinnati, Ohio, United States",
+        },
+        extracted_name="Tim Szilasi",
+        extracted_designation="",
+        extracted_company="3CDC",
+        extracted_location="Cincinnati, Ohio, United States",
+    )
+    assert "designation" not in plan.resolved
+    assert plan.needs_manual_review is True
+    assert "Existing value kept: Chief Financial Officer" in plan.comments[0]

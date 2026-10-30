@@ -38,6 +38,15 @@ _TERMINAL_STATUSES = frozenset({"replied", "suppressed", "bounced", "invalid_ema
 _SENT_STATUSES = frozenset({"sent", "delivered", "opened", "clicked", "out_of_office"})
 
 
+def _terminal_statuses() -> frozenset[str]:
+    """Include out_of_office only when OOO_STOPS_FOLLOWUPS is enabled."""
+    from app.config import get_settings
+
+    if get_settings().ooo_stops_followups:
+        return _TERMINAL_STATUSES | {"out_of_office"}
+    return _TERMINAL_STATUSES
+
+
 def _follow_up_due_at(stage: CampaignSequenceStage, last_sent_at: datetime | None) -> datetime:
     """When this stage should send. Overdue delays send on the next scheduler pass."""
     unit = stage.delay_unit
@@ -63,7 +72,7 @@ def derive_follow_up_state(cr: CampaignRecipient) -> tuple[str, str]:
         if cr.replied_at or cr.status == "replied":
             return "cancelled", "No follow-up"
         return "cancelled", "Follow-up cancelled"
-    if cr.next_send_at is not None and cr.status not in _TERMINAL_STATUSES:
+    if cr.next_send_at is not None and cr.status not in _terminal_statuses():
         when = cr.next_send_at.strftime("%d %b %Y") if hasattr(cr.next_send_at, "strftime") else str(cr.next_send_at)
         return "scheduled", f"Follow-up scheduled — {when}"
     if cr.current_stage and cr.current_stage >= 1:
@@ -698,12 +707,18 @@ class CampaignService:
         if existing:
             raise ValueError(f"Stage order {data.stage_order} already exists for this campaign")
 
-        stage = CampaignSequenceStage(campaign_id=campaign_id, **data.model_dump())
+        stage = CampaignSequenceStage(
+            campaign_id=campaign_id,
+            **data.model_dump(exclude={"queue_waiting"}),
+        )
         db.add(stage)
         db.flush()
         # People already sent the previous stage never got a next_send_at when
         # this stage did not exist yet. Queue them now so the follow-up appears.
-        self._queue_followups_for_new_stage(db, stage)
+        # Scheduling from the recipient list passes queue_waiting=False so only
+        # the contacts chosen in that dialog get a send time.
+        if data.queue_waiting:
+            self._queue_followups_for_new_stage(db, stage)
         db.commit()
         db.refresh(stage)
         return stage
@@ -882,7 +897,7 @@ class CampaignService:
 
         query = db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign_id)
         if all_non_replied:
-            query = query.filter(CampaignRecipient.status.notin_(_TERMINAL_STATUSES))
+            query = query.filter(CampaignRecipient.status.notin_(_terminal_statuses()))
             query = query.filter(CampaignRecipient.status.in_(_SENT_STATUSES))
         else:
             query = query.filter(CampaignRecipient.recipient_id.in_(recipient_ids or []))
@@ -891,7 +906,7 @@ class CampaignService:
         scheduled = 0
         skipped = 0
         for cr in rows:
-            if cr.status in _TERMINAL_STATUSES:
+            if cr.status in _terminal_statuses():
                 skipped += 1
                 continue
             if cr.status not in _SENT_STATUSES:
@@ -934,7 +949,7 @@ class CampaignService:
         if all_scheduled:
             query = query.filter(
                 CampaignRecipient.next_send_at.isnot(None),
-                CampaignRecipient.status.notin_(_TERMINAL_STATUSES),
+                CampaignRecipient.status.notin_(_terminal_statuses()),
             )
         else:
             query = query.filter(CampaignRecipient.recipient_id.in_(recipient_ids or []))
@@ -942,7 +957,7 @@ class CampaignService:
         cancelled = 0
         skipped = 0
         for cr in query.all():
-            if cr.status in _TERMINAL_STATUSES:
+            if cr.status in _terminal_statuses():
                 skipped += 1
                 continue
             if cr.next_send_at is None:
@@ -985,7 +1000,7 @@ class CampaignService:
             elif cr.status in {"bounced", "suppressed", "invalid_email"}:
                 bounced += 1
                 follow_up_cancelled += 1
-            elif cr.next_send_at is not None and cr.status not in _TERMINAL_STATUSES:
+            elif cr.next_send_at is not None and cr.status not in _terminal_statuses():
                 follow_up_scheduled += 1
                 no_reply += 1
             elif cr.current_stage >= 1:
@@ -1124,7 +1139,7 @@ class CampaignService:
             # A plain save leaves an in-flight LeadSense send alone. Sending
             # the follow-up treats the outside mail as the first touch, so a
             # queued row on this campaign becomes sent and can take the next stage.
-            if data.send_follow_up and cr.status not in _TERMINAL_STATUSES:
+            if data.send_follow_up and cr.status not in _terminal_statuses():
                 if cr.status not in _SENT_STATUSES:
                     cr.status = "sent"
                     cr.current_stage = cr.current_stage or 0

@@ -15,6 +15,7 @@ import RecordOutsideMailPage from './pages/RecordOutsideMailPage';
 import RecipientsPage from './pages/RecipientsPage';
 import TemplatesPage from './pages/TemplatesPage';
 import EmailLogsPage from './pages/EmailLogsPage';
+import EmailLogProspectPage from './pages/EmailLogProspectPage';
 import SettingsPage from './pages/SettingsPage';
 import BlacklistPage from './pages/BlacklistPage';
 import AccountsPage from './pages/AccountsPage';
@@ -31,11 +32,11 @@ import OrganizationsPage from './pages/OrganizationsPage';
 import RolesAccessPage from './pages/RolesAccessPage';
 import VerifyEmailPage from './pages/VerifyEmailPage';
 import { useAuth } from './hooks/useAuth';
-import { hasPermission } from './utils/permissions';
+import { isProviderOrg } from './utils/permissions';
 
 function DashboardEntry() {
   const { user } = useAuth();
-  if (hasPermission(user, 'members:read') || hasPermission(user, 'orgs:onboard')) {
+  if (isProviderOrg(user)) {
     return <AdminDashboardPage />;
   }
   return <DashboardPage />;
@@ -52,7 +53,7 @@ export default function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<MainLayout />}>
           <Route path="/dashboard" element={<DashboardEntry />} />
-          <Route path="/admin-dashboard" element={<AdminDashboardPage />} />
+          <Route path="/admin-dashboard" element={<DashboardEntry />} />
           <Route element={<RequirePermission permission="members:read" />}>
             <Route path="/users" element={<UsersPage />} />
           </Route>
@@ -76,6 +77,7 @@ export default function App() {
             <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
             <Route path="/templates" element={<TemplatesPage />} />
             <Route path="/logs" element={<EmailLogsPage />} />
+            <Route path="/logs/prospect" element={<EmailLogProspectPage />} />
             <Route path="/blacklist" element={<BlacklistPage />} />
             <Route path="/icp-accounts" element={<AccountsPage />} />
             <Route path="/icp-contacts" element={<ContactsPage />} />
@@ -102,6 +104,7 @@ export default function App() {
           <Route path="/prospects/search" element={<Navigate to="/recipients" replace />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/logs" element={<EmailLogsPage />} />
+          <Route path="/logs/prospect" element={<EmailLogProspectPage />} />
           <Route path="/blacklist" element={<BlacklistPage />} />
           <Route path="/icp-accounts" element={<AccountsPage />} />
           <Route path="/icp-contacts" element={<ContactsPage />} />

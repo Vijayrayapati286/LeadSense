@@ -86,7 +86,23 @@ class DashboardStats(BaseModel):
 
 class DailyEmailStat(BaseModel):
     date: str
+    iso_date: str = ""
     count: int
+    sent: int = 0
+    delivered: int = 0
+    cumulative_month: int = 0
+    cumulative_overall: int = 0
+    icp_db_day: int = 0
+    icp_db_cumulative: int = 0
+    month_label: str = ""
+
+
+class MonthWiseStat(BaseModel):
+    month: str
+    year: int
+    month_key: str
+    mails_sent: int
+    icp_database: int
 
 
 class CampaignStatusStat(BaseModel):
@@ -114,6 +130,7 @@ class RecentCampaign(BaseModel):
 class DashboardResponse(BaseModel):
     stats: DashboardStats
     emails_per_day: list[DailyEmailStat]
+    month_wise: list[MonthWiseStat] = []
     campaign_status: list[CampaignStatusStat]
     recent_activity: list[RecentActivity]
     recent_campaigns: list[RecentCampaign]
@@ -335,17 +352,19 @@ class AppSettingResponse(BaseModel):
     default_page_size: int
     default_ai_tone: str
     default_use_recipient_timezone: bool
+    risky_send_mode: str
 
 
 class AppSettingUpdate(BaseModel):
     soft_bounce_threshold: int | None = Field(None, ge=1)
-    send_interval_seconds: int | None = Field(None, ge=1)
+    send_interval_seconds: int | None = Field(None, ge=8)
     suppress_on_tags: list[str] | None = None
     business_hours_start: int | None = Field(None, ge=0, le=23)
     business_hours_end: int | None = Field(None, ge=1, le=24)
     default_page_size: int | None = Field(None, ge=5, le=100)
     default_ai_tone: str | None = None
     default_use_recipient_timezone: bool | None = None
+    risky_send_mode: Literal["ask", "include", "skip"] | None = None
 
 
 class AITemplateRequest(BaseModel):
@@ -638,6 +657,8 @@ class CampaignRecipientResponse(BaseModel):
     current_stage: int
     next_send_at: datetime | None
     last_sent_at: datetime | None
+    last_sent_subject: str | None = None
+    last_sent_body: str | None = None
     replied_at: datetime | None
     bounced_at: datetime | None
     ooo_at: datetime | None = None
@@ -717,6 +738,8 @@ class CampaignSequenceStageCreate(BaseModel):
     body: str
     closing: str | None = None
     cta: str | None = None
+    # False keeps this stage from scheduling every contact already waiting on it.
+    queue_waiting: bool = True
 
 
 class CampaignSequenceStageUpdate(BaseModel):
@@ -896,6 +919,7 @@ class EmailLogResponse(BaseModel):
     body: str | None = None
     recipient_name: str | None = None
     recipient_email: str | None = None
+    recipient_company: str | None = None
     campaign_name: str | None = None
     sender_name: str | None = None
     sender_email: str | None = None
@@ -911,6 +935,7 @@ class VerifiedEmailGroupResponse(BaseModel):
     emails: list[str] = []
     email_count: int = 0
     send_count: int = 0
+    company: str | None = None
     latest_sent_at: datetime | None = None
     latest_status: str | None = None
     latest_campaign_name: str | None = None

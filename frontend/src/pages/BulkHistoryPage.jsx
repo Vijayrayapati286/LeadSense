@@ -124,6 +124,22 @@ export default function BulkHistoryPage() {
       toast.success(
         `Added to ICP: ${result?.added ?? 0} new, ${result?.updated ?? 0} updated (${result?.eligible ?? 0} verified)`,
       );
+      setData((prev) => {
+        if (!prev?.items) return prev;
+        return {
+          ...prev,
+          items: prev.items.map((item) =>
+            item.job_id === job.job_id
+              ? {
+                  ...item,
+                  icp_added: true,
+                  icp_added_count:
+                    (result?.added ?? 0) + (result?.updated ?? 0) || item.icp_added_count,
+                }
+              : item,
+          ),
+        };
+      });
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Could not add profiles to ICP');
     } finally {
